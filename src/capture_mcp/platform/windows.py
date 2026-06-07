@@ -16,9 +16,11 @@ See ``docs/specs/platform-abstraction.md``.
 from __future__ import annotations
 
 import ctypes
+import importlib.util
 import logging
 import os
 import shutil
+import sys
 from pathlib import Path
 
 from .base import AudioSource, Platform, ScreenGrabber, WindowFinder, WindowRef, fit_box
@@ -138,6 +140,26 @@ if os.name == "nt":
     PIXELFORMAT_32BPP_ARGB = 0x0026200A
     INTERPOLATION_HQ_BICUBIC = 7
     ENCODER_PARAM_LONG = 4
+
+    def _set_process_dpi_aware() -> None:
+        # Per-monitor DPI aware so GetSystemMetrics / BitBlt use physical pixels and
+        # whole-screen capture isn't cropped/scaled on a HiDPI (scaled) display.
+        try:
+            user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # PER_MONITOR_AWARE_V2
+            return
+        except Exception:
+            pass
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR (Win 8.1+)
+            return
+        except Exception:
+            pass
+        try:
+            user32.SetProcessDPIAware()  # system-DPI aware (Vista+)
+        except Exception:
+            pass
+
+    _set_process_dpi_aware()
 
     def _make_guid(s: str) -> "GUID":
         parts = s.strip("{}").split("-")
@@ -416,10 +438,16 @@ class Win32AudioSource(AudioSource):
         source: str,
         rate: int,
     ) -> tuple[list[str], str] | None:
-        # Per-app audio via WASAPI process loopback is not yet implemented on
-        # Windows (feature #21) — there is no helper analogous to audiocap yet.
-        if source == "app":
-            return None
+        # System-audio capture via WASAPI loopback (captures the full output mix,
+        # which includes the target app's audio). True per-app WASAPI *process*
+        # loopback is a future refinement; this needs the pyaudiowpatch helper.
+        if source in ("auto", "app"):
+            helper = Path(__file__).resolve().parents[3] / "helper" / "audiocap_win.py"
+            if helper.exists() and importlib.util.find_spec("pyaudiowpatch") is not None:
+                return ([sys.executable, str(helper), "--rate", str(rate)], "loopback")
+            if source == "app":
+                return None  # explicitly wanted app audio but loopback unavailable
+
         # Optional microphone capture via ffmpeg dshow. dshow has no ":default"
         # device, so a device name must be supplied via CAPTURE_DSHOW_AUDIO.
         if source in ("auto", "mic") and shutil.which("ffmpeg"):

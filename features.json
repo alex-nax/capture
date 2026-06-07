@@ -257,7 +257,7 @@
         "Per-app (or system) audio yields a transcript; mic fallback via ffmpeg dshow/wasapi",
         "Session output layout + tool params identical to macOS"
       ],
-      "passes": false,
+      "passes": true,
       "dependencies": [20]
     },
     {

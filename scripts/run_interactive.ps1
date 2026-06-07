@@ -33,7 +33,8 @@ param(
     [Parameter(Mandatory)] [string]$Exe,
     [string]$Arguments = "",
     [string]$TaskName = "capmcp_run_interactive",
-    [int]$TimeoutSeconds = 120
+    [int]$TimeoutSeconds = 120,
+    [switch]$NoWait
 )
 $ErrorActionPreference = "Stop"
 
@@ -47,8 +48,12 @@ $action = if ($Arguments) {
 $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
 $task = New-ScheduledTask -Action $action -Principal $principal
 Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
+Start-ScheduledTask -TaskName $TaskName
+if ($NoWait) {
+    Write-Output "interactive task '$TaskName' started (no-wait; leave running, unregister later)"
+    exit 0
+}
 try {
-    Start-ScheduledTask -TaskName $TaskName
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     do {
         Start-Sleep -Milliseconds 1000

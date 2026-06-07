@@ -66,14 +66,90 @@ class MlxWhisper(ASRBackend):
         ]
 
 
+def _add_nvidia_dll_dirs() -> None:
+    """On Windows, let CTranslate2 find cuBLAS/cuDNN from the nvidia-*-cu12 pip
+    packages (DLLs live under site-packages/nvidia/<lib>/bin). CTranslate2's loader
+    searches PATH, so we both add the dirs and prepend them to PATH."""
+    if os.name != "nt":
+        return
+    try:
+        import importlib.util
+        import sys
+
+        roots: list[str] = []
+        spec = importlib.util.find_spec("nvidia")
+        if spec and spec.submodule_search_locations:
+            roots.extend(spec.submodule_search_locations)
+        if not roots:  # fallback: scan sys.path for a nvidia/ dir
+            for p in sys.path:
+                cand = Path(p) / "nvidia"
+                if cand.is_dir():
+                    roots.append(str(cand))
+
+        bins: list[str] = []
+        for root in roots:
+            for sub in Path(root).iterdir():
+                binp = sub / "bin"
+                if binp.is_dir():
+                    bins.append(str(binp))
+        for binp in bins:
+            try:
+                os.add_dll_directory(binp)
+            except OSError:
+                pass
+        if bins:
+            os.environ["PATH"] = os.pathsep.join(bins) + os.pathsep + os.environ.get("PATH", "")
+            log.debug("added nvidia DLL dirs: %s", bins)
+    except Exception:
+        log.debug("could not add nvidia DLL dirs", exc_info=True)
+
+
+def _auto_device() -> str:
+    """'cuda' if CTranslate2 sees a CUDA device, else 'cpu'."""
+    try:
+        import ctranslate2
+
+        if ctranslate2.get_cuda_device_count() > 0:
+            return "cuda"
+    except Exception:
+        log.debug("ctranslate2 CUDA probe failed", exc_info=True)
+    return "cpu"
+
+
 class FasterWhisper(ASRBackend):
     name = "faster-whisper"
 
-    def __init__(self, model: str | None = None, compute_type: str = "int8") -> None:
+    def __init__(
+        self,
+        model: str | None = None,
+        device: str | None = None,
+        compute_type: str | None = None,
+    ) -> None:
+        _add_nvidia_dll_dirs()
         from faster_whisper import WhisperModel
 
         model = model or os.environ.get("CAPTURE_WHISPER_MODEL", _FW_DEFAULT)
-        self._model = WhisperModel(model, device="cpu", compute_type=compute_type)
+        device = device or os.environ.get("CAPTURE_WHISPER_DEVICE") or _auto_device()
+        if compute_type is None:
+            compute_type = os.environ.get("CAPTURE_WHISPER_COMPUTE") or (
+                "float16" if device == "cuda" else "int8"
+            )
+        try:
+            self._model = WhisperModel(model, device=device, compute_type=compute_type)
+        except Exception:
+            # A CUDA/DLL/compute mismatch must not kill ASR; fall back to CPU int8.
+            if device == "cuda":
+                log.warning(
+                    "faster-whisper CUDA load failed (model=%s compute=%s); falling back to CPU/int8",
+                    model, compute_type, exc_info=True,
+                )
+                self._model = WhisperModel(model, device="cpu", compute_type="int8")
+                device, compute_type = "cpu", "int8"
+            else:
+                raise
+        self.device = device
+        self.compute_type = compute_type
+        log.info("faster-whisper loaded: model=%s device=%s compute=%s", model, device, compute_type)
 
     def transcribe(self, pcm: np.ndarray, sample_rate: int) -> list[Segment]:
         path = _write_wav(pcm, sample_rate)

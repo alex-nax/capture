@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import threading
 from pathlib import Path
@@ -31,6 +32,9 @@ from . import platform as _platform
 from .util import iso, now
 
 log = logging.getLogger(__name__)
+
+# Keep the audio-source subprocess from popping a console window on Windows.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
 SAMPLE_RATE = 16000
 BYTES_PER_SAMPLE = 2
@@ -101,7 +105,9 @@ class AudioCapture:
             self._jsonl = open(self.out_dir / "transcript.jsonl", "w", buffering=1)
             self._txt = open(self.out_dir / "transcript.txt", "w", buffering=1)
             self._raw = open(self.out_dir / "audio.s16le", "wb")
-            self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self._proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=_NO_WINDOW
+            )
         except Exception as e:
             self.status = f"audio-start-failed: {e}"
             log.exception("audio capture failed to start")

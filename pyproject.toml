@@ -18,6 +18,15 @@ dependencies = [
 mlx = ["mlx-whisper>=0.4.0; sys_platform == 'darwin'"]
 # Cross-platform CPU/GPU ASR backend (faster-whisper CUDA on the Windows/NVIDIA box).
 whisper = ["faster-whisper>=1.0.0"]
+# CUDA runtime libs so faster-whisper/CTranslate2 runs on the GPU (Windows/NVIDIA). The
+# FasterWhisper backend adds these pip packages' bin dirs to the Windows DLL search path.
+cuda = ["nvidia-cublas-cu12", "nvidia-cudnn-cu12"]
+# Windows browser-capture tooling: WASAPI loopback helper + Selenium browser driving + yt-dlp.
+capture-windows = [
+    "pyaudiowpatch>=0.2.12; sys_platform == 'win32'",
+    "selenium>=4.20",
+    "yt-dlp>=2024.0",
+]
 # Remote NVIDIA Riva / Nemotron streaming backend.
 riva = ["nvidia-riva-client>=2.15.0"]
 

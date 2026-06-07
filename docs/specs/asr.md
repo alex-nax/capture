@@ -4,8 +4,9 @@ _Status: current as of 2026-06-07. Source of truth = the code; update this spec 
 ## Purpose
 Provide a single, swappable speech-to-text interface (`ASRBackend`) used by the audio capture
 pipeline (`audio.py`) to turn mono float32 PCM chunks into timestamped text segments. A factory
-(`create`) selects a backend by name, defaulting to local Whisper on this Apple Silicon Mac with an
-automatic fallback to a remote NVIDIA Riva / Nemotron endpoint. Per the architecture's dependency
+(`create`) selects a backend by name, defaulting to local Whisper (mlx on Apple Silicon;
+faster-whisper on CUDA — e.g. the Windows/NVIDIA box) with an automatic fallback to a remote
+NVIDIA Riva / Nemotron endpoint. Per the architecture's dependency
 rules, all ASR access goes through this interface and no other module imports a concrete backend
 directly.
 
@@ -67,9 +68,15 @@ Runtime steps for the common `create("auto")` path:
    package is importable) and resolves the model name from `CAPTURE_WHISPER_MODEL` or the default
    `mlx-community/whisper-large-v3-turbo` (whisper_local.py:28, 49–52).
 3. If `mlx-whisper` is unavailable (ImportError) or constructing fails, `load()` records the error and
-   tries `FasterWhisper()`. Its `__init__` imports `from faster_whisper import WhisperModel`, resolves
-   the model from `CAPTURE_WHISPER_MODEL` or default `"base"`, and constructs `WhisperModel(model,
-   device="cpu", compute_type="int8")` (whisper_local.py:69–76).
+   tries `FasterWhisper()`. Its `__init__` first calls `_add_nvidia_dll_dirs()` (on Windows, puts the
+   cuBLAS/cuDNN DLLs from the `nvidia-*-cu12` pip packages on the DLL search path + PATH so CTranslate2
+   can load them), imports `from faster_whisper import WhisperModel`, resolves the model from
+   `CAPTURE_WHISPER_MODEL` (default `"base"`), the device from `CAPTURE_WHISPER_DEVICE` or auto-detect
+   (`_auto_device()` → `"cuda"` if `ctranslate2.get_cuda_device_count() > 0`, else `"cpu"`), and the
+   compute type from `CAPTURE_WHISPER_COMPUTE` or a device default (`float16` on cuda, `int8` on cpu).
+   It constructs `WhisperModel(model, device, compute_type)`; if a CUDA load fails it logs and **falls
+   back to `device="cpu", compute_type="int8"`** so an ASR/DLL mismatch never kills capture. The chosen
+   `device`/`compute_type` are stored on the instance.
 4. If both fail, `load()` raises `RuntimeError`; in the `"auto"` path `create` catches it, logs
    `local ASR unavailable (...); trying Riva/Nemotron`, and calls `nemotron.load()`.
 
@@ -150,7 +157,12 @@ Local Whisper (whisper_local.py):
 - `CAPTURE_WHISPER_MODEL` — model name/repo. Used by both backends.
   - For `MlxWhisper`: an mlx-community HF repo; default `mlx-community/whisper-large-v3-turbo`.
   - For `FasterWhisper`: a faster-whisper model name; default `base`.
-- `FasterWhisper.compute_type` — constructor arg, default `"int8"`; no env var. Device is hardcoded `"cpu"`.
+- `CAPTURE_WHISPER_DEVICE` — `"cuda"` | `"cpu"` for `FasterWhisper`; default auto-detect (cuda if a
+  CUDA device is visible to CTranslate2, else cpu). A failed CUDA load falls back to cpu/int8.
+- `CAPTURE_WHISPER_COMPUTE` — CTranslate2 compute type for `FasterWhisper`; default `float16` on cuda,
+  `int8` on cpu. (On the Windows/NVIDIA box, large-v3 runs on cuda/float16.)
+- Windows CUDA needs the cuBLAS/cuDNN DLLs from `nvidia-cublas-cu12` + `nvidia-cudnn-cu12`;
+  `FasterWhisper.__init__` adds their pip `bin` dirs to the DLL search path automatically.
 
 Riva / Nemotron (nemotron.py:43–47):
 - `CAPTURE_RIVA_SERVER` — Riva gRPC `host:port`; default `localhost:50051`.
@@ -177,7 +189,9 @@ Factory:
   exception is the Riva one; the original local `RuntimeError` is only logged as a warning.
 - **No `close()` overrides.** Neither concrete backend overrides `close()`; the Riva gRPC channel /
   Whisper model are not explicitly torn down.
-- **`compute_type` not env-configurable**, and faster-whisper is CPU-only here (`device="cpu"` hardcoded).
+- **faster-whisper now supports CUDA** (device/compute auto-detected + env-overridable, with a Windows
+  cuBLAS/cuDNN DLL-path fix and a CPU fallback). Used as benchmark "Backend A" in
+  [`../asr-benchmark.md`](../asr-benchmark.md) vs local Nemotron (#23). Riva/Nemotron remains unverified.
 
 ## Tests
 - `tests/smoke.py` is the project smoke harness; ASR coverage here should be verified through it where

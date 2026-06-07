@@ -1,5 +1,39 @@
 # Progress Log
 
+## Session 7 — 2026-06-07
+**Agent**: builder (Windows/NVIDIA box, ultracode)
+**Summary**: Built the **live browser-capture → local-ASR pipeline** end to end and ran it on an
+8-video YouTube playlist (UE5 C++ Thread-Safe Motion Matching). Net-new this session:
+- **faster-whisper large-v3 on CUDA** (native Windows): `whisper_local.FasterWhisper` now auto-detects
+  device/compute (`CAPTURE_WHISPER_DEVICE`/`_COMPUTE`), adds the cuBLAS/cuDNN pip DLL dirs to the
+  search path so CTranslate2 loads on Windows, and falls back to CPU on a CUDA error.
+- **Windows audio (#21 audio half)**: `helper/audiocap_win.py` — WASAPI **system loopback** →
+  16 kHz mono s16le on stdout, with **auto-reconnect** on stream error / default-device change (the
+  device-change mid-run is what truncated the first attempt at 18 min). Wired into `Win32AudioSource`
+  (`mode="loopback"`); helper launched with `CREATE_NO_WINDOW`.
+- **DPI-aware screenshots**: `Win32ScreenGrabber` sets per-monitor DPI awareness so whole-screen
+  capture isn't cropped on a scaled display; window-targeted `PrintWindow` (+ Chrome `--disable-gpu`)
+  gives **occlusion-proof** capture (work with the video in the background).
+- **Capture tooling** (`scripts/`): `capture_youtube_playlist.py` (Selenium **attaches** to a
+  remote-debug Chrome — avoids YouTube's automation throttle that cut a fresh automated Chrome off at
+  ~42 s; mutes/skips ads; one continuous CaptureSession), `transcribe_audio.py` (authoritative offline
+  re-transcribe), `playlist_deliverables.py` (per-video split). `run_interactive.ps1` gained `-NoWait`.
+- Docs: `docs/asr-benchmark.md` (faster-whisper-vs-Nemotron + the **Docker/WSL2 local-Nemotron** path
+  for #23) and `docs/youtube-capture.md`. Deps added to `pyproject.toml` extras.
+**Result**: full playlist captured — 51.3 min audio, 582 screenshots, **0 errors**; the 5 narrated
+videos transcribed (large-v3 CUDA); videos 6–8 are music/demo with no narration (**verified** against
+their source audio via yt-dlp). Deliverables in `capture-runs/playlist2/deliverables/` (gitignored).
+**Key lessons**: NeMo/Nemotron is Linux-only → local Nemotron needs WSL2/Docker (documented for #23);
+fresh automated Chrome is throttled by YouTube → attach to a real Chrome; capture must run in the
+interactive desktop (`WinSta0`); WASAPI loopback can lag wall-clock on long runs → offline re-transcribe
+for clean timestamps.
+**Known issues / next**: Windows audio is **system loopback, not per-process** (mute other audio for a
+clean transcript; true per-process WASAPI loopback is the remaining #21 refinement). Then **#23**:
+stand up local Nemotron (Docker/WSL2) and benchmark vs faster-whisper.
+**Next suggested task**: per-process Windows audio (#21), then the Whisper-vs-Nemotron benchmark (#23).
+
+---
+
 ## Session 6 — 2026-06-07
 **Agent**: builder (Windows/NVIDIA box, ultracode)
 **Summary**: First run on the **Windows PC** (RTX 4070 Ti SUPER, 16 GB, driver 591.86). The box

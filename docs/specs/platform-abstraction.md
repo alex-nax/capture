@@ -23,8 +23,17 @@ on a Windows/NVIDIA box, which also enables the Whisper-vs-Nemotron benchmark (f
   ScreenCaptureKit `audiocap` helper, else `ffmpeg` `avfoundation`), `MacOSPlatform`. Also owns
   `helper_path()` and the screenshot helpers `_sc_format`/`_sips_format`/`_png_size`.
 - `src/capture_mcp/platform/windows.py` — `Win32WindowFinder` (`EnumWindows`), `Win32ScreenGrabber`
-  (GDI `BitBlt`/`PrintWindow` → GDI+ scale + encode), `Win32AudioSource`, `WindowsPlatform`.
+  (GDI `BitBlt`/`PrintWindow` → GDI+ scale + encode; sets per-monitor **DPI awareness** at import so
+  captures aren't cropped on a scaled display), `Win32AudioSource` (WASAPI system loopback),
+  `WindowsPlatform`.
+- `helper/audiocap_win.py` — Windows audio helper (analogue of `audiocap.swift`): WASAPI **loopback**
+  of the default output → 16 kHz mono s16le on stdout, with **auto-reconnect** on a stream error or
+  default-output-device change. Launched by `Win32AudioSource` (with `CREATE_NO_WINDOW`).
 - `init.ps1` — Windows bootstrap (venv + editable install + smoke), parallel to `init.sh`.
+- `scripts/run_interactive.ps1` — run a command in the interactive desktop session (`WinSta0`) via a
+  transient Interactive-logon scheduled task; `-NoWait` leaves it running (fire-and-forget).
+- `scripts/{capture_youtube_playlist,transcribe_audio,playlist_deliverables}.py` — application tooling
+  for the browser-capture workflow (see [`../youtube-capture.md`](../youtube-capture.md)).
 
 ## Public contract
 ### `WindowRef` (dataclass, base.py)
@@ -75,7 +84,7 @@ for an unsupported platform. The MCP tools and the session output layout are unc
 |---|---|---|
 | Screenshots | `screencapture -l` + `sips` (`MacScreenGrabber`) | GDI `BitBlt`/`PrintWindow` → GDI+ scale+encode (`Win32ScreenGrabber`) — png/jpg/jpeg/tiff/gif/bmp + JPEG quality, zero extra deps |
 | Window discovery | Quartz `CGWindowList` (`MacWindowFinder`→`windows.py`) | `EnumWindows` + `QueryFullProcessImageNameW` (`Win32WindowFinder`) |
-| Per-app audio | ScreenCaptureKit `audiocap` helper | **not yet wired** (WASAPI process loopback — feature #21); see open items |
+| Per-app / system audio | ScreenCaptureKit `audiocap` helper (per-app) | WASAPI **system loopback** via `helper/audiocap_win.py` (captures the full output mix incl. the target app; auto-reconnects on device change). True per-**process** loopback is a future refinement. |
 | Mic fallback | ffmpeg `avfoundation :default` | ffmpeg `dshow` with `CAPTURE_DSHOW_AUDIO` device (only if ffmpeg present) |
 | ASR | local Whisper (mlx/faster) | local Whisper (faster-whisper CUDA) **and** NVIDIA Nemotron via Riva |
 
@@ -85,8 +94,11 @@ for an unsupported platform. The MCP tools and the session output layout are unc
 - The MCP tool parameters/returns do not change.
 - `stdout` stays clean in `server.py` (the MCP transport) on all platforms.
 - `fit_box` never upscales (`scale = min(bw/sw, bh/sh, 1.0)`) and preserves aspect ratio.
-- The Windows backend uses only `ctypes` + DLLs that ship with Windows (`user32`, `gdi32`,
-  `gdiplus`, `kernel32`, `dwmapi`) — no third-party screenshot/window deps.
+- The Windows screenshot/window backend uses only `ctypes` + DLLs that ship with Windows
+  (`user32`, `gdi32`, `gdiplus`, `kernel32`, `dwmapi`) and sets **per-monitor DPI awareness** at
+  import so captures use physical pixels. The Windows **audio** path needs `pyaudiowpatch` (+ numpy);
+  targeting a window id makes screenshots occlusion-proof (`PrintWindow`), so the user can keep
+  working with the captured window in the background.
 - Backends are stateless/thread-safe and shared; `Win32ScreenGrabber` starts GDI+ once under a
   lock and caches encoder CLSIDs.
 
@@ -97,9 +109,10 @@ for an unsupported platform. The MCP tools and the session output layout are unc
   Screenshotter counts one error for the tick.
 - Windows window discovery: a failing per-window query is swallowed inside the `EnumWindows`
   callback (logged) so one bad window cannot abort enumeration.
-- Windows audio: `source="app"` returns `None` (per-app loopback not implemented) → audio status
-  becomes `no-audio-source`; `auto`/`mic` returns `None` unless `ffmpeg` + `CAPTURE_DSHOW_AUDIO`
-  are present. macOS audio behavior is unchanged.
+- Windows audio: `source="auto"|"app"` → the WASAPI loopback helper (`mode="loopback"`), which
+  reconnects on a read error or default-device change so a long multi-video capture survives;
+  `source="mic"` → ffmpeg `dshow` only if `ffmpeg` + `CAPTURE_DSHOW_AUDIO` are present, else `None`.
+  If `pyaudiowpatch` / the helper is missing, `app` → `None` (`no-audio-source`). macOS unchanged.
 
 ## Outputs / artifacts
 Same as the macOS session output on both platforms. The Windows screenshot backend writes the
@@ -113,9 +126,15 @@ final image directly (no temp file; the macOS `sips` path still uses a `.tmp.png
   `sys_platform == "darwin"` in `pyproject.toml`, so the base package installs on Windows.
 
 ## Known limitations / open items
-- **Per-app audio on Windows is not implemented** (feature #21): WASAPI process loopback (Win 10
-  2004+) needs a helper or a loopback lib; pre-2004 would fall back to system loopback. Today the
-  Windows `AudioSource` yields no per-app source.
+- **Windows audio is system loopback, not per-process** (feature #21 audio half): `audiocap_win.py`
+  captures the **default output mix** (the target app plus anything else playing), so other audio
+  should be muted for a clean transcript. True per-**process** WASAPI loopback (Win 10 2004+) would
+  isolate one app and is the remaining refinement.
+- **Loopback can lag wall-clock on long runs.** WASAPI loopback only delivers while audio renders, so
+  over a long multi-video capture the audio timeline can fall behind real time and the live
+  transcript's absolute timestamps drift vs. wall-clock (this skews wall-time-based per-video
+  splitting). For clean offsets, re-transcribe the saved `audio.s16le` offline
+  (`scripts/transcribe_audio.py`) and split by content.
 - **Windows screenshot content needs an interactive desktop.** Discovery/`PrintWindow` capture of
   real app windows requires the process to run in the interactive window station (`WinSta0`); from
   a non-interactive/service station (a Windows service, SSH, or CI) `EnumWindows` sees no user
@@ -144,5 +163,10 @@ final image directly (no temp file; the macOS `sips` path still uses a `.tmp.png
   (PrintWindow path) plus a scaled JPEG; whole-screen capture produced the full 1536×864 desktop
   (244 KB of real content). This confirms real-window discovery + content capture, not reachable
   from the service station.
-- Pending: a Windows ASR run (faster-whisper CUDA) and the Whisper-vs-Nemotron benchmark (#23);
-  per-app WASAPI audio (#21).
+- Live (Session 7, Windows, interactive desktop): captured an 8-video YouTube playlist end-to-end
+  via `scripts/capture_youtube_playlist.py` (attach to a signed-in Chrome over the remote-debug port,
+  window-targeted GDI+ screenshots, WASAPI loopback → faster-whisper large-v3 CUDA). 51.3 min audio,
+  0 errors; the 5 narrated videos transcribed correctly (the 3 non-narrated ones verified against
+  their source audio). The loopback auto-reconnect carried the run through a default-device change
+  that had truncated an earlier attempt at ~18 min.
+- Pending: the Whisper-vs-Nemotron benchmark (#23) and true per-process Windows audio (#21).
