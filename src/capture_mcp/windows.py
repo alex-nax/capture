@@ -24,15 +24,17 @@ class WindowInfo:
         return self.width * self.height
 
 
-def _list_windows() -> list[WindowInfo]:
+def _list_windows(on_screen_only: bool = True) -> list[WindowInfo]:
     # Imported lazily so the module imports even where Quartz is unavailable.
     from Quartz import (
         CGWindowListCopyWindowInfo,
         kCGNullWindowID,
+        kCGWindowListOptionAll,
         kCGWindowListOptionOnScreenOnly,
     )
 
-    raw = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID) or []
+    option = kCGWindowListOptionOnScreenOnly if on_screen_only else kCGWindowListOptionAll
+    raw = CGWindowListCopyWindowInfo(option, kCGNullWindowID) or []
     out: list[WindowInfo] = []
     for w in raw:
         bounds = w.get("kCGWindowBounds", {})
@@ -50,15 +52,8 @@ def _list_windows() -> list[WindowInfo]:
     return out
 
 
-def find_windows(pid: int | None = None, app_name: str | None = None) -> list[WindowInfo]:
-    """Return on-screen windows for a pid or (case-insensitive substring) app name.
-
-    Only normal-layer windows (layer 0) are considered, largest first, so the
-    main document window comes before menu-bar/status items.
-    """
-    wins = _list_windows()
+def _match(wins: list[WindowInfo], pid: int | None, needle: str | None) -> list[WindowInfo]:
     matches = []
-    needle = app_name.lower() if app_name else None
     for w in wins:
         if w.layer != 0 or w.width < 1 or w.height < 1:
             continue
@@ -69,6 +64,21 @@ def find_windows(pid: int | None = None, app_name: str | None = None) -> list[Wi
         matches.append(w)
     matches.sort(key=lambda w: w.area, reverse=True)
     return matches
+
+
+def find_windows(pid: int | None = None, app_name: str | None = None) -> list[WindowInfo]:
+    """Return windows for a pid or (case-insensitive substring) app name.
+
+    Only normal-layer (layer 0) windows are considered, largest first. On-screen
+    windows are preferred, but if none match we fall back to the full window list
+    so we can still target an app whose window is on another Space/Desktop (or
+    fullscreen) — ``screencapture -l`` captures it regardless of Space.
+    """
+    needle = app_name.lower() if app_name else None
+    matches = _match(_list_windows(on_screen_only=True), pid, needle)
+    if matches:
+        return matches
+    return _match(_list_windows(on_screen_only=False), pid, needle)
 
 
 def primary_window(pid: int | None = None, app_name: str | None = None) -> WindowInfo | None:
