@@ -29,6 +29,7 @@ Workflow:
 | Windows | [windows.md](windows.md) | Quartz `CGWindowList` discovery (pid/app → `CGWindowID`); layer-0/largest-first; on-screen→all-windows cross-Space fallback |
 | ScreenCaptureKit helper | [screencapturekit-helper.md](screencapturekit-helper.md) | `audiocap` CLI; stdout PCM + stderr status contract; `AVAudioConverter`; `-3805` auto-reconnect; shutdown guard; signals |
 | Permissions & signing | [permissions-and-signing.md](permissions-and-signing.md) | Screen Recording (TCC); stable self-signed identity; `build_helper` signing; `-3805` (transient) vs `-3801`/`-3803` (permission) |
+| Platform abstraction (PLANNED) | [platform-abstraction.md](platform-abstraction.md) | **Design only** — interfaces + per-OS backends for Windows/NVIDIA support and the Whisper-vs-Nemotron benchmark |
 
 See [`../architecture.md`](../architecture.md) for the cross-cutting module map and hard constraints.
 

@@ -55,5 +55,14 @@ intent, then the code to know reality, and the two must agree.
 - **End-to-end window+audio:** attach to a real app by `pid` and confirm screenshots land in
   `<out>/capture-*/screenshots/` and (if permission granted) `transcript.jsonl` fills.
 
+## Bundled skills (travel with this repo)
+This repo ships harness skills in `.claude/skills/` so they're available on any machine that
+checks out the code:
+- **capture-continue** — the per-session development loop (orient → bootstrap → verify →
+  implement ONE feature WITH its spec → test → commit). Use this to "pick up where we left off".
+- **capture-audit** — health/consistency audit (spec↔code drift, features/progress accuracy, smoke).
+- **capture-spec** — create/update a `docs/specs/<scope>.md` (enforces the mandatory-spec policy).
+
 ## Architecture
-See `docs/architecture.md` for module boundaries and dependency rules.
+See `docs/architecture.md` for module boundaries and dependency rules, and `docs/specs/` for
+per-scope specs. Cross-platform/Windows plan: `docs/specs/platform-abstraction.md` (PLANNED).

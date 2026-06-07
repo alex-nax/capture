@@ -233,6 +233,56 @@
       ],
       "passes": false,
       "dependencies": [12]
+    },
+    {
+      "id": 20,
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Platform abstraction layer: interfaces (ScreenGrabber/WindowFinder/AudioSource) + a current() factory so OS-specific capture is swappable. macOS code moves behind it unchanged. Design in docs/specs/platform-abstraction.md.",
+      "acceptance_criteria": [
+        "src/capture_mcp/platform/ with base interfaces + macos backend wrapping today's behavior",
+        "session/screenshots/audio/windows call platform.current() instead of importing macOS APIs directly",
+        "smoke test still 20/20 on macOS through the abstraction"
+      ],
+      "passes": false,
+      "dependencies": [4, 6, 8]
+    },
+    {
+      "id": 21,
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Windows backends: screenshots (Windows.Graphics.Capture or PrintWindow), window discovery (EnumWindows), per-app audio (WASAPI process loopback) emitting the same 16kHz mono s16le contract.",
+      "acceptance_criteria": [
+        "On Windows, capture_start produces timestamped screenshots of a target window",
+        "Per-app (or system) audio yields a transcript; mic fallback via ffmpeg dshow/wasapi",
+        "Session output layout + tool params identical to macOS"
+      ],
+      "passes": false,
+      "dependencies": [20]
+    },
+    {
+      "id": 22,
+      "category": "infrastructure",
+      "priority": "medium",
+      "description": "Windows bootstrap: init.ps1 equivalent of init.sh (venv, install with platform-gated extras, run smoke). Make pyobjc/mlx optional deps gated by platform.",
+      "acceptance_criteria": [
+        "init.ps1 sets up a working env on a clean Windows box and runs tests/smoke.py green",
+        "pyproject extras gate macOS-only (pyobjc) and arm64-only (mlx) deps by platform"
+      ],
+      "passes": false,
+      "dependencies": [20]
+    },
+    {
+      "id": 23,
+      "category": "asr",
+      "priority": "high",
+      "description": "Benchmark local Whisper (faster-whisper CUDA) vs NVIDIA Nemotron-3.5 ASR (via the Riva adapter) on the Windows/NVIDIA box, on identical captured audio. Report WER, real-time factor/latency, GPU memory.",
+      "acceptance_criteria": [
+        "Both backends transcribe the same audio.s16le clips via the ASRBackend interface",
+        "A results doc compares accuracy and speed; verifies the Riva/Nemotron adapter end-to-end (closes #13)"
+      ],
+      "passes": false,
+      "dependencies": [13, 21]
     }
   ]
 }

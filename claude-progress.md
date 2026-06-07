@@ -1,5 +1,21 @@
 # Progress Log
 
+## Session 5 — 2026-06-07
+**Agent**: builder
+**Summary**: Made the harness portable to other machines. Installed **skill-creator** at
+`~/.claude/skills/skill-creator` and authored three repo-local skills under `.claude/skills/`
+(travel with the code): **capture-continue** (per-session dev loop), **capture-audit**
+(health/spec-drift), **capture-spec** (mandatory-spec authoring). All pass skill-creator's
+`quick_validate`. Documented the next chapter spec-first: `docs/specs/platform-abstraction.md`
+(PLANNED) for Windows/NVIDIA support + the Whisper-vs-Nemotron benchmark, and added features
+#20 (platform abstraction), #21 (Windows backends), #22 (Windows bootstrap/init.ps1), #23
+(Whisper vs Nemotron-3.5 benchmark, closes #13 when done). AGENTS.md lists the bundled skills.
+**Context for next machine:** follow-up runs on a **Windows PC with an NVIDIA card**; today's
+code is macOS-only — start with feature #20. To continue: open the repo and run `capture-continue`.
+**Next suggested task**: Feature #20 — platform abstraction layer (then #21 Windows backends).
+
+---
+
 ## Session 4 — 2026-06-07
 **Agent**: builder
 **Summary**: Made documentation a first-class, mandatory step. Wrote a per-scope spec for

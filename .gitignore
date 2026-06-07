@@ -7,6 +7,7 @@ dist/
 build/
 .DS_Store
 
-# transient capture session output
-capture-*/
-_capture_raw/
+# transient capture session output (anchored to repo root so it does NOT match
+# .claude/skills/capture-* skills)
+/capture-*/
+/_capture_raw/
