@@ -1,5 +1,20 @@
 # Progress Log
 
+## Session 4 — 2026-06-07
+**Agent**: builder
+**Summary**: Made documentation a first-class, mandatory step. Wrote a per-scope spec for
+**every** scope under `docs/specs/` (mcp-server, session, screenshots, process-logs, audio,
+asr, windows, screencapturekit-helper, permissions-and-signing) — each with a consistent
+section template (Purpose/Files/Public contract/Behavior/Invariants/Failure modes/Outputs/
+Configuration/Open items/Tests) and a live open-items backlog — plus `docs/specs/README.md`
+as the index + template. Added a **"SPECS ARE MANDATORY"** rule to `AGENTS.md` and a pointer
+in `docs/architecture.md`: update the matching spec in the SAME change as any behavior change
+(spec = intent, code = reality, they must agree).
+**Next suggested task**: work the open-items backlogs in the specs, or Feature #15
+(verify stable-cert grant persistence on a clean machine).
+
+---
+
 ## Session 3 — 2026-06-07
 **Agent**: builder
 **Summary**: Cracked the per-app audio `-3805` problem and proved the full audio→ASR
