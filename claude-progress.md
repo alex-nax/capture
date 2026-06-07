@@ -1,5 +1,22 @@
 # Progress Log
 
+## Session 2 — 2026-06-07
+**Agent**: builder
+**Summary**: Initialized the harness (AGENTS.md, features.json, claude-progress.md,
+init.sh, docs/architecture.md; git init + first commit) and ran "test case 1":
+captured the YouTube video *UE5 C++ MotionMatching Performance Test* in Chrome via
+the tool and organized it into `./capture-motion-match_1/` (README summary, transcribed
+`AnimInstanceBase.cpp`, 5 key frames, capture-session.json); deleted the raw /tmp captures.
+**Bug fixed**: Screenshotter fell back to whole-screen (capturing the wrong/foreground
+window) when the target's window left the current Space — e.g. a video player going
+fullscreen. Now caches the last-known CGWindowID (`_last_wid`) and keeps targeting it
+(`screencapture -l` grabs it regardless of Space/focus).
+**Known issues**: per-app audio still hits SCStreamError -3805 here (ad-hoc rebuild
+drops the TCC grant) — feature #15. The capture summary is therefore vision-only.
+**Next suggested task**: Feature #15 — stable-signed helper + verified per-app audio.
+
+---
+
 ## Session 1 — 2026-06-07
 **Agent**: initializer / builder
 **Summary**: Built capture-mcp from scratch and hardened it through two adversarial

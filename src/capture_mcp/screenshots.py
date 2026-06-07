@@ -120,6 +120,9 @@ class Screenshotter:
 
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._last_wid: int | None = None  # cache so we keep targeting a window that
+        # temporarily leaves the on-screen list (e.g. a video player going fullscreen
+        # onto its own Space) instead of falling back to whole-screen.
         self.count = 0
         self.errors = 0
 
@@ -141,7 +144,12 @@ class Screenshotter:
         if self.pid is None and self.app_name is None:
             return None
         w = windows.primary_window(pid=self.pid, app_name=self.app_name)
-        return w.window_id if w else None
+        if w:
+            self._last_wid = w.window_id
+            return w.window_id
+        # Window not on the current Space right now; keep using the last known id
+        # (screencapture -l still grabs it) rather than falling back to whole-screen.
+        return self._last_wid
 
     def _target_args(self, wid: int | None) -> list[str] | None:
         """screencapture target flags; None means 'skip this tick'."""
