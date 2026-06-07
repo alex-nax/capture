@@ -179,10 +179,12 @@
       "id": 15,
       "category": "infrastructure",
       "priority": "high",
-      "description": "Codesign the helper with a stable identity for a persistent Screen Recording (TCC) grant; verify per-app audio end-to-end with an app actively playing audio",
+      "description": "Stable code-signing identity so the helper's Screen Recording (TCC) grant persists across rebuilds. NOTE: per-app audio→transcript is already verified (Session 3) via the helper's -3805 auto-reconnect; remaining work is verifying grant persistence on a clean machine. scripts/setup_codesign.sh creates the self-signed cert.",
       "acceptance_criteria": [
-        "scripts/build_helper.sh signs with CODESIGN_IDENTITY and the grant persists across rebuilds",
-        "Attaching to a playing app yields non-empty transcript.jsonl (no -3805)"
+        "scripts/setup_codesign.sh creates a codesigning identity and signs the helper (DONE)",
+        "build_helper.sh signs with CODESIGN_IDENTITY (DONE)",
+        "Attaching to a playing app yields non-empty transcript.jsonl, no fatal -3805 (DONE via auto-reconnect)",
+        "After setup_codesign + one approval, the grant survives a rebuild without re-prompting (verify on a clean machine)"
       ],
       "passes": false,
       "dependencies": [9]

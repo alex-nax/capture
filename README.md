@@ -108,25 +108,37 @@ timestamps each segment. If the helper isn't built (or `audio_source="mic"`),
 it falls back to capturing the default microphone via `ffmpeg`. The helper also
 supports `--system` for whole-display audio.
 
-### Troubleshooting per-app audio (SCStreamError -3805)
+### About SCStreamError -3805
 
-If `capture_status` shows `audio_status: app-audio-failed ... code=-3805`
-(`failedApplicationConnectionInterrupted`), ScreenCaptureKit enumerated content
-fine but `startCapture` was interrupted. This is a **permission** problem, not a
-bug:
+`-3805` is `SCStreamError.failedApplicationConnectionInterrupted` — the stream's
+connection to the capture server was interrupted (commonly right after
+`startCapture`, or when focus/Spaces change during background capture). It is
+**not** a permission denial (that is `-3801 userDeclined`). In practice it is a
+*transient* interruption: `SCShareableContent` enumerates fine (so Screen
+Recording is granted), and the very next connection attempt usually succeeds.
 
-- Grant **Screen Recording** to the launching process (Terminal / your MCP
-  client) and approve the prompt that appears on first capture.
-- An **ad-hoc signature changes on every rebuild**, so macOS treats the helper
-  as a new binary and drops the grant. Build once with a stable signing identity
-  (`CODESIGN_IDENTITY="<cert>" bash scripts/build_helper.sh`) so the approval
-  sticks, then approve it once.
-- As an immediate workaround, use `audio_source="mic"` (ffmpeg microphone), which
-  needs only the Microphone permission.
+The helper handles this automatically: on `-3805` it **rebuilds the stream and
+reconnects** (with backoff), so background capture survives Space/window switches.
+You'll see `stream stopped … code=-3805` followed by `READY … (reconnect #1)` and
+`audio flowing` in the helper's stderr. Genuine permission errors
+(`-3801`/`-3803`) are *not* retried — they're reported instead.
 
-The capture session degrades gracefully: if the helper can't start, screenshots
-and stdout/stderr logging continue and the audio failure is reported in
-`audio_status`.
+**Make the Screen Recording grant persist (recommended, one-time):** an ad-hoc
+signature changes every rebuild, so macOS re-prompts. Give the helper a stable
+identity:
+
+```bash
+bash scripts/setup_codesign.sh        # creates a self-signed cert + signs the helper
+./helper/audiocap --system            # triggers the Screen Recording prompt
+# System Settings → Privacy & Security → Screen Recording → enable 'audiocap'
+# then rebuild with the same identity:
+CODESIGN_IDENTITY="capture-mcp-codesign" bash scripts/build_helper.sh
+```
+
+**Workaround** needing only Microphone permission: `audio_source="mic"`.
+
+The session also degrades gracefully: if audio can't start at all, screenshots and
+stdout/stderr logging continue and the failure is reported in `audio_status`.
 
 ## Caveats
 

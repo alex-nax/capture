@@ -126,6 +126,8 @@ final class AudioSink: NSObject, SCStreamOutput, SCStreamDelegate {
         guard let ch = buf.int16ChannelData, buf.frameLength > 0 else { return }
         let n = Int(buf.frameLength)
         let data = Data(bytes: ch[0], count: n * MemoryLayout<Int16>.size)
+        if !everGotData { everGotData = true; logErr("audio flowing") }
+        reconnects = 0  // a healthy stream resets the backoff
         // SIGPIPE is ignored at startup, so a broken pipe surfaces as a throw
         // here (parent went away) rather than killing us with an exception.
         do {
@@ -139,7 +141,16 @@ final class AudioSink: NSObject, SCStreamOutput, SCStreamDelegate {
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         let ns = error as NSError
         logErr("stream stopped: \(error.localizedDescription) [domain=\(ns.domain) code=\(ns.code)]")
-        shutdown(1)
+        if stopping { return }
+        // -3801 userDeclined / -3803 missingEntitlements are genuine permission
+        // failures — retrying is pointless, so report and exit.
+        if ns.code == -3801 || ns.code == -3803 {
+            logErr("permission error — grant Screen Recording (see README); not retrying")
+            shutdown(1)
+        }
+        // Otherwise (e.g. -3805 connection interrupted on a Space/focus change),
+        // rebuild the stream and keep capturing in the background.
+        scheduleReconnect()
     }
 }
 
@@ -180,6 +191,49 @@ func shutdown(_ code: Int32) -> Never {
 
 let sink = AudioSink(outRate: targetRate)
 
+// Reconnection state. A stream connection can be interrupted (SCStreamError -3805)
+// when Spaces/displays/app focus change while capturing in the background — which
+// is exactly when the user is doing other things. Instead of dying, we rebuild the
+// stream and keep going. The filter/config are built once and reused per attempt.
+var capFilter: SCContentFilter?
+var capConfig: SCStreamConfiguration?
+var capLabel = ""
+var stopping = false
+var reconnects = 0
+var everGotData = false
+
+func scheduleReconnect() {
+    if stopping { return }
+    reconnects += 1
+    // If we never managed to get any audio, don't spin forever — give up after a
+    // bounded number of attempts (~30s with backoff) and report.
+    if !everGotData && reconnects > 20 {
+        logErr("giving up after \(reconnects) failed connection attempts with no audio")
+        shutdown(1)
+    }
+    let delay = min(2.0, 0.25 * Double(reconnects))  // backoff, capped at 2s
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { connect() }
+}
+
+func connect() {
+    if stopping { return }
+    guard let filter = capFilter, let config = capConfig else { return }
+    Task {
+        do {
+            let stream = SCStream(filter: filter, configuration: config, delegate: sink)
+            captureStream = stream  // retain so ARC can't release it mid-capture
+            try stream.addStreamOutput(sink, type: .audio, sampleHandlerQueue: audioQueue)
+            try await stream.startCapture()
+            logErr("READY rate=\(Int(targetRate)) channels=1 fmt=s16le target=\(capLabel)"
+                   + (reconnects > 0 ? " (reconnect #\(reconnects))" : ""))
+        } catch {
+            let ns = error as NSError
+            logErr("startCapture failed: \(error.localizedDescription) [code=\(ns.code)]; retrying")
+            scheduleReconnect()
+        }
+    }
+}
+
 Task {
     do {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
@@ -189,19 +243,17 @@ Task {
             exit(4)
         }
 
-        let filter: SCContentFilter
-        let label: String
         if captureSystem {
-            filter = SCContentFilter(display: display, excludingWindows: [])
-            label = "system"
+            capFilter = SCContentFilter(display: display, excludingWindows: [])
+            capLabel = "system"
         } else {
             guard let app = findApp(in: content) else {
                 logErr("no running application matched pid=\(targetPID.map(String.init) ?? "-") bundle=\(targetBundle ?? "-")")
                 exit(3)
             }
             // Filter the whole display down to just this app's audio.
-            filter = SCContentFilter(display: display, including: [app], exceptingWindows: [])
-            label = "\(app.applicationName) pid=\(app.processID)"
+            capFilter = SCContentFilter(display: display, including: [app], exceptingWindows: [])
+            capLabel = "\(app.applicationName) pid=\(app.processID)"
         }
 
         let config = SCStreamConfiguration()
@@ -215,21 +267,14 @@ Task {
         config.height = 128
         config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
         config.queueDepth = 6
+        capConfig = config
 
-        logErr("target=\(label); starting capture...")
-        let stream = SCStream(filter: filter, configuration: config, delegate: sink)
-        captureStream = stream  // retain for the process lifetime
-        try stream.addStreamOutput(sink, type: .audio, sampleHandlerQueue: audioQueue)
-        try await stream.startCapture()
-
-        logErr("READY rate=\(Int(targetRate)) channels=1 fmt=s16le target=\(label)")
-
-        // Stop cleanly on SIGINT/SIGTERM from the parent. The sources are kept
-        // alive in the global `signalSources` (a local would be cancelled when
-        // this Task returns and the handler would never fire).
+        // Stop cleanly on SIGINT/SIGTERM. Set `stopping` first so an in-flight
+        // stream error doesn't trigger a reconnect during shutdown.
         let stop: () -> Void = {
+            stopping = true
             Task {
-                try? await stream.stopCapture()
+                try? await captureStream?.stopCapture()
                 shutdown(0)  // FileHandle writes are unbuffered, so nothing to drain
             }
         }
@@ -240,6 +285,9 @@ Task {
             src.resume()
             signalSources.append(src)
         }
+
+        logErr("target=\(capLabel); starting capture...")
+        connect()
     } catch {
         logErr("startup failed: \(error.localizedDescription)")
         exit(5)

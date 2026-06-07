@@ -1,5 +1,25 @@
 # Progress Log
 
+## Session 3 — 2026-06-07
+**Agent**: builder
+**Summary**: Cracked the per-app audio `-3805` problem and proved the full audio→ASR
+path end to end. `-3805` (`failedApplicationConnectionInterrupted`) is a *transient*
+connection interruption, NOT a permission denial — `SCShareableContent` enumerates fine
+and the next attempt succeeds. Added **auto-reconnect** to the helper (rebuild stream +
+backoff on `-3805`; genuine `-3801`/`-3803` permission errors are reported, not retried).
+After that, a per-app capture of the Chrome video produced **1.74 MB of audio** and a real
+timestamped Whisper transcript (`capture-motion-match_1/transcript.md`).
+**Also**: cross-Space window discovery (Session 2) confirmed; `scripts/setup_codesign.sh`
+creates a stable self-signed signing identity so the Screen Recording grant persists across
+rebuilds (portable to other machines). README `-3805` section rewritten.
+**Gotcha:** a transcription attempt failed because `CAPTURE_WHISPER_MODEL=mlx-community/whisper-base`
+does not exist on HF (401) — use a valid repo (`mlx-community/whisper-tiny`, or the default
+`whisper-large-v3-turbo`).
+**Next suggested task**: Feature #15 — verify the stable-cert grant persists across a rebuild
+on a clean machine (needs the one-time Screen Recording approval click).
+
+---
+
 ## Session 2 — 2026-06-07
 **Agent**: builder
 **Summary**: Initialized the harness (AGENTS.md, features.json, claude-progress.md,
