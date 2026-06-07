@@ -57,6 +57,23 @@ Once the `capture` MCP tools are available, perform what the user asked using
 - **Change other per-project config** — edit the `capture` entry's `env` / pass per-capture params
   (interval, format/resolution, audio_source, asr_backend); see the recipes file.
 
+## When something goes wrong → file a bug (so it gets tracked)
+If a capture fails or behaves wrong and you can't quickly fix it, offer to report it upstream so
+the maintainers can track it:
+1. **Preview** the issue (collects safe diagnostics — version, OS/arch, the session's
+   `audio_status`/errors/notes; secrets/env values are omitted):
+   ```bash
+   python scripts/report_issue.py --summary "<what went wrong>" --session-dir "<output_dir>"
+   ```
+2. **Show the user** the previewed title/body and get explicit OK — posting publishes to a public
+   repo (`github.com/alex-nax/capture`). Let them redact anything they consider sensitive.
+3. **File it** — re-run with `--create` (uses `gh` if installed+authenticated), or have the user
+   open the prefilled URL the script prints:
+   ```bash
+   python scripts/report_issue.py --summary "<...>" --session-dir "<dir>" --create
+   ```
+Never post without the user's confirmation.
+
 ## Notes that save time
 - ASR model names: `mlx-community/whisper-tiny` (fast) or the default
   `mlx-community/whisper-large-v3-turbo`. **`mlx-community/whisper-base` does not exist (404).**

@@ -66,3 +66,12 @@ Or per-capture: pass `asr_backend="local"` (default) / `"nemotron"` (needs a Riv
 - **Empty/black screenshots** — grant Screen Recording to the app that launches the MCP server.
 - **Windows/Linux** — per-app audio + screenshots are macOS-only today; see the project's
   `docs/specs/platform-abstraction.md`.
+
+### Still stuck? Report it upstream
+If you can't resolve it, file a tracked bug (preview first, then post with consent):
+```bash
+python scripts/report_issue.py --summary "<what went wrong>" --session-dir "<output_dir>"   # preview
+python scripts/report_issue.py --summary "<...>" --session-dir "<output_dir>" --create        # post via gh / URL
+```
+It auto-collects safe diagnostics (version, OS, the session's `audio_status`/errors) and omits
+secrets. Posting publishes to `github.com/alex-nax/capture` — confirm with the user first.

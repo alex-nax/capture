@@ -293,6 +293,8 @@
         "install.sh clones+installs capture-mcp (venv, ASR backend, helper) and prints the bin path (DONE)",
         "configure_mcp.py creates/merges .mcp.json preserving other servers (DONE)",
         "set_model.py changes + optionally prefetches the ASR model (DONE)",
+        "report_issue.py files a tracked GitHub bug with redacted diagnostics; preview-by-default, posts only with --create + user consent (DONE)",
+        ".github/ISSUE_TEMPLATE/bug_report.md provides a structured bug template (DONE)",
         "skill passes skill-creator quick_validate and packages via package_skill.py (DONE)"
       ],
       "passes": true,

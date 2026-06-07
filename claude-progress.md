@@ -11,8 +11,14 @@ ASR model (`scripts/set_model.py`), edit per-project config (`references/quick-a
 Validated with skill-creator `quick_validate`; packaged with `package_skill.py` (→ `.skill`
 bundle). Installer tested end-to-end against a local clone: fresh venv exposed all 3 MCP tools and
 built the helper. Feature #24 added (passes:true). `skills/README.md` documents loading/packaging.
-**Status**: on branch `feat/distributable-skill` (not merged to main yet).
-**Next suggested task**: open a PR for this branch; then the Windows platform work (#20→#21→#23).
+Renamed the skill `capture-mcp-setup` → **`capture`** (it operates, not just sets up). Added
+**end-user bug reporting**: `scripts/report_issue.py` collects safe diagnostics (version, OS/arch,
+the session's `audio_status`/errors; **secrets/env values redacted** — only MCP server names),
+previews by default, and posts a tracked issue to `github.com/alex-nax/capture` only with
+`--create` + user consent (gh, or a prefilled URL fallback). Plus `.github/ISSUE_TEMPLATE/bug_report.md`.
+Verified preview output does NOT leak a planted `CAPTURE_RIVA_API_KEY`.
+**Status**: PR #1 (`feat/distributable-skill` → main), OPEN.
+**Next suggested task**: merge PR #1; then the Windows platform work (#20→#21→#23).
 
 ---
 
