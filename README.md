@@ -13,8 +13,11 @@ An MCP server that captures everything a target process produces, **on demand**:
 An agent calls `capture_start` to begin saving to a chosen location and
 `capture_stop` to end it and stop using disk. `capture_status` reports progress.
 
-> Platform: macOS (tested on 15.x, Apple Silicon). Screenshots and per-app audio
-> use macOS-only APIs.
+> Platform: **macOS** (tested on 15.x, Apple Silicon) and **Windows** (10/11, NVIDIA box).
+> OS-specific capture (screenshots, window discovery, audio) lives behind a platform
+> abstraction — see [`docs/specs/platform-abstraction.md`](docs/specs/platform-abstraction.md).
+> On Windows, screenshots use GDI+ and window discovery uses `EnumWindows` (no extra deps);
+> **per-app audio is macOS-only today** (Windows WASAPI process loopback is pending).
 
 ## Tools
 
@@ -65,6 +68,22 @@ uv pip install -e '.[mlx]'          # + Apple-Silicon Whisper (recommended ASR)
 # Build the per-app audio helper (needs Xcode / command line tools):
 bash scripts/build_helper.sh
 ```
+
+### Windows
+
+```powershell
+# From the repo root. Creates .venv, installs (pyobjc is platform-gated out),
+# and runs the smoke test (20/20). Add ASR extras as needed.
+./init.ps1                          # core server + smoke
+./init.ps1 -Extras whisper,riva     # + faster-whisper (CUDA) + NVIDIA Riva client
+```
+
+No native build is required on Windows (screenshots use GDI+, window discovery uses
+`EnumWindows`, both via `ctypes`). Per-app audio is not yet wired (feature #21); the mic
+fallback uses `ffmpeg` `dshow` when `ffmpeg` is installed and `CAPTURE_DSHOW_AUDIO` names a
+device. Capturing real app-window content requires the **interactive desktop** session
+(`WinSta0`) — if you run from a service/SSH/CI context, use `scripts/run_interactive.ps1` to
+execute a command in the logged-on user's session.
 
 Grant **Screen Recording** permission to the program that runs the server
 (Terminal / your MCP client) under *System Settings ▸ Privacy & Security ▸ Screen

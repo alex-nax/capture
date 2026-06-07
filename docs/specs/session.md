@@ -10,7 +10,7 @@ The session scope defines `CaptureSession`, the orchestrator for a single captur
 
 - `src/capture_mcp/session.py` — the `CaptureSession` class (the entire scope).
 
-Dependencies it imports (owned by other scopes, not specced here): `capture_mcp.windows`, `capture_mcp.audio.AudioCapture`, `capture_mcp.proc.ProcessCapture`, `capture_mcp.screenshots.Screenshotter` / `parse_resolution`, and `capture_mcp.util` (`fs_stamp`, `iso`, `now`).
+Dependencies it imports (owned by other scopes, not specced here): `capture_mcp.platform` (for `current().window_finder`, see [platform-abstraction.md](platform-abstraction.md)), `capture_mcp.audio.AudioCapture`, `capture_mcp.proc.ProcessCapture`, `capture_mcp.screenshots.Screenshotter` / `parse_resolution`, and `capture_mcp.util` (`fs_stamp`, `iso`, `now`).
 
 ## Public contract
 
@@ -78,7 +78,7 @@ All of `start()` runs while holding `self._lock`, including component startup.
 ### `_resolve_target()` (lines 157–176)
 1. If `command` is set: create `ProcessCapture(command, dir, cwd=cwd)`, attempt `self.pid = self._proc.start()`. On exception, set `self._proc = None`, append `f"launch failed: {e}"` to notes, log the exception, and return (lines 158–166). (The launch-mode guard in `start()` then converts this into a raised error.)
 2. Else if `req_pid is not None`: `self.pid = self.req_pid` (lines 168–169).
-3. Else if `app_name` is set: call `windows.primary_window(app_name=...)`. If a window is found, set `self.pid = w.owner_pid` and `self.window_title = w.title or w.owner_name`; otherwise append note `f"no on-screen window found for app {app_name!r}"` (lines 170–176).
+3. Else if `app_name` is set: call `platform.current().window_finder.primary(app_name=...)` (the platform abstraction; macOS Quartz or Windows `EnumWindows`). If a `WindowRef` is found, set `self.pid = w.pid` and `self.window_title = w.title or w.app_name`; otherwise append note `f"no on-screen window found for app {app_name!r}"`.
 4. If none of the above (no command, no pid, no app_name): nothing is resolved; `self.pid` stays `None`.
 
 ### `_start_screenshots()` (lines 178–190)
@@ -114,7 +114,8 @@ Teardown order is screenshots, then audio, then process. Each component is wrapp
 - **Locking discipline.** `self._lock` guards state transitions and metadata writes. Heavy teardown in `stop()` runs outside the lock so `summary()`/status queries are never blocked by component shutdown. Note: `start()` holds the lock for its entire duration (including component startup), so a status query concurrent with a slow `start()` will block until start completes — this is a known tradeoff (see Known limitations).
 - **Components are isolated.** `CaptureSession` is the only object that holds all three components; it never lets them reference each other (`docs/architecture.md`, Dependency rules).
 - **Audio format/timestamp conventions** are delegated: `t0` (from `util.now()`) is passed to `AudioCapture` for offset computation; `util.iso`/`util.fs_stamp` are used for content vs. filename timestamps (`docs/architecture.md`, Naming/conventions).
-- **macOS-only** today, inherited from the components it drives (`docs/architecture.md`, Platform).
+- **Cross-platform** (macOS + Windows): the session orchestration is OS-neutral; the OS-specific
+  capture it drives lives behind `capture_mcp.platform` (see [platform-abstraction.md](platform-abstraction.md)).
 
 ## Failure modes & handling
 

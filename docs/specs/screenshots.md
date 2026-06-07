@@ -4,20 +4,31 @@ _Status: current as of 2026-06-07. Source of truth = the code; update this spec 
 
 ## Purpose
 
-Periodically grab timestamped screenshots of a target window (or the whole screen)
-using the macOS `screencapture` CLI, on a fixed time grid, into an output directory.
-Output format and resolution are configurable. The component runs on its own daemon
-thread and is one of the capture components owned by `CaptureSession`
-(see `docs/architecture.md` module map). It targets a specific app window when a
-`pid`/`app_name` is given, re-resolving the window id every tick so it keeps working
-across window recreation, Space switches, and fullscreen transitions.
+Periodically grab timestamped screenshots of a target window (or the whole screen),
+on a fixed time grid, into an output directory. Output format and resolution are
+configurable. The component runs on its own daemon thread and is one of the capture
+components owned by `CaptureSession` (see `docs/architecture.md` module map). It targets
+a specific app window when a `pid`/`app_name` is given, re-resolving the window id every
+tick so it keeps working across window recreation, Space switches, and fullscreen
+transitions.
+
+**This scope owns the platform-neutral parts only**: the capture *schedule*, window-target
+resolution with the `_last_wid` fallback, output filenames, and success/error accounting.
+The OS-specific pixel capture (encode, resize, window-vs-screen) is delegated to
+`platform.current().screen_grabber.capture(...)` and window discovery to
+`platform.current().window_finder` — macOS uses `screencapture`/`sips`, Windows uses GDI+
+(see [platform-abstraction.md](platform-abstraction.md)). The detailed `screencapture`/`sips`
+behavior described below now lives in `platform/macos.py:MacScreenGrabber`.
 
 ## Files
 
-- `src/capture_mcp/screenshots.py` — the entire scope: `parse_resolution`, format
-  helpers, PNG size/fit helpers, and the `Screenshotter` class.
-- Dependencies it uses (not owned by this scope): `src/capture_mcp/windows.py`
-  (`primary_window`), `src/capture_mcp/util.py` (`now`, `fs_stamp`).
+- `src/capture_mcp/screenshots.py` — `parse_resolution`, `VALID_FORMATS`, `_extension`, and the
+  `Screenshotter` class (scheduling + delegation). The `_png_size`/`_fit`(→`base.fit_box`)/
+  `_sc_format`/`_sips_format`/`_run_cmd` helpers and the `screencapture`/`sips` command-building
+  MOVED to `src/capture_mcp/platform/macos.py`; the Windows equivalent is
+  `src/capture_mcp/platform/windows.py`.
+- Dependencies it uses (not owned by this scope): `src/capture_mcp/platform/` (the
+  `WindowFinder`/`ScreenGrabber` backends), `src/capture_mcp/util.py` (`now`, `fs_stamp`).
 
 ## Public contract
 
@@ -78,46 +89,41 @@ for the MCP transport.
 
 ## Behavior
 
-Per tick (`_capture_once`, `screenshots.py:189-230`):
+Per tick (`_capture_once`):
 1. Record the timestamp `ts = now()` (used for the filename, so the filename reflects
    tick start, not completion).
-2. Resolve the target window id via `_resolve_window_id` (`:143-152`):
+2. Resolve the target window id via `_resolve_window_id`:
    - If both `pid` and `app_name` are `None`, return `None` (no specific target).
-   - Otherwise call `windows.primary_window(pid, app_name)`. If a window is found,
-     cache its `window_id` in `self._last_wid` and return it.
+   - Otherwise call `self._finder.primary(pid, app_name)` (the platform `WindowFinder`). If a
+     window is found, cache its `window_id` in `self._last_wid` and return it.
    - If no window is found right now, return the cached `self._last_wid` (which may be
      `None` on the first tick). This keeps targeting a window that has temporarily
-     left the on-screen list (e.g. went fullscreen onto its own Space); `screencapture
-     -l` still grabs it cross-Space.
-3. Compute target flags via `_target_args(wid)` (`:154-161`):
-   - `wid is not None` -> `["-l", str(wid)]` (window capture).
-   - `wid is None` and a `pid`/`app_name` was requested:
-     - if `whole_screen_fallback` is `False` -> return `None` => the tick is skipped
-       (no capture this tick).
-     - else fall through to whole-screen.
-   - Otherwise -> `[]` (whole-screen capture).
+     left the on-screen list (e.g. went fullscreen onto its own Space); the grabber
+     still targets it by id cross-Space.
+3. Skip-tick policy: if `wid is None` AND a `pid`/`app_name` was requested AND
+   `whole_screen_fallback` is `False`, return without capturing (a deliberate skip, not an
+   error). Otherwise proceed with `wid` (which may be `None` ⇒ whole screen).
 4. Build the final path `out_dir/<fs_stamp(ts)>.<ext>` where `ext = _extension(fmt)`
    (jpg/jpeg both -> `jpg`).
-5. Decide if post-processing is needed (`needs_post`): true if `resolution is not None`,
-   or if `fmt` is jpg/jpeg AND `jpeg_quality is not None`.
-6. Fast path (`not needs_post`): run
-   `screencapture -x -o -t <sc_fmt> <target...> <final>` and, if it produces the file,
-   increment `count`. `-x` mutes the shutter sound; `-o` omits the window shadow;
-   `_sc_format` maps jpg/jpeg -> `jpg`.
-7. Post-process path (`needs_post`):
-   a. Capture to a temp PNG `out_dir/<fs_stamp(ts)>.tmp.png` via
-      `screencapture -x -o -t png <target...> <tmp>`. (The temp name deliberately does
-      not start with a dot; `screencapture` refuses hidden destination paths.)
-   b. If the temp capture fails, unlink the temp file and return.
-   c. Build a `sips` command:
-      - If `resolution` is set, read the PNG pixel size from the IHDR header
-        (`_png_size`); if readable, compute the fitted target via `_fit` and append
-        `-z <height> <width>` (sips takes height then width).
-      - Append `-s format <sips_fmt>` (`_sips_format` maps jpg/jpeg -> `jpeg`).
-      - If jpg/jpeg and `jpeg_quality` is set, append `-s formatOptions <quality>`.
-      - Append `<tmp> --out <final>`.
-   d. Run sips; always unlink the temp PNG afterward; increment `count` only if the
-      final file was produced.
+5. Delegate the pixel capture to the platform grabber:
+   `ok = self._grabber.capture(wid, final, fmt=self.fmt, resolution=self.resolution,
+   jpeg_quality=self.jpeg_quality, timeout=max(5.0, interval+5.0))`. `wid is None` captures the
+   whole screen; otherwise that window. If `ok`, `count += 1`, else `errors += 1` — exactly one
+   of count/errors per non-skipped tick.
+
+The grabber implements the encode/resize/format details per OS (these used to live here):
+- **macOS** (`platform/macos.py:MacScreenGrabber`): a fast path
+  `screencapture -x -o -t <sc_fmt> <target...> <final>` when no post-processing is needed
+  (`needs_post = resolution is not None or (jpg/jpeg and jpeg_quality is not None)`), otherwise a
+  capture to a temp `<stamp>.tmp.png` (name deliberately not dot-prefixed; `screencapture` refuses
+  hidden paths) followed by `sips` for resize (`-z <height> <width>` from `fit_box`, reading the
+  PNG IHDR via `_png_size`) and/or format/quality conversion (`-s format <sips_fmt>`,
+  `-s formatOptions <quality>`). `screencapture` exits 0 even on failure, so success is verified by
+  the output file existing; a `max(5, interval+5)s` timeout bounds each tool. Returns a bool.
+- **Windows** (`platform/windows.py:Win32ScreenGrabber`): GDI `BitBlt` (whole screen) or
+  `PrintWindow`/`BitBlt` (a window) into a bitmap, then GDI+ scales (`fit_box`, HighQualityBicubic)
+  and encodes to the requested format (JPEG quality via an EncoderParameter). Returns a bool. No
+  temp file.
 
 Scheduling loop (`_run`, `screenshots.py:234-251`):
 1. `next_t = now()`.
@@ -155,34 +161,34 @@ Scheduling loop (`_run`, `screenshots.py:234-251`):
   shooter survives window recreation; `_last_wid` is the cross-Space/fullscreen
   fallback.
 - **Interval floor.** `interval` is never below `0.05s`.
-- **macOS-only.** Relies on `screencapture`, `sips`, and Quartz (via `windows.py`)
-  (architecture "Platform").
+- **Cross-platform via delegation.** This scope is OS-neutral; the pixel capture is the platform
+  grabber's job (macOS `screencapture`/`sips`; Windows GDI+). The rc=0-is-not-success check, the
+  never-upscale (`fit_box`) and temp-file invariants above describe the **macOS backend**
+  (`platform/macos.py`); the Windows backend (`platform/windows.py`) satisfies the same
+  `capture(...) -> bool` contract via GDI+. See [platform-abstraction.md](platform-abstraction.md).
 - **Filenames use `fs_stamp`.** Per architecture naming convention, filenames use
   `util.fs_stamp()` (`:` replaced by `-`).
 
 ## Failure modes & handling
 
-All handled in `_run_cmd` (`screenshots.py:163-187`) and `_capture_once`:
-- **Tool timeout.** Each `screencapture`/`sips` invocation runs with
-  `timeout = max(5.0, interval + 5.0)`. On `TimeoutExpired`: `errors += 1`, log a
-  warning, return `False` (skip this tick). This keeps a hung tool from wedging the
-  loop and blocking shutdown.
-- **Non-zero exit or missing output.** If `returncode != 0` OR the expected file does
-  not exist: `errors += 1`, log a warning including rc, the `wrote=<bool>` flag, and
-  stderr (or stdout if stderr empty). Returns `False`.
-- **screencapture rc=0 but no file (the quirk).** Treated as failure because the file
-  existence check (`not expected.exists()`) fails, even with rc 0.
-- **Temp capture fails (post-process path).** Temp file unlinked, tick aborted, `count`
-  not incremented (errors already counted in `_run_cmd`).
-- **PNG header unreadable.** `_png_size` returns `None` on a non-PNG signature, short
-  read, or `OSError`; the resize `-z` flags are then omitted and sips still runs for
-  format/quality conversion at the captured (native) resolution. (No explicit error is
-  raised for this case.)
-- **Target requested but not on screen and fallback disabled.** `_target_args` returns
-  `None`; `_capture_once` returns early — this is a deliberate skip, not counted as an
-  error.
-- **Any unexpected exception in a tick.** Caught in `_run`, `errors += 1`,
-  `log.exception("screenshot tick failed")`, loop continues.
+This scope's accounting (in `_capture_once`/`_run`):
+- **Per tick, exactly one of `count`/`errors`.** The grabber returns a `bool`;
+  `_capture_once` does `count += 1` on `True`, else `errors += 1`.
+- **Target requested but not resolvable and fallback disabled.** `_capture_once` returns
+  early (a deliberate skip), counting neither `count` nor `errors`.
+- **Any unexpected exception in a tick.** Caught in `_run`: `errors += 1`,
+  `log.exception("screenshot tick failed")`, the loop continues (never dies).
+
+The grabber-internal failure handling (which returns the `False` this scope counts as one
+error) differs per backend and is owned by `platform/`:
+- **macOS** (`platform/macos.py:MacScreenGrabber`): each `screencapture`/`sips` runs with
+  `timeout = max(5.0, interval+5.0)` (on `TimeoutExpired` → `False`); a non-zero exit OR a
+  missing output file → `False` (the rc=0-but-no-file quirk is caught by the file-existence
+  check); a failed temp capture unlinks the temp and returns `False`; an unreadable PNG
+  header (`_png_size`) omits the resize `-z` flags but still runs sips for format/quality.
+- **Windows** (`platform/windows.py:Win32ScreenGrabber`): an unsupported `fmt`, no device
+  context, a GDI+ status ≠ Ok, a failed scale step, or any exception → `False` (logged);
+  all GDI/GDI+ resources are freed in a `finally` so there is no leak on failure.
 
 ## Outputs / artifacts
 
@@ -191,22 +197,24 @@ All handled in `_run_cmd` (`screenshots.py:163-187`) and `_capture_once`:
 - Filename: `<fs_stamp(ts)>.<ext>`, e.g. `2026-06-07T09-47-01.250Z.png`. `ext` is the
   format with jpg/jpeg collapsed to `jpg` (`_extension`).
 - Formats: png (default), jpg/jpeg (written as `.jpg`), tiff, gif, bmp.
-- Transient artifact during the post-process path: `<fs_stamp(ts)>.tmp.png`, always
-  removed before the next tick (on success and failure).
+- Transient artifact (macOS resize/convert path only): `<fs_stamp(ts)>.tmp.png`, always
+  removed before the next tick. The Windows GDI+ backend writes the final image directly
+  with no temp file.
 
 ## Configuration
 
 Constructor parameters (no environment variables are read by this scope):
 - `out_dir: Path` — output directory (created on `start`).
 - `pid: int | None = None`, `app_name: str | None = None` — window target selector
-  (app_name is a case-insensitive substring match, handled in `windows.py`). If both
-  are `None`, capture is whole-screen.
+  (app_name is a case-insensitive substring match, handled by the platform `WindowFinder`).
+  If both are `None`, capture is whole-screen.
 - `interval: float = 1.0` — seconds between shots; floored at `0.05`.
 - `fmt: str = "png"` — one of `VALID_FORMATS`; lowercased.
 - `resolution: tuple[int, int] | None = None` — bounding box `(w, h)`.
-- `jpeg_quality: int | None = None` — passed verbatim to `sips -s formatOptions`; only
-  applied when `fmt` is jpg/jpeg. The code does not range-check it (the docstring in
-  `server.py` documents 0-100).
+- `jpeg_quality: int | None = None` — forwarded to the backend (macOS `sips -s
+  formatOptions`; Windows GDI+ JPEG quality EncoderParameter, clamped 0–100); only applied
+  when `fmt` is jpg/jpeg. This scope does not range-check it (the `server.py` docstring
+  documents 0-100).
 - `whole_screen_fallback: bool = True` — whether to capture the whole screen when a
   target was requested but no window id is available.
 
@@ -218,19 +226,19 @@ and `capture_screenshots`. A `/fmt` suffix in `screenshot_resolution` overrides
 
 ## Known limitations / open items
 
-- macOS-only; cross-platform would require a new backend behind the same interface
-  (architecture "Platform").
-- `jpeg_quality` is not validated in this scope; an out-of-range value is forwarded to
-  `sips` as-is.
-- `_png_size` only understands PNG IHDR; the post-process path always captures to PNG
+- This scope is now cross-platform (delegates to `platform/`); the items below about
+  `screencapture`/`sips`/`_png_size`/Screen Recording are **macOS-backend** specifics.
+- `jpeg_quality` is not validated in this scope; out-of-range values are forwarded to the
+  backend (macOS `sips` as-is; Windows GDI+ clamps to 0–100).
+- macOS `_png_size` only understands PNG IHDR; the post-process path always captures to PNG
   first, so this is fine in practice, but a non-PNG temp would silently skip resizing.
-- Requires Screen Recording permission for the host process; permission denial would
-  surface as `screencapture` producing no file (counted as an error) rather than a
-  distinct message — not specifically detected here.
+- macOS requires Screen Recording permission for the host process; denial surfaces as
+  `screencapture` producing no file (counted as an error), not a distinct message. On
+  Windows, capturing real app-window content requires the interactive desktop (`WinSta0`);
+  see [platform-abstraction.md](platform-abstraction.md).
 - `_last_wid` is never invalidated; if the cached window id becomes stale and the app is
-  gone, ticks would keep targeting a dead id (`screencapture -l` would fail and be
-  counted as errors) until a new window is resolved. Whether this is a concern in
-  practice is uncertain.
+  gone, ticks would keep targeting a dead id (the grabber would fail and be counted as
+  errors) until a new window is resolved. Whether this is a concern in practice is uncertain.
 - Whole-screen fallback captures the entire main display; multi-display selection is not
   configurable here.
 
@@ -240,11 +248,11 @@ and `capture_screenshots`. A `/fmt` suffix in `screenshot_resolution` overrides
 - `test_parse_resolution` (`smoke.py:119-128`): asserts `parse_resolution("1280x720/jpg")
   == (1280, 720, "jpg")`, `"640x480" -> (640, 480, None)`, `None -> None`, and that
   `"bad"`, `"10x"`, `"1x2x3"`, `"axb"`, `"0x0"` all raise `ValueError`.
-- `test_launch_mode` (`smoke.py`, around `:48-59`): runs a launch-mode session with
-  `screenshot_interval=0.4` and `screenshot_resolution="640x480/jpg"`, then checks the
-  final status reports `screenshots >= 2` and that the number of `*.jpg` files in the
-  `screenshots/` dir equals the reported screenshot count (verifying the jpg format and
-  the resize/convert post-process path end to end).
+- `test_launch_mode`: runs a launch-mode session with `screenshot_interval=0.4` and
+  `screenshot_resolution="640x480/jpg"`, then checks the final status reports
+  `screenshots >= 2` and that the number of `*.jpg` files in the `screenshots/` dir equals
+  the reported screenshot count (verifying the jpg format and the resize+encode path end to
+  end — on the running OS's grabber; this passes 20/20 on Windows via GDI+).
 
 Gaps / suggested additions: the whole-screen fallback path, `whole_screen_fallback=False`
 skip behavior, the `_last_wid` cross-Space caching, the grid-catch-up logic in `_run`,

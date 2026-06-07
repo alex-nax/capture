@@ -1,5 +1,85 @@
 # Progress Log
 
+## Session 8 — 2026-06-07
+**Agent**: builder (Windows/NVIDIA box, ultracode)
+**Summary**: Built the **live browser-capture → local-ASR pipeline** end to end and ran it on an
+8-video YouTube playlist (UE5 C++ Thread-Safe Motion Matching). Net-new this session:
+- **faster-whisper large-v3 on CUDA** (native Windows): `whisper_local.FasterWhisper` now auto-detects
+  device/compute (`CAPTURE_WHISPER_DEVICE`/`_COMPUTE`), adds the cuBLAS/cuDNN pip DLL dirs to the
+  search path so CTranslate2 loads on Windows, and falls back to CPU on a CUDA error.
+- **Windows audio (#21 audio half)**: `helper/audiocap_win.py` — WASAPI **system loopback** →
+  16 kHz mono s16le on stdout, with **auto-reconnect** on stream error / default-device change (the
+  device-change mid-run is what truncated the first attempt at 18 min). Wired into `Win32AudioSource`
+  (`mode="loopback"`); helper launched with `CREATE_NO_WINDOW`.
+- **DPI-aware screenshots**: `Win32ScreenGrabber` sets per-monitor DPI awareness so whole-screen
+  capture isn't cropped on a scaled display; window-targeted `PrintWindow` (+ Chrome `--disable-gpu`)
+  gives **occlusion-proof** capture (work with the video in the background).
+- **Capture tooling** (`scripts/`): `capture_youtube_playlist.py` (Selenium **attaches** to a
+  remote-debug Chrome — avoids YouTube's automation throttle that cut a fresh automated Chrome off at
+  ~42 s; mutes/skips ads; one continuous CaptureSession), `transcribe_audio.py` (authoritative offline
+  re-transcribe), `playlist_deliverables.py` (per-video split). `run_interactive.ps1` gained `-NoWait`.
+- Docs: `docs/asr-benchmark.md` (faster-whisper-vs-Nemotron + the **Docker/WSL2 local-Nemotron** path
+  for #23) and `docs/youtube-capture.md`. Deps added to `pyproject.toml` extras.
+**Result**: full playlist captured — 51.3 min audio, 582 screenshots, **0 errors**; the 5 narrated
+videos transcribed (large-v3 CUDA); videos 6–8 are music/demo with no narration (**verified** against
+their source audio via yt-dlp). Deliverables in `capture-runs/playlist2/deliverables/` (gitignored).
+**Key lessons**: NeMo/Nemotron is Linux-only → local Nemotron needs WSL2/Docker (documented for #23);
+fresh automated Chrome is throttled by YouTube → attach to a real Chrome; capture must run in the
+interactive desktop (`WinSta0`); WASAPI loopback can lag wall-clock on long runs → offline re-transcribe
+for clean timestamps.
+**Known issues / next**: Windows audio is **system loopback, not per-process** (mute other audio for a
+clean transcript; true per-process WASAPI loopback is the remaining #21 refinement). Then **#23**:
+stand up local Nemotron (Docker/WSL2) and benchmark vs faster-whisper.
+**Next suggested task**: per-process Windows audio (#21), then the Whisper-vs-Nemotron benchmark (#23).
+
+---
+
+## Session 7 — 2026-06-07
+**Agent**: builder (Windows/NVIDIA box, ultracode)
+**Summary**: First run on the **Windows PC** (RTX 4070 Ti SUPER, 16 GB, driver 591.86). The box
+had **no Python** — installed 3.12.10 user-scope via winget. Built **feature #20 (platform
+abstraction)** and **#22 (Windows bootstrap)**, plus the screenshot/window-discovery half of **#21**.
+- **`src/capture_mcp/platform/`**: `base.py` (interfaces `WindowFinder`/`ScreenGrabber`/`AudioSource`
+  + `WindowRef` + `fit_box` + `Platform`), `__init__.py` (`current()` factory by `sys.platform`,
+  `CAPTURE_PLATFORM` override, cached), `macos.py` (wraps today's `screencapture`/`sips`/Quartz/
+  helper/ffmpeg **unchanged** — delegates to the existing `windows.py` Quartz module), `windows.py`
+  (zero-dep **GDI+** screenshots: `BitBlt`/`PrintWindow` → scale + encode png/jpg/jpeg/tiff/gif/bmp
+  with JPEG quality; **`EnumWindows`** discovery; ffmpeg-dshow mic stub).
+- Routed `screenshots.py`/`audio.py`/`session.py` through `platform.current()`; `screenshots.py`
+  keeps scheduling/`_last_wid`/count-errors and delegates pixel capture. `proc.py`+`util.py`:
+  `split_command` (Windows `CommandLineToArgvW`, POSIX `shlex`) fixes backslash-path launch.
+- `pyproject.toml`: gated pyobjc/mlx by `sys_platform == "darwin"` so the base package installs on
+  Windows. `tests/smoke.py` made cross-platform (`tempfile` + `sys.executable` commands, no `/tmp`/
+  `bash`/`cat`). New `init.ps1` (venv + editable install + smoke).
+- **All specs updated** in the same change (mandatory): platform-abstraction.md flipped PLANNED→current,
+  plus screenshots/windows/audio/session/process-logs + architecture.md + README.
+**Verification**: `init.ps1` → **smoke 20/20 on Windows** through the abstraction (GDI+ whole-screen
+capture at `640x480/jpg`, audio chunking, launch logs). Live: factory returns `windows`;
+`CAPTURE_PLATFORM=macos` override returns the macOS backend; per-window GDI+ path captured the desktop
+HWND to a correct **1024×768 PNG**; window/screen scale+JPEG paths produce valid files. Ran an
+adversarial multi-agent review (4 lenses → refute-by-default verify): **7 confirmed / 9 refuted**
+(the 9 were spec-drift false positives — verifiers confirmed the specs were already updated). Fixed
+the 4 real new-code defects: deselect HBITMAP before `GdipCreateBitmapFromHBITMAP`; lock the encoder
+cache; `split_command("")`→`[]`; no silent full-res fallback when scaling fails. Re-verified after.
+**Real-window verification (interactive desktop):** the agent shell runs in a non-interactive
+*service* window station (`Service-0x0-…`, blank 1024×768 desktop, 0 visible windows), so real
+windows aren't reachable from it directly. Added **`scripts/run_interactive.ps1`** (runs a command in
+the logged-on user's `WinSta0` session via a transient Interactive-logon scheduled task) and used it
+to verify the real path end-to-end: on the actual 1536×864 desktop, `EnumWindows` found Chrome/
+Terminal/Notepad, `primary(app_name="notepad")` resolved the Notepad window, and the GDI+ grabber
+captured **real Notepad content at 1152×594** plus the full 1536×864 desktop (244 KB). So Windows
+screenshots + window discovery (the #21 screenshot half) are verified against real windows.
+**Known issues / env**:
+- Per-app audio on Windows (WASAPI process loopback) is **not implemented** (#21 audio half) — Windows
+  `AudioSource` returns no per-app source; mic needs ffmpeg + `CAPTURE_DSHOW_AUDIO`.
+- Pre-existing latent bug (NOT this change; byte-identical in HEAD): `session._start_audio` ASR-unavailable
+  note never fires (`status.startswith("asr-unavailable")` vs the `"running (asr-unavailable: …)"` prefix).
+- `windows.primary_window` is now unused (macOS finder uses `find_windows`); kept as documented helper.
+**Next suggested task**: Feature **#21** per-app **WASAPI process loopback** for Windows audio (emit the
+same 16 kHz mono s16le contract), then **#23** Whisper(CUDA)-vs-Nemotron benchmark on captured audio.
+
+---
+
 ## Session 6 — 2026-06-07 (branch: feat/distributable-skill)
 **Agent**: builder
 **Summary**: Authored a **redistributable** skill `skills/capture/` (separate from the
@@ -17,8 +97,8 @@ the session's `audio_status`/errors; **secrets/env values redacted** — only MC
 previews by default, and posts a tracked issue to `github.com/alex-nax/capture` only with
 `--create` + user consent (gh, or a prefilled URL fallback). Plus `.github/ISSUE_TEMPLATE/bug_report.md`.
 Verified preview output does NOT leak a planted `CAPTURE_RIVA_API_KEY`.
-**Status**: PR #1 (`feat/distributable-skill` → main), OPEN.
-**Next suggested task**: merge PR #1; then the Windows platform work (#20→#21→#23).
+**Status**: PR #1 (`feat/distributable-skill` → main) **MERGED** (c44d8f6).
+**Next suggested task**: the Windows platform work (#20→#21→#23).
 
 ---
 

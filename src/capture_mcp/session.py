@@ -21,7 +21,7 @@ import secrets
 import threading
 from pathlib import Path
 
-from . import windows
+from . import platform as _platform
 from .audio import AudioCapture
 from .proc import ProcessCapture
 from .screenshots import Screenshotter, parse_resolution
@@ -168,10 +168,10 @@ class CaptureSession:
         if self.req_pid is not None:
             self.pid = self.req_pid
         elif self.app_name:
-            w = windows.primary_window(app_name=self.app_name)
+            w = _platform.current().window_finder.primary(app_name=self.app_name)
             if w:
-                self.pid = w.owner_pid
-                self.window_title = w.title or w.owner_name
+                self.pid = w.pid
+                self.window_title = w.title or w.app_name
             else:
                 self.notes.append(f"no on-screen window found for app {self.app_name!r}")
 

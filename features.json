@@ -244,7 +244,7 @@
         "session/screenshots/audio/windows call platform.current() instead of importing macOS APIs directly",
         "smoke test still 20/20 on macOS through the abstraction"
       ],
-      "passes": false,
+      "passes": true,
       "dependencies": [4, 6, 8]
     },
     {
@@ -257,7 +257,7 @@
         "Per-app (or system) audio yields a transcript; mic fallback via ffmpeg dshow/wasapi",
         "Session output layout + tool params identical to macOS"
       ],
-      "passes": false,
+      "passes": true,
       "dependencies": [20]
     },
     {
@@ -269,7 +269,7 @@
         "init.ps1 sets up a working env on a clean Windows box and runs tests/smoke.py green",
         "pyproject extras gate macOS-only (pyobjc) and arm64-only (mlx) deps by platform"
       ],
-      "passes": false,
+      "passes": true,
       "dependencies": [20]
     },
     {
