@@ -1,9 +1,9 @@
 ---
-name: capture-mcp-setup
-description: Install, wire up, and operate capture-mcp — capture any process's window as timestamped screenshots, its stdout/stderr, and its per-app audio transcribed to text — from ANY project. USE THIS SKILL whenever the user wants to record/capture/screen-record an app, window, or browser; transcribe an app's or browser's audio; "capture the browser video"; launch-and-capture a process or app; set up capture-mcp; add capture to a project's .mcp.json; or change the capture ASR model or config — even if they don't say "capture-mcp" by name. It installs capture-mcp and its dependencies if missing, creates or merges .mcp.json, then runs quick capture actions.
+name: capture
+description: Capture any process's window as timestamped screenshots, its stdout/stderr, and its per-app audio transcribed to text — from ANY project, via capture-mcp. USE THIS SKILL whenever the user wants to record/capture/screen-record an app, window, or browser; transcribe an app's or browser's audio; "capture the browser video"; launch-and-capture a process or app; set up capture-mcp; add capture to a project's .mcp.json; or change the capture ASR model or config — even if they don't say "capture-mcp" by name. It installs capture-mcp and its dependencies if missing, creates or merges .mcp.json, then runs quick capture actions.
 ---
 
-# capture-mcp-setup
+# capture
 
 One-load setup + operation skill for **capture-mcp**: an MCP server that captures a target
 process's **window** (timestamped screenshots, configurable format/resolution), **stdout/stderr**,

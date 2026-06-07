@@ -1,6 +1,6 @@
 # Distributable skills
 
-## `capture-mcp-setup` — load-and-go capture setup + operation
+## `capture` — load-and-go capture setup + operation
 
 A single skill that lets anyone install, wire up, and operate **capture-mcp** from any project.
 It installs capture-mcp + dependencies if missing, creates/merges the project's `.mcp.json`, and
@@ -13,10 +13,10 @@ Copy the skill folder into your skills directory:
 
 ```bash
 # user-wide (all projects):
-cp -R skills/capture-mcp-setup ~/.claude/skills/
+cp -R skills/capture ~/.claude/skills/
 
 # or per-project:
-mkdir -p .claude/skills && cp -R skills/capture-mcp-setup .claude/skills/
+mkdir -p .claude/skills && cp -R skills/capture .claude/skills/
 ```
 
 Then just ask Claude to set up capture or to "capture the browser video" / "record this app" —
@@ -28,11 +28,11 @@ Using the `skill-creator` skill's packager (run with its root on `PYTHONPATH`):
 
 ```bash
 SC=~/.claude/skills/skill-creator
-PYTHONPATH="$SC" python "$SC/scripts/package_skill.py" "$PWD/skills/capture-mcp-setup" ./dist
+PYTHONPATH="$SC" python "$SC/scripts/package_skill.py" "$PWD/skills/capture" ./dist
 ```
 
-produces `dist/capture-mcp-setup.skill` (a zip bundle) to share; the recipient unzips it into
-their skills directory.
+produces `dist/capture.skill` (a zip bundle) to share; the recipient unzips it into their
+skills directory.
 
 ### What it sets up
 

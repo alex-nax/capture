@@ -2,7 +2,7 @@
 
 ## Session 6 — 2026-06-07 (branch: feat/distributable-skill)
 **Agent**: builder
-**Summary**: Authored a **redistributable** skill `skills/capture-mcp-setup/` (separate from the
+**Summary**: Authored a **redistributable** skill `skills/capture/` (separate from the
 dev-only `.claude/skills/`) so anyone can load one skill and: (1) install capture-mcp + deps if
 missing (`scripts/install.sh` — clone → venv → ASR backend → build helper, prints bin/py paths);
 (2) create/merge a project `.mcp.json` (`scripts/configure_mcp.py`, preserves other servers);
