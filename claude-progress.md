@@ -1,5 +1,51 @@
 # Progress Log
 
+## Session 6 — 2026-06-07
+**Agent**: builder (Windows/NVIDIA box, ultracode)
+**Summary**: First run on the **Windows PC** (RTX 4070 Ti SUPER, 16 GB, driver 591.86). The box
+had **no Python** — installed 3.12.10 user-scope via winget. Built **feature #20 (platform
+abstraction)** and **#22 (Windows bootstrap)**, plus the screenshot/window-discovery half of **#21**.
+- **`src/capture_mcp/platform/`**: `base.py` (interfaces `WindowFinder`/`ScreenGrabber`/`AudioSource`
+  + `WindowRef` + `fit_box` + `Platform`), `__init__.py` (`current()` factory by `sys.platform`,
+  `CAPTURE_PLATFORM` override, cached), `macos.py` (wraps today's `screencapture`/`sips`/Quartz/
+  helper/ffmpeg **unchanged** — delegates to the existing `windows.py` Quartz module), `windows.py`
+  (zero-dep **GDI+** screenshots: `BitBlt`/`PrintWindow` → scale + encode png/jpg/jpeg/tiff/gif/bmp
+  with JPEG quality; **`EnumWindows`** discovery; ffmpeg-dshow mic stub).
+- Routed `screenshots.py`/`audio.py`/`session.py` through `platform.current()`; `screenshots.py`
+  keeps scheduling/`_last_wid`/count-errors and delegates pixel capture. `proc.py`+`util.py`:
+  `split_command` (Windows `CommandLineToArgvW`, POSIX `shlex`) fixes backslash-path launch.
+- `pyproject.toml`: gated pyobjc/mlx by `sys_platform == "darwin"` so the base package installs on
+  Windows. `tests/smoke.py` made cross-platform (`tempfile` + `sys.executable` commands, no `/tmp`/
+  `bash`/`cat`). New `init.ps1` (venv + editable install + smoke).
+- **All specs updated** in the same change (mandatory): platform-abstraction.md flipped PLANNED→current,
+  plus screenshots/windows/audio/session/process-logs + architecture.md + README.
+**Verification**: `init.ps1` → **smoke 20/20 on Windows** through the abstraction (GDI+ whole-screen
+capture at `640x480/jpg`, audio chunking, launch logs). Live: factory returns `windows`;
+`CAPTURE_PLATFORM=macos` override returns the macOS backend; per-window GDI+ path captured the desktop
+HWND to a correct **1024×768 PNG**; window/screen scale+JPEG paths produce valid files. Ran an
+adversarial multi-agent review (4 lenses → refute-by-default verify): **7 confirmed / 9 refuted**
+(the 9 were spec-drift false positives — verifiers confirmed the specs were already updated). Fixed
+the 4 real new-code defects: deselect HBITMAP before `GdipCreateBitmapFromHBITMAP`; lock the encoder
+cache; `split_command("")`→`[]`; no silent full-res fallback when scaling fails. Re-verified after.
+**Real-window verification (interactive desktop):** the agent shell runs in a non-interactive
+*service* window station (`Service-0x0-…`, blank 1024×768 desktop, 0 visible windows), so real
+windows aren't reachable from it directly. Added **`scripts/run_interactive.ps1`** (runs a command in
+the logged-on user's `WinSta0` session via a transient Interactive-logon scheduled task) and used it
+to verify the real path end-to-end: on the actual 1536×864 desktop, `EnumWindows` found Chrome/
+Terminal/Notepad, `primary(app_name="notepad")` resolved the Notepad window, and the GDI+ grabber
+captured **real Notepad content at 1152×594** plus the full 1536×864 desktop (244 KB). So Windows
+screenshots + window discovery (the #21 screenshot half) are verified against real windows.
+**Known issues / env**:
+- Per-app audio on Windows (WASAPI process loopback) is **not implemented** (#21 audio half) — Windows
+  `AudioSource` returns no per-app source; mic needs ffmpeg + `CAPTURE_DSHOW_AUDIO`.
+- Pre-existing latent bug (NOT this change; byte-identical in HEAD): `session._start_audio` ASR-unavailable
+  note never fires (`status.startswith("asr-unavailable")` vs the `"running (asr-unavailable: …)"` prefix).
+- `windows.primary_window` is now unused (macOS finder uses `find_windows`); kept as documented helper.
+**Next suggested task**: Feature **#21** per-app **WASAPI process loopback** for Windows audio (emit the
+same 16 kHz mono s16le contract), then **#23** Whisper(CUDA)-vs-Nemotron benchmark on captured audio.
+
+---
+
 ## Session 5 — 2026-06-07
 **Agent**: builder
 **Summary**: Made the harness portable to other machines. Installed **skill-creator** at

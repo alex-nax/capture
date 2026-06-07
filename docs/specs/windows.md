@@ -1,5 +1,11 @@
-# Spec: Windows (window discovery)
+# Spec: Windows (macOS Quartz window discovery)
 _Status: current as of 2026-06-07. Source of truth = the code; update this spec in the same change as the code._
+
+> **Note (platform abstraction):** despite the filename, this module is the **macOS** window-discovery
+> implementation. It is now reached through the platform abstraction: `platform/macos.py:MacWindowFinder`
+> wraps `find_windows`/`primary_window` and maps each `WindowInfo` to a platform-neutral `WindowRef`
+> (`window_id`/`pid`/`app_name`/`title`/`width`/`height`). The **Windows-OS** equivalent lives in
+> `platform/windows.py:Win32WindowFinder` (`EnumWindows`). See [platform-abstraction.md](platform-abstraction.md).
 
 ## Purpose
 Map a target process (by pid) or application (by case-insensitive name substring) to its
@@ -9,11 +15,13 @@ on-screen `CGWindowID`(s) so that the screenshotter can grab just that window vi
 The module also resolves a pid from an app name when a session is in attach-by-app mode.
 
 ## Files
-- `src/capture_mcp/windows.py` — the entire scope (87 lines).
+- `src/capture_mcp/windows.py` — the entire scope (the macOS Quartz discovery).
 
-Consumers (not part of this scope, listed for context):
-- `src/capture_mcp/screenshots.py:146` — `Screenshotter._resolve_window_id` calls `primary_window`.
-- `src/capture_mcp/session.py:171` — `CaptureSession` calls `primary_window(app_name=...)` to derive a pid/title in attach-by-app mode.
+Consumers (not part of this scope, listed for context) — both now go through the platform finder,
+not this module directly:
+- `src/capture_mcp/platform/macos.py` — `MacWindowFinder.find` calls `find_windows` and maps to `WindowRef`.
+- `src/capture_mcp/screenshots.py` — `Screenshotter._resolve_window_id` calls `self._finder.primary(...)`.
+- `src/capture_mcp/session.py` — `CaptureSession` calls `platform.current().window_finder.primary(app_name=...)` to derive a pid/title in attach-by-app mode.
 
 ## Public contract
 This is an internal Python module (no CLI, no MCP tool surface). Its public symbols:

@@ -12,15 +12,19 @@
 server.py            MCP entrypoint. Async tools: capture_start/stop/status.
   └─ session.py      CaptureSession: orchestrates one capture; owns components; writes session.json
        ├─ proc.py            ProcessCapture: launch + tee stdout/stderr (launch mode only)
-       ├─ screenshots.py     Screenshotter: periodic screencapture (+ sips resize/convert)
-       ├─ windows.py         Quartz CGWindowList helpers (pid/app -> CGWindowID)
+       ├─ screenshots.py     Screenshotter: schedule + delegate pixel capture to platform
        └─ audio.py           AudioCapture: drive source -> chunk -> ASR -> transcript
             └─ asr/          ASR backends behind ASRBackend (base.py)
                  ├─ whisper_local.py   mlx-whisper / faster-whisper (local default)
                  ├─ nemotron.py        NVIDIA Riva / Nemotron-3.5 (remote)
                  └─ __init__.py        create(name) factory ("auto" -> local, fallback riva)
+platform/            OS abstraction: WindowFinder / ScreenGrabber / AudioSource + current() factory
+  ├─ base.py            interfaces, WindowRef, fit_box, Platform aggregate
+  ├─ macos.py           screencapture/sips, Quartz (via windows.py), audiocap/ffmpeg
+  └─ windows.py         GDI+ screenshots, EnumWindows discovery, ffmpeg dshow audio
+windows.py           macOS Quartz CGWindowList helpers (pid/app -> CGWindowID); used by platform/macos
 helper/audiocap.swift   Standalone ScreenCaptureKit binary: per-app audio -> s16le PCM on stdout
-util.py                 timestamps (iso/fs_stamp), shared helpers
+util.py                 timestamps (iso/fs_stamp), split_command, shared helpers
 ```
 
 ## Dependency rules
@@ -30,6 +34,10 @@ util.py                 timestamps (iso/fs_stamp), shared helpers
   know about each other or about the MCP layer.
 - All ASR access goes through the `ASRBackend` interface. Adding a backend = new module +
   one branch in `asr/__init__.py:create`. Nothing else imports a concrete backend directly.
+- All OS-specific capture goes through the `platform` abstraction (`WindowFinder`/`ScreenGrabber`/
+  `AudioSource`). `session`/`screenshots`/`audio` call `platform.current()`; they must not import
+  `screencapture`/Quartz/GDI/Win32 APIs directly. Adding an OS = new backend module + one branch
+  in `platform/__init__.py:current`.
 - The Swift helper is a **process boundary**, not a library: it communicates only via raw PCM
   on stdout and human-readable status on stderr. Keep that contract stable
   (`READY rate=<n> channels=1 fmt=s16le ...` then bytes).
@@ -56,6 +64,11 @@ util.py                 timestamps (iso/fs_stamp), shared helpers
 - Session output: `<output_dir>/capture-<fs_stamp>-<token>/` (see README for the layout).
 
 ## Platform
-- macOS-only today (screencapture, Quartz, ScreenCaptureKit, sips). Cross-platform would mean
-  new `screenshots`/`audio`/`windows` backends behind the same interfaces. arm64 venv required
-  for mlx-whisper.
+- **macOS and Windows**, behind a platform abstraction (`platform/`, see
+  [`specs/platform-abstraction.md`](specs/platform-abstraction.md)). `session`/`screenshots`/`audio`
+  call `platform.current()` instead of importing OS APIs directly; the macOS backend wraps
+  screencapture/Quartz/ScreenCaptureKit/sips, the Windows backend uses GDI+/`EnumWindows`/ctypes
+  (no extra deps). The factory selects by `sys.platform` (override `CAPTURE_PLATFORM`).
+- OS-only deps are gated in `pyproject.toml` by `sys_platform == "darwin"` (pyobjc/mlx) so the
+  base package installs on Windows. macOS arm64 venv is required for mlx-whisper.
+- Per-app audio on Windows (WASAPI process loopback) is not yet implemented (feature #21).

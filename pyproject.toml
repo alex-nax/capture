@@ -7,13 +7,16 @@ dependencies = [
     "mcp>=1.2.0",
     "anyio>=4.5",
     "numpy>=1.24",
-    "pyobjc-framework-Quartz>=10.0",
+    # macOS window discovery (Quartz). Gated by platform so the package installs
+    # on Windows, where the Win32 backend uses ctypes (no extra deps). The Windows
+    # screenshot backend uses GDI+ (gdiplus.dll), also dependency-free.
+    "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
 ]
 
 [project.optional-dependencies]
-# Apple-Silicon-native default ASR backend.
-mlx = ["mlx-whisper>=0.4.0"]
-# Cross-platform CPU/GPU ASR backend.
+# Apple-Silicon-native default ASR backend (macOS/arm64 only).
+mlx = ["mlx-whisper>=0.4.0; sys_platform == 'darwin'"]
+# Cross-platform CPU/GPU ASR backend (faster-whisper CUDA on the Windows/NVIDIA box).
 whisper = ["faster-whisper>=1.0.0"]
 # Remote NVIDIA Riva / Nemotron streaming backend.
 riva = ["nvidia-riva-client>=2.15.0"]

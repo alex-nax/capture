@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 import logging
-import shutil
 import subprocess
 import threading
 from pathlib import Path
@@ -28,6 +27,7 @@ from pathlib import Path
 import numpy as np
 
 from . import asr as asr_pkg
+from . import platform as _platform
 from .util import iso, now
 
 log = logging.getLogger(__name__)
@@ -35,12 +35,6 @@ log = logging.getLogger(__name__)
 SAMPLE_RATE = 16000
 BYTES_PER_SAMPLE = 2
 MIN_TAIL_BYTES = BYTES_PER_SAMPLE * SAMPLE_RATE // 10  # transcribe tails >= 0.1s
-
-
-def helper_path() -> Path | None:
-    """Path to the built ScreenCaptureKit helper, if present."""
-    p = Path(__file__).resolve().parent.parent.parent / "helper" / "audiocap"
-    return p if p.exists() else None
 
 
 class AudioCapture:
@@ -123,29 +117,18 @@ class AudioCapture:
         log.info("audio capture started (mode=%s, asr=%s)", self.mode, self._asr.name if self._asr else "none")
 
     def _build_command(self) -> tuple[list[str] | None, str]:
-        want_app = self.source in ("auto", "app")
-        hp = helper_path()
-        if want_app and hp and (self.pid is not None or self.bundle_id is not None):
-            cmd = [str(hp), "--rate", str(SAMPLE_RATE)]
-            if self.pid is not None:
-                cmd += ["--pid", str(self.pid)]
-            elif self.bundle_id is not None:
-                cmd += ["--bundle", str(self.bundle_id)]
-            return cmd, "app"
-
-        if self.source == "app":
-            return None, "none"  # explicitly wanted app audio but can't
-
-        # Microphone fallback via ffmpeg avfoundation.
-        if shutil.which("ffmpeg"):
-            cmd = [
-                "ffmpeg", "-hide_banner", "-loglevel", "warning",
-                "-f", "avfoundation", "-i", ":default",
-                "-ac", "1", "-ar", str(SAMPLE_RATE),
-                "-f", "s16le", "-",
-            ]
-            return cmd, "mic"
-        return None, "none"
+        # The per-OS audio source (helper / ffmpeg) lives behind the platform
+        # abstraction; this scope only consumes the 16 kHz mono s16le stdout it
+        # promises. A `None` result means no source could satisfy the request.
+        result = _platform.current().audio_source.command(
+            pid=self.pid,
+            bundle_id=self.bundle_id,
+            source=self.source,
+            rate=SAMPLE_RATE,
+        )
+        if result is None:
+            return None, "none"
+        return result
 
     def stop(self) -> None:
         self._stop.set()

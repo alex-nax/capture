@@ -12,7 +12,7 @@ Launch a target process and tee its `stdout`/`stderr` to timestamped log files s
 Class `ProcessCapture` (proc.py:27).
 
 Constructor — `__init__(self, command, out_dir, *, cwd=None)` (proc.py:28):
-- `command: str | list[str]` — required. If a `str`, it is split with `shlex.split` at start time; if a `list[str]`, it is copied verbatim (no shell parsing).
+- `command: str | list[str]` — required. If a `str`, it is tokenized with `util.split_command` at start time (POSIX `shlex.split`; Windows `CommandLineToArgvW`, the OS tokenizer, so backslash paths are not mangled); if a `list[str]`, it is copied verbatim (no shell parsing).
 - `out_dir: Path` — required. Directory the four artifacts are written into; created (with parents) at `start()`.
 - `cwd: str | None = None` — keyword-only. Working directory passed to `subprocess.Popen`. `None` means inherit the server's cwd.
 
@@ -34,7 +34,7 @@ Return / type notes:
 This scope writes no MCP/stdout protocol output of its own; all diagnostics go through the module logger `log = logging.getLogger(__name__)` (proc.py:24), consistent with the "stdout is sacred" constraint in docs/architecture.md.
 
 ## Behavior
-1. **start() — prepare directory and args** (proc.py:45-46): `out_dir.mkdir(parents=True, exist_ok=True)`. `command` is normalized to a list: `shlex.split(command)` if a string, else `list(command)`.
+1. **start() — prepare directory and args**: `out_dir.mkdir(parents=True, exist_ok=True)`. `command` is normalized to a list: `util.split_command(command)` if a string (POSIX `shlex.split` / Windows `CommandLineToArgvW`), else `list(command)`.
 2. **Spawn child** (proc.py:48-55): `subprocess.Popen(args, cwd=self.cwd, stdout=PIPE, stderr=PIPE, bufsize=1, text=True)`. `text=True` makes pipes yield decoded `str` lines; `bufsize=1` requests line buffering.
 3. **Open merged log and pumps under teardown protection** (proc.py:58-68): after the child exists, a `try/except` guards the rest of setup, because any failure here would otherwise leave a child whose pipes nobody is draining (deadlock on a full pipe). Inside the try: open `output.log` for writing (`buffering=1`), then `_spawn_pump` for stdout (`stdout.log`, tag `out`) and stderr (`stderr.log`, tag `err`).
 4. **On setup failure** (proc.py:62-68): log the exception, call `_teardown_child()`, close+null `self._merged` if it was opened, then re-raise.
@@ -62,7 +62,7 @@ This scope writes no MCP/stdout protocol output of its own; all diagnostics go t
 
 ## Failure modes & handling
 - **`Popen` fails (bad command, missing executable, bad cwd):** `start()` raises before the `try` block; no child exists, no files opened, nothing to roll back. Caller (`session.py`) sees the exception.
-- **`shlex.split` fails (unbalanced quotes in a `str` command):** raises `ValueError` from `start()` at proc.py:46 before `Popen`; same as above.
+- **`util.split_command` fails (e.g. unbalanced quotes in a POSIX `str` command):** the underlying `shlex.split` raises `ValueError` from `start()` before `Popen`; same as above. (On Windows, `CommandLineToArgvW` does not raise on unbalanced quotes — it tokenizes per Windows rules.)
 - **Opening `output.log` or spawning a pump fails after launch:** caught at proc.py:62; logs `ProcessCapture.start failed after launch; tearing down child`, calls `_teardown_child()` (kill + wait(2.0) + close pipe fds, errors swallowed — proc.py:72-86), closes `self._merged` if opened, and re-raises.
 - **A pump cannot open its raw log:** caught at proc.py:92; logs `could not open <path>; draining <tag> without raw log`, then drains the stream (`for _ in stream: pass`) and returns. The merged log loses this stream's lines, but the child never blocks.
 - **A write to the raw or merged log fails mid-loop (e.g., disk full):** NOT explicitly caught inside the per-line body. The exception propagates out of the `for` loop; the `finally` closes the raw log; the daemon thread then dies. This means a mid-stream I/O error can silently stop pumping one stream while the child continues. Uncertain whether this is intended; flagged as an open item.
@@ -82,7 +82,7 @@ Naming is fixed (literal filenames); there is no per-stream timestamp/token in t
 
 ## Configuration
 This scope has no environment variables. All configuration is via constructor parameters:
-- `command: str | list[str]` — required; shell-split only when a `str`.
+- `command: str | list[str]` — required; tokenized via `util.split_command` only when a `str`.
 - `out_dir: Path` — required.
 - `cwd: str | None` — default `None` (inherit).
 - `stop(timeout=5.0)` — graceful-termination wait in seconds; default 5.0. The forced-kill wait (2.0s) and pump-join timeout (2.0s) are hard-coded constants, not configurable.

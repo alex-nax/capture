@@ -14,12 +14,11 @@ skipped (screenshots + audio still work).
 from __future__ import annotations
 
 import logging
-import shlex
 import subprocess
 import threading
 from pathlib import Path
 
-from .util import iso, now
+from .util import iso, now, split_command
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +42,7 @@ class ProcessCapture:
 
     def start(self) -> int:
         self.out_dir.mkdir(parents=True, exist_ok=True)
-        args = shlex.split(self.command) if isinstance(self.command, str) else list(self.command)
+        args = split_command(self.command) if isinstance(self.command, str) else list(self.command)
 
         self.proc = subprocess.Popen(
             args,
