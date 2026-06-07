@@ -1,0 +1,236 @@
+{
+  "project": "capture-mcp",
+  "created": "2026-06-07",
+  "notes": "Features 1-15 were built and verified in the initial session (see claude-progress.md). 16+ are open work. Only flip passes->true after verified end-to-end testing.",
+  "features": [
+    {
+      "id": 1,
+      "category": "core",
+      "priority": "high",
+      "description": "MCP server exposing capture_start / capture_stop / capture_status over stdio",
+      "acceptance_criteria": [
+        "mcp.list_tools() returns the three tools with correct schemas",
+        "capture_start requires exactly one of command/pid/app_name"
+      ],
+      "passes": true,
+      "dependencies": []
+    },
+    {
+      "id": 2,
+      "category": "core",
+      "priority": "high",
+      "description": "Launch-mode process capture with timestamped stdout/stderr logging",
+      "acceptance_criteria": [
+        "Launching a command writes stdout.log, stderr.log, and merged ISO-timestamped output.log",
+        "Process exit code is recorded"
+      ],
+      "passes": true,
+      "dependencies": [1]
+    },
+    {
+      "id": 3,
+      "category": "core",
+      "priority": "high",
+      "description": "Window discovery via Quartz (pid / app-name -> CGWindowID)",
+      "acceptance_criteria": [
+        "find_windows() returns layer-0 windows largest-first",
+        "primary_window(app_name=...) resolves a running app's main window"
+      ],
+      "passes": true,
+      "dependencies": []
+    },
+    {
+      "id": 4,
+      "category": "core",
+      "priority": "high",
+      "description": "Periodic, grid-scheduled timestamped screenshots (window or whole-screen fallback)",
+      "acceptance_criteria": [
+        "Screenshots saved as <iso-stamp>.<ext> at the configured interval",
+        "Window targeted via screencapture -l when resolvable, else whole-screen",
+        "rc=0-but-missing-file is treated as an error (screencapture quirk)"
+      ],
+      "passes": true,
+      "dependencies": [3]
+    },
+    {
+      "id": 5,
+      "category": "core",
+      "priority": "high",
+      "description": "Configurable screenshot format, resolution (aspect-preserving), and JPEG quality",
+      "acceptance_criteria": [
+        "screenshot_resolution accepts 'WxH' and 'WxH/fmt' (e.g. 1280x720/jpg)",
+        "Output fits within the box preserving aspect ratio, never upscaled",
+        "Format honored (png/jpg/...) via screencapture -t or sips re-encode"
+      ],
+      "passes": true,
+      "dependencies": [4]
+    },
+    {
+      "id": 6,
+      "category": "core",
+      "priority": "high",
+      "description": "Audio pipeline: read PCM -> fixed windows -> ASR -> transcript.jsonl/txt with absolute timestamps",
+      "acceptance_criteria": [
+        "20s of audio chunks into 8+8+4 with monotonically advancing offsets",
+        "Timeline anchored to first-byte wall clock (not session t0)",
+        "raw audio saved to audio.s16le"
+      ],
+      "passes": true,
+      "dependencies": [1]
+    },
+    {
+      "id": 7,
+      "category": "asr",
+      "priority": "high",
+      "description": "Pluggable ASR with local Whisper default (mlx-whisper / faster-whisper)",
+      "acceptance_criteria": [
+        "asr.create('auto'|'local') returns a working backend on arm64",
+        "Real speech transcribes correctly (e.g. 'the quick brown fox ...')",
+        "CAPTURE_WHISPER_MODEL env overrides the model"
+      ],
+      "passes": true,
+      "dependencies": [6]
+    },
+    {
+      "id": 8,
+      "category": "core",
+      "priority": "high",
+      "description": "Session orchestrator ties process + screenshots + audio with session.json metadata and graceful degradation",
+      "acceptance_criteria": [
+        "A failed component start rolls back others and re-raises",
+        "Audio failure (e.g. -3805) is surfaced in audio_status while screenshots/logs continue",
+        "session.json written on start, stop, and error"
+      ],
+      "passes": true,
+      "dependencies": [2, 4, 6]
+    },
+    {
+      "id": 9,
+      "category": "asr",
+      "priority": "medium",
+      "description": "ScreenCaptureKit Swift helper streams per-app audio as 16kHz mono s16le",
+      "acceptance_criteria": [
+        "swiftc builds helper/audiocap cleanly",
+        "Helper enumerates content, reaches startCapture, prints READY, and emits PCM bytes",
+        "--system whole-display mode works; clean exit on SIGTERM/SIGINT"
+      ],
+      "passes": true,
+      "dependencies": []
+    },
+    {
+      "id": 10,
+      "category": "core",
+      "priority": "high",
+      "description": "Async MCP handlers offload blocking work via anyio.to_thread (no event-loop stalls)",
+      "acceptance_criteria": [
+        "capture_start/stop/status are async and use anyio.to_thread.run_sync",
+        "anyio declared as a direct dependency"
+      ],
+      "passes": true,
+      "dependencies": [1]
+    },
+    {
+      "id": 11,
+      "category": "core",
+      "priority": "medium",
+      "description": "Bounded session registry with oldest-finished eviction",
+      "acceptance_criteria": [
+        "_prune_locked keeps running sessions and evicts oldest finished beyond MAX_SESSIONS"
+      ],
+      "passes": true,
+      "dependencies": [1]
+    },
+    {
+      "id": 12,
+      "category": "testing",
+      "priority": "high",
+      "description": "Hermetic smoke test suite (tests/smoke.py)",
+      "acceptance_criteria": [
+        "python tests/smoke.py prints 20/20 passed without special permissions"
+      ],
+      "passes": true,
+      "dependencies": [1, 4, 6]
+    },
+    {
+      "id": 13,
+      "category": "asr",
+      "priority": "medium",
+      "description": "Remote NVIDIA Riva / Nemotron-3.5 ASR adapter (offline_recognize) with function-id/API-key auth",
+      "acceptance_criteria": [
+        "Adapter constructs Auth/ASRService and maps RecognitionConfig + word offsets",
+        "VERIFIED against a real Riva endpoint returning timestamped transcripts"
+      ],
+      "passes": false,
+      "dependencies": [7]
+    },
+    {
+      "id": 14,
+      "category": "asr",
+      "priority": "medium",
+      "description": "ffmpeg microphone fallback verified end-to-end",
+      "acceptance_criteria": [
+        "audio_source='mic' captures real mic audio and produces a transcript",
+        "Graceful message when Microphone permission is missing"
+      ],
+      "passes": false,
+      "dependencies": [6]
+    },
+    {
+      "id": 15,
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "Codesign the helper with a stable identity for a persistent Screen Recording (TCC) grant; verify per-app audio end-to-end with an app actively playing audio",
+      "acceptance_criteria": [
+        "scripts/build_helper.sh signs with CODESIGN_IDENTITY and the grant persists across rebuilds",
+        "Attaching to a playing app yields non-empty transcript.jsonl (no -3805)"
+      ],
+      "passes": false,
+      "dependencies": [9]
+    },
+    {
+      "id": 16,
+      "category": "asr",
+      "priority": "medium",
+      "description": "True streaming ASR to avoid chunk-boundary word splits (Riva streaming_recognize; overlap+dedup or streaming-capable local backend)",
+      "acceptance_criteria": [
+        "Words spanning window boundaries are not split or lost",
+        "Latency lower than the fixed-window approach"
+      ],
+      "passes": false,
+      "dependencies": [6, 13]
+    },
+    {
+      "id": 17,
+      "category": "core",
+      "priority": "low",
+      "description": "Optional: auto-stop a launch-mode session when the launched process exits",
+      "acceptance_criteria": [
+        "When the child exits, screenshots/audio stop and state becomes 'stopped' without an explicit capture_stop"
+      ],
+      "passes": false,
+      "dependencies": [8]
+    },
+    {
+      "id": 18,
+      "category": "infrastructure",
+      "priority": "low",
+      "description": "Package the helper as a signed .app bundle with NS* usage descriptions for distributable TCC",
+      "acceptance_criteria": [
+        "Bundled helper requests permissions via its own Info.plist and is notarizable"
+      ],
+      "passes": false,
+      "dependencies": [15]
+    },
+    {
+      "id": 19,
+      "category": "testing",
+      "priority": "medium",
+      "description": "CI / pytest harness running the hermetic suite",
+      "acceptance_criteria": [
+        "pytest green locally; smoke test wrapped as pytest cases"
+      ],
+      "passes": false,
+      "dependencies": [12]
+    }
+  ]
+}

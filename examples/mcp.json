@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "capture": {
+      "command": "/Users/alex/capture/.venv/bin/capture-mcp",
+      "env": {
+        "CAPTURE_WHISPER_MODEL": "mlx-community/whisper-large-v3-turbo"
+      }
+    }
+  }
+}

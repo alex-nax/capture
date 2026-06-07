@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+helper/audiocap
+*.egg-info/
+dist/
+build/
+.DS_Store
+
+# transient capture session output
+capture-*/
+_capture_raw/
