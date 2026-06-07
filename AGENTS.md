@@ -20,6 +20,23 @@
 - Don't block the asyncio event loop in tool handlers — offload blocking work with
   `anyio.to_thread.run_sync` (see `docs/architecture.md`).
 
+## 📋 SPECS ARE MANDATORY (documentation is a first-class step)
+Every scope has a spec in **`docs/specs/`** — these are the source of intent for the
+harness. **Whenever you implement or change behavior, update the matching spec in the
+SAME change** (or add a new spec for a new scope). Treat "code changed, spec didn't" as
+an incomplete change.
+
+- Before coding: read the relevant `docs/specs/<scope>.md` to load the contract.
+- While coding: keep the spec's *Public contract*, *Behavior*, *Invariants*, and
+  *Failure modes* in sync with what you actually build.
+- After coding: verify the spec matches the code (the code is the source of truth; the
+  spec must not lie), then commit code + spec + `claude-progress.md` together.
+- New scope/module → add `docs/specs/<scope>.md` (use the section template that the
+  existing specs follow) and link it from `docs/specs/README.md`.
+
+This is what keeps the harness stable across sessions: a new agent reads the spec to know
+intent, then the code to know reality, and the two must agree.
+
 ## Environment gotchas (this machine)
 - The machine is **arm64**, but the system `python3` is **x86_64 miniconda under Rosetta**.
   Always use the project venv (`uv venv --python 3.12 --python-preference only-managed`),

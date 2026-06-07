@@ -1,5 +1,11 @@
 # Architecture
 
+> **Specs are mandatory.** Each scope has a detailed spec in [`docs/specs/`](specs/).
+> They are the source of *intent*; the code is the source of *reality*; the two must
+> agree. **Update the matching spec in the same change as any behavior change** — see the
+> "SPECS ARE MANDATORY" section in [`AGENTS.md`](../AGENTS.md). This document covers the
+> cross-cutting structure; per-scope detail lives in the specs.
+
 ## Module map
 
 ```
