@@ -4,6 +4,37 @@ Application tooling (in `scripts/`) that dogfoods capture-mcp to capture a YouTu
 playing in a real browser and produce per-video transcripts + summaries. Windows-oriented (uses
 the interactive desktop + WASAPI loopback), but the pieces are OS-neutral above the platform layer.
 
+## Spawning the browser correctly (Windows) — the key insight
+
+The single most important lesson: **do NOT let Selenium launch Chrome.** A Selenium-launched
+Chrome carries automation markers and YouTube **throttles its video stream — playback freezes
+~42 s into every video** (reproduced with zero capture running; not a capture bug, and not fixable
+with flags). Instead, launch a normal Chrome yourself and **attach** to it over the DevTools port:
+
+1. **Launch Chrome normally** with a remote-debug port, in the **interactive desktop** session
+   (screenshots + WASAPI loopback are session-isolated — a service/SSH/agent shell is a dead end):
+   - Use `scripts/run_interactive.ps1 -NoWait` so it runs in `WinSta0` and stays up.
+   - **`--remote-debugging-port=9222`** + a **dedicated `--user-data-dir`** — Chrome 148+ **refuses
+     remote debugging on the default profile**, so you must use a separate profile dir. (No sign-in
+     is strictly required; attaching to a normal Chrome is what defeats the throttle. A signed-in
+     profile is the safest belt-and-suspenders.)
+   - **`--disable-gpu`** so `PrintWindow` captures the video (GPU/overlay frames come out black
+     otherwise); **`--autoplay-policy=no-user-gesture-required`** for autoplay-with-sound;
+     `--disable-background-timer-throttling --disable-backgrounding-occluded-windows
+     --disable-renderer-backgrounding` for good measure.
+2. **Find the browser pid** = the `chrome.exe` whose command line contains `--remote-debugging-port`
+   **and not** `--type=` (child renderer/gpu processes have `--type=`). Pass it as `--target-pid` so
+   screenshots target that window via `PrintWindow` (occlusion-proof — you can stack other windows
+   on top and keep working).
+3. **Attach, don't launch:** the driver connects with Selenium's `debuggerAddress=127.0.0.1:9222`,
+   opens its own tab, and drives playback there (leaving your other tabs alone).
+4. **No console windows stealing focus:** run the driver itself with **`pythonw.exe`** (no console),
+   and the audio helper subprocess is spawned with **`CREATE_NO_WINDOW`**. A stray console window
+   becomes the foreground window and ruins whole-screen capture; window-targeting + these flags
+   avoid it.
+
+Everything below builds on this.
+
 ## Pieces
 - **`scripts/run_interactive.ps1`** — runs a command in the logged-on user's interactive desktop
   session (`WinSta0`) via a transient Interactive-logon scheduled task. Needed because a service /
