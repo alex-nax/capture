@@ -283,6 +283,20 @@
       ],
       "passes": false,
       "dependencies": [13, 21]
+    },
+    {
+      "id": 24,
+      "category": "infrastructure",
+      "priority": "medium",
+      "description": "Redistributable 'capture-mcp-setup' skill (skills/capture-mcp-setup/): one-load install + .mcp.json wiring + quick capture actions for any project. Authored/validated with skill-creator.",
+      "acceptance_criteria": [
+        "install.sh clones+installs capture-mcp (venv, ASR backend, helper) and prints the bin path (DONE)",
+        "configure_mcp.py creates/merges .mcp.json preserving other servers (DONE)",
+        "set_model.py changes + optionally prefetches the ASR model (DONE)",
+        "skill passes skill-creator quick_validate and packages via package_skill.py (DONE)"
+      ],
+      "passes": true,
+      "dependencies": [1]
     }
   ]
 }

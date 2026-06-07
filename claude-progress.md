@@ -1,5 +1,21 @@
 # Progress Log
 
+## Session 6 — 2026-06-07 (branch: feat/distributable-skill)
+**Agent**: builder
+**Summary**: Authored a **redistributable** skill `skills/capture-mcp-setup/` (separate from the
+dev-only `.claude/skills/`) so anyone can load one skill and: (1) install capture-mcp + deps if
+missing (`scripts/install.sh` — clone → venv → ASR backend → build helper, prints bin/py paths);
+(2) create/merge a project `.mcp.json` (`scripts/configure_mcp.py`, preserves other servers);
+(3) run quick actions — capture a browser video, launch & capture a process, change/prefetch the
+ASR model (`scripts/set_model.py`), edit per-project config (`references/quick-actions.md`).
+Validated with skill-creator `quick_validate`; packaged with `package_skill.py` (→ `.skill`
+bundle). Installer tested end-to-end against a local clone: fresh venv exposed all 3 MCP tools and
+built the helper. Feature #24 added (passes:true). `skills/README.md` documents loading/packaging.
+**Status**: on branch `feat/distributable-skill` (not merged to main yet).
+**Next suggested task**: open a PR for this branch; then the Windows platform work (#20→#21→#23).
+
+---
+
 ## Session 5 — 2026-06-07
 **Agent**: builder
 **Summary**: Made the harness portable to other machines. Installed **skill-creator** at
