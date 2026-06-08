@@ -1,5 +1,35 @@
 # Progress Log
 
+## Session 9 — 2026-06-08
+**Agent**: builder (macOS box)
+**Summary**: Used capture live to transcribe a Google Meet standup (per-app audio via
+ScreenCaptureKit → mlx-whisper), then hardened the **distributable skill** and fixed the
+**code-signing path** that was silently broken on macOS + OpenSSL 3.
+- **`scripts/setup_codesign.sh` (feature #15)** — was failing with `SecKeychainItemImport: MAC
+  verification failed`. Two bugs fixed: (1) OpenSSL 3.x exports a PKCS#12 with a SHA-256/AES MAC
+  that `security import` can't read → now uses **`-legacy`** (3DES/RC2 + SHA-1) **plus a non-empty
+  throwaway passphrase** (empty-password p12 also fails MAC verification); (2) `have_identity()`
+  used `find-identity -v` (valid/trusted only), but a self-signed cert is untrusted
+  (`CSSMERR_TP_NOT_TRUSTED`) so it never lists under `-v` — the post-import check always reported
+  failure. Now greps `find-identity -p codesigning` (no `-v`). Re-signed `helper/audiocap` with the
+  stable identity (`Authority=capture-mcp-codesign`, no longer adhoc); `audiocap --system` → READY.
+- **Skill (`skills/capture/`, feature #24)** — `install.sh` now runs `setup_codesign.sh` (stable
+  sign) instead of an ad-hoc `build_helper.sh`, so skill installs get a **persistent** Screen
+  Recording grant. Added **`install.ps1`** (Windows parallel of install.sh: find Python → venv →
+  `.[whisper]` → smoke → print bin/py). SKILL.md + skills/README.md updated: macOS + Windows are
+  both supported (Windows = GDI+/EnumWindows screenshots+logs, mic-fallback audio); dropped the
+  stale "Windows in progress" note.
+- Specs updated in the same change (mandatory): `docs/specs/permissions-and-signing.md` documents
+  the `-legacy`/passphrase requirement and the non-`-v` detection.
+**Verification**: smoke **20/20**; `codesign -dvvv helper/audiocap` shows the stable Authority;
+helper `--system` run prints `READY ... audio flowing` (grant works). `install.sh`/`install.ps1`
+parse-check clean (pwsh unavailable on this mac → PS validated by mirroring init.ps1).
+**Note**: meeting-capture helpers + results now live under `~/.capture/` (config.env + bin/ + runs/),
+deliberately **outside** the repo. The macOS main-repo helper is now stably signed on this box.
+**Next suggested task**: per-process Windows audio (#21), then Whisper-vs-Nemotron benchmark (#23).
+
+---
+
 ## Session 8 — 2026-06-07
 **Agent**: builder (Windows/NVIDIA box, ultracode)
 **Summary**: Built the **live browser-capture → local-ASR pipeline** end to end and ran it on an

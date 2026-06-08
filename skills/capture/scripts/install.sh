@@ -56,12 +56,24 @@ ARCH_OK="$("$PY" -c 'import platform; print(platform.machine())' 2>/dev/null || 
 [ "$OS" = "Darwin" ] && [ "$ARCH" = "arm64" ] && [ "$ARCH_OK" != "arm64" ] && \
   echo "WARNING: venv python is $ARCH_OK, not arm64 — mlx-whisper may not load. Install uv and re-run." >&2
 
-# 4. Build the per-app audio helper (macOS only; optional).
+# 4. Build + STABLY SIGN the per-app audio helper (macOS only; optional).
+#    Use setup_codesign.sh, not a plain ad-hoc build: an ad-hoc signature changes on
+#    every rebuild, so macOS treats the helper as a new binary and re-prompts for the
+#    Screen Recording (TCC) grant each time — the "audio failed with permissions on
+#    every run" symptom. A stable self-signed identity means you approve it ONCE and
+#    the grant sticks. setup_codesign.sh builds the helper first if it's missing.
+SIGNED_STABLE=0
 if [ "$OS" = "Darwin" ]; then
   if command -v swiftc >/dev/null 2>&1; then
-    echo "Building ScreenCaptureKit audio helper ..."
-    bash scripts/build_helper.sh >/dev/null 2>&1 && echo "  helper built." \
-      || echo "  helper build failed (per-app audio unavailable; screenshots/logs still work)."
+    echo "Building + signing ScreenCaptureKit audio helper (stable identity) ..."
+    if bash scripts/setup_codesign.sh; then
+      SIGNED_STABLE=1
+    else
+      echo "  stable signing unavailable; falling back to an ad-hoc build" >&2
+      bash scripts/build_helper.sh >/dev/null 2>&1 \
+        && echo "  helper built (ad-hoc — the Screen Recording grant will NOT persist across rebuilds)." \
+        || echo "  helper build failed (per-app audio unavailable; screenshots/logs still work)."
+    fi
   else
     echo "  swiftc not found — skipping audio helper (run: xcode-select --install). Mic fallback still works."
   fi
@@ -71,6 +83,13 @@ echo
 echo "✓ capture-mcp ready."
 echo "CAPTURE_MCP_BIN=$BIN"
 echo "CAPTURE_MCP_PY=$PY"
+if [ "$OS" = "Darwin" ] && [ "$SIGNED_STABLE" = "1" ]; then
+  echo
+  echo "macOS one-time permission (per-app audio): approve Screen Recording ONCE — the helper"
+  echo "is stably signed, so the grant then persists across rebuilds. To trigger the prompt now:"
+  echo "  \"$CAPTURE_HOME/helper/audiocap\" --system   # then enable 'audiocap' + your terminal in"
+  echo "  System Settings > Privacy & Security > Screen Recording, and reopen the terminal."
+fi
 echo
 echo "Next: register it in your project's .mcp.json:"
 echo "  python $(dirname "$0")/configure_mcp.py --bin \"$BIN\""

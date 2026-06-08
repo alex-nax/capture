@@ -17,7 +17,7 @@ ScreenCaptureKit (the per-app/system audio path in `helper/audiocap`) requires t
 - **Side effects:** imports a self-signed identity into the default keychain (or `~/Library/Keychains/login.keychain-db` fallback), signs `helper/audiocap`, and builds the helper first if it does not exist.
 - **stdout:** human-readable progress (`✓`/`✗` lines), `codesign -dvvv` excerpt (`Authority`/`Identifier`/`TeamIdentifier`), and a final here-doc with one-time approval steps and the persistent-rebuild command.
 - **Exit codes:** `0` on success; `1` if identity creation fails (`setup_codesign.sh:53`). `set -euo pipefail` is in effect, so unhandled command failures also abort non-zero.
-- **Idempotency:** if an identity matching `$CERT_NAME` already exists (`security find-identity -v -p codesigning | grep -q "$CERT_NAME"`), creation is skipped and only re-signing runs.
+- **Idempotency:** if an identity matching `$CERT_NAME` already exists (`security find-identity -p codesigning | grep -q "$CERT_NAME"` — no `-v`, so untrusted self-signed certs are still detected), creation is skipped and only re-signing runs.
 
 ### `scripts/build_helper.sh`
 - **Invocation:** `bash scripts/build_helper.sh` (no positional args).
@@ -38,9 +38,9 @@ ScreenCaptureKit (the per-app/system audio path in `helper/audiocap`) requires t
 2. `have_identity()` checks whether a codesigning identity whose listing contains `$CERT_NAME` already exists (`:24`).
 3. If it exists, print `✓ ... already exists.` and skip to signing (`:26-27`).
 4. Otherwise, in a temp dir (cleaned on EXIT), generate an OpenSSL config with `CN=$CERT_NAME`, `keyUsage=critical,digitalSignature`, `extendedKeyUsage=critical,codeSigning`, `CA:false` (`:30-42`).
-5. Create a self-signed RSA-2048 X.509 cert valid 3650 days, export it to a passwordless PKCS#12, and `security import` it into `$KEYCHAIN` authorizing `/usr/bin/codesign` to use the key (`-T /usr/bin/codesign`) (`:43-48`).
+5. Create a self-signed RSA-2048 X.509 cert valid 3650 days, export it to a PKCS#12, and `security import` it into `$KEYCHAIN` authorizing `/usr/bin/codesign` to use the key (`-T /usr/bin/codesign`). Two macOS/OpenSSL-3 compatibility requirements (`:45-52`): the export uses **`-legacy`** when available (OpenSSL 3.x's default PKCS#12 MAC is SHA-256+AES, which `security import` rejects with "MAC verification failed during PKCS12 import"; `-legacy` emits the 3DES/RC2 + SHA-1 form macOS reads), and a **non-empty throwaway passphrase** (`P12_PASS="capture-mcp"`, matched on import via `-P`) — an empty-password PKCS#12 also fails MAC verification. The passphrase only protects the temp `.p12`; the identity lives in the keychain after import.
 6. Run `security set-key-partition-list -S apple-tool:,apple: -s -k "" "$KEYCHAIN"` to suppress codesign's "wants to use key" prompt; if it cannot run non-interactively, print a note that codesign may prompt once (click "Always Allow") (`:51-52`).
-7. Re-check `have_identity`; print `✓ Created` or `✗ Failed ... exit 1` (`:53`).
+7. Re-check `have_identity`; print `✓ Created` or `✗ Failed ... exit 1`. **`have_identity()` lists with `security find-identity -p codesigning` WITHOUT `-v`** (`:24`): a self-signed cert is untrusted (`CSSMERR_TP_NOT_TRUSTED`) so it never appears under `-v` (valid-identities-only), yet `codesign --sign "$CERT_NAME"` can still use it by name. Using `-v` here made the post-import check (and the idempotency skip) always report failure even when import succeeded.
 8. If `$HELPER` is not executable, run `build_helper.sh` to build it (`:56-59`).
 9. Sign the helper: `codesign --force --options runtime --sign "$CERT_NAME" --identifier com.local.audiocap "$HELPER"` (`:62`).
 10. Print a `codesign -dvvv` excerpt (Authority/Identifier/TeamIdentifier) (`:63`).
@@ -104,4 +104,4 @@ Fixed (not configurable): code-signing `--identifier` = `com.local.audiocap`; ce
   2. `./helper/audiocap --system` to trigger the TCC prompt; approve Screen Recording for the launching app, then restart the terminal.
   3. Confirm a `READY rate=... fmt=s16le` line on stderr (grant active) rather than a `permission error` log.
   4. Rebuild with `CODESIGN_IDENTITY="capture-mcp-codesign" bash scripts/build_helper.sh` and confirm capture still works **without** re-approval (proves grant persistence).
-- **Recommended additions (not yet present):** (a) a scriptable check that `codesign -dvvv helper/audiocap` reports the expected `Identifier=com.local.audiocap` and the stable Authority; (b) a non-interactive assertion that `security find-identity -v -p codesigning` contains `$CAPTURE_CODESIGN_CN` after setup; (c) a unit test of the helper's `-3805` vs `-3801`/`-3803` branch selection (today only enforceable by code review of `audiocap.swift:141-154`).
+- **Recommended additions (not yet present):** (a) a scriptable check that `codesign -dvvv helper/audiocap` reports the expected `Identifier=com.local.audiocap` and the stable Authority; (b) a non-interactive assertion that `security find-identity -p codesigning` (no `-v`) contains `$CAPTURE_CODESIGN_CN` after setup; (c) a unit test of the helper's `-3805` vs `-3801`/`-3803` branch selection (today only enforceable by code review of `audiocap.swift:141-154`).

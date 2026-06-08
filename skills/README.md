@@ -38,8 +38,10 @@ skills directory.
 
 - Clones capture-mcp to `~/.capture-mcp` (override with `CAPTURE_HOME`), makes a venv, installs
   the package + an ASR backend (mlx-whisper on Apple Silicon, faster-whisper elsewhere), and on
-  macOS builds the ScreenCaptureKit per-app audio helper.
+  macOS builds **and stably code-signs** the ScreenCaptureKit per-app audio helper so the Screen
+  Recording grant is approved once and persists. Windows uses `install.ps1` (no helper needed).
 - Adds a `capture` server to the project's `.mcp.json` (preserving any existing servers).
 
-Platform: macOS fully supported today; Linux/Windows in progress
+Platform: **macOS** (screenshots + per-app audio) and **Windows** (screenshots/window-discovery/logs
+via GDI+/EnumWindows; per-app audio loopback pending → mic fallback) are supported
 (see `../docs/specs/platform-abstraction.md`).

@@ -12,23 +12,35 @@ gets it installed, registers it in the project's `.mcp.json`, and drives common 
 
 Bundled scripts live next to this file in `scripts/`; recipes are in `references/quick-actions.md`.
 
-> Platform: fully supported on **macOS** today (screenshots + per-app audio). Linux/Windows
-> support is in progress (see the project's `docs/specs/platform-abstraction.md`). On non-macOS,
-> the Python/MCP install still works; per-app audio/screenshots may be limited.
+> Platform: **macOS** and **Windows** are supported (see `docs/specs/platform-abstraction.md`).
+> - **macOS** — screenshots, window discovery, logs, and **per-app audio → text** (ScreenCaptureKit).
+> - **Windows** — screenshots (GDI+) + window discovery (EnumWindows) + logs work with **no extra deps
+>   and no permission prompt**; per-app audio (WASAPI process loopback) is not wired yet, so audio
+>   falls back to the microphone there. Use `install.ps1` to set it up.
 
 ## Step 1 — Install capture-mcp if not present
-1. Decide the install location (default `~/.capture-mcp`, override with `CAPTURE_HOME`).
-2. Run the installer (clones the repo, makes a venv, installs the package + an ASR backend, and
-   on macOS builds the ScreenCaptureKit audio helper):
-   ```bash
-   bash scripts/install.sh
-   ```
+1. Decide the install location (default `~/.capture-mcp` / `%USERPROFILE%\.capture-mcp`, override
+   with `CAPTURE_HOME`).
+2. Run the installer for the platform (clones the repo, makes a venv, installs the package + an ASR
+   backend):
+   - **macOS / Linux** — also builds **and stably code-signs** the ScreenCaptureKit audio helper so
+     the Screen Recording grant is approved **once** and persists:
+     ```bash
+     bash scripts/install.sh
+     ```
+   - **Windows** — screenshots/window-discovery/logs need no helper; per-app audio loopback isn't
+     wired yet (audio falls back to mic):
+     ```powershell
+     powershell -ExecutionPolicy Bypass -File scripts/install.ps1
+     ```
 3. The installer prints `CAPTURE_MCP_BIN=<path>` (the `capture-mcp` entry point) and
    `CAPTURE_MCP_PY=<path>` (the venv python). Capture both — Step 2 needs the bin path.
    If it's already installed, the script fast-pulls and re-prints the paths.
 
-Requires `git` and Python 3.10+; uses `uv` if available (recommended). On macOS, `swiftc`
-(Xcode Command Line Tools) is needed for per-app audio — the script notes if it's missing.
+Requires `git` and Python 3.10+. macOS/Linux: uses `uv` if available (recommended); on macOS
+`swiftc` (Xcode Command Line Tools) is needed for per-app audio — the script notes if it's missing.
+Windows: needs Python 3.12 (`winget install Python.Python.3.12`); `install.ps1` finds the `py`
+launcher or a python.org install (ignores the Microsoft Store stub).
 
 ## Step 2 — Register capture in the project's .mcp.json
 From the project directory the user wants capture available in:
@@ -42,10 +54,15 @@ restart or re-approve the project's MCP servers) so the `capture_start` / `captu
 
 ## Step 3 — Verify prerequisites, then offer quick actions
 Confirm: `CAPTURE_MCP_BIN` exists, `.mcp.json` contains the `capture` server, and (macOS) the
-helper binary built. On macOS, per-app audio needs **Screen Recording** permission for the app
-that launches the server (and `bash <CAPTURE_HOME>/scripts/setup_codesign.sh` makes that grant
-persist) — but capture still runs (screenshots + logs) without it, and audio auto-reconnects
-through transient interruptions.
+helper binary built. On **macOS**, per-app audio needs **Screen Recording** permission for the app
+that launches the server. `install.sh` already stably signs the helper, so this is a **one-time**
+grant that persists across rebuilds — trigger the prompt with `"<CAPTURE_HOME>/helper/audiocap"
+--system`, enable `audiocap` **and the launching terminal/app** under System Settings > Privacy &
+Security > Screen Recording, then reopen it. (If the helper was only ad-hoc signed, re-run
+`bash <CAPTURE_HOME>/scripts/setup_codesign.sh` to make the grant stick.) Capture still runs
+(screenshots + logs) without the grant, and audio auto-reconnects through transient interruptions.
+On **Windows** no permission prompt is involved; per-app audio loopback isn't wired yet, so audio
+uses the microphone there.
 
 Once the `capture` MCP tools are available, perform what the user asked using
 `references/quick-actions.md`. Quick actions include:

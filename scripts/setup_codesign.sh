@@ -21,7 +21,10 @@ HELPER="$ROOT/helper/audiocap"
 KEYCHAIN="$(security default-keychain | tr -d ' "')"
 [ -n "$KEYCHAIN" ] || KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 
-have_identity() { security find-identity -v -p codesigning 2>/dev/null | grep -q "$CERT_NAME"; }
+# Detect WITHOUT -v: a self-signed cert is untrusted (CSSMERR_TP_NOT_TRUSTED), so it never
+# appears under `-v` (valid identities only) even though codesign can use it by name. Using
+# -v here made the post-import check always fail. List all matching identities instead.
+have_identity() { security find-identity -p codesigning 2>/dev/null | grep -q "$CERT_NAME"; }
 
 if have_identity; then
   echo "✓ Code-signing identity '$CERT_NAME' already exists."
@@ -42,10 +45,18 @@ extendedKeyUsage   = critical,codeSigning
 EOF
   openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
     -keyout "$TMP/key.pem" -out "$TMP/cert.pem" -config "$TMP/cert.cnf" >/dev/null 2>&1
-  openssl pkcs12 -export -inkey "$TMP/key.pem" -in "$TMP/cert.pem" \
-    -name "$CERT_NAME" -out "$TMP/id.p12" -passout pass: >/dev/null 2>&1
+  # OpenSSL 3.x defaults to a PKCS12 MAC (SHA-256 + AES) that macOS `security import`
+  # rejects with "MAC verification failed during PKCS12 import". -legacy emits the
+  # 3DES/RC2 + SHA-1 form that imports cleanly. Fall back to no flag on OpenSSL 1.x.
+  # A non-empty passphrase is required: macOS `security import` fails MAC verification on an
+  # empty-password PKCS12 ("MAC verification failed ... wrong password?"). The passphrase is a
+  # throwaway — the identity lives in the keychain after import, not in the temp .p12.
+  P12_PASS="capture-mcp"
+  P12_LEGACY=""; openssl pkcs12 -help 2>&1 | grep -q -- -legacy && P12_LEGACY="-legacy"
+  openssl pkcs12 -export $P12_LEGACY -inkey "$TMP/key.pem" -in "$TMP/cert.pem" \
+    -name "$CERT_NAME" -out "$TMP/id.p12" -passout "pass:$P12_PASS" >/dev/null 2>&1
   # Import the identity and authorise codesign to use the private key.
-  security import "$TMP/id.p12" -k "$KEYCHAIN" -P "" -T /usr/bin/codesign >/dev/null
+  security import "$TMP/id.p12" -k "$KEYCHAIN" -P "$P12_PASS" -T /usr/bin/codesign >/dev/null
   # Avoid codesign's "wants to use key" prompt (needs your login-keychain password).
   echo "  (you may be asked for your login keychain password)"
   security set-key-partition-list -S apple-tool:,apple: -s -k "" "$KEYCHAIN" >/dev/null 2>&1 \
