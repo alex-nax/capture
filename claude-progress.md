@@ -1,5 +1,35 @@
 # Progress Log
 
+## Session 12 — 2026-06-10
+**Agent**: builder (macOS box, ultracode, branch **v2**)
+**Summary**: Built **feature #26 (M0b — EventBus + per-session events.jsonl)**, completing M0
+of the product-architecture roadmap.
+- **`core/events.py` (new)**: `EventBus` — in-process fan-out, `publish()` never raises/never
+  blocks, bounded per-subscriber queues (1000; overflow drops are counted on
+  `Subscription.dropped`, the capture loop is never stalled by an observer).
+  `EventsFileWriter` — tails the bus into `<session>/events.jsonl`: every `state` event +
+  periodic counter snapshots (`CAPTURE_EVENTS_SNAPSHOT_SECONDS`, default 5.0) + one final
+  snapshot always last; high-volume types (log_line/screenshot_taken/transcript_segment) stay
+  on the bus only — never duplicated on disk (output.log/screenshots//transcript.jsonl have them).
+- **Wiring**: components got an optional `emit=None` hook (frontend-ignorant, zero-overhead when
+  unset): Screenshotter → `screenshot_taken`/`screenshot_error`; ProcessCapture → `log_line`
+  per merged line; AudioCapture → `transcript_segment` + `audio_status` (start/no-data/stop).
+  `CaptureSession.events` is public; state events published at every transition; writer started
+  before the `"starting"` event so the file records the full lifecycle, drained+finalized on
+  stop AND on the start-error path.
+- Specs in the same change: **new events.md**; session.md/screenshots.md/process-logs.md/
+  audio.md event-hook sections; architecture.md module map; product-architecture.md M0b →
+  [current]; specs README index row.
+**Verification**: smoke **35/35** (7 new: events.jsonl state order starting→running→stopping→
+stopped, periodic+final snapshots with final counters matching the final summary; live bus
+subscriber gets state + exactly 6 log_line with both stream tags + screenshot_taken, 0 drops).
+**Known issues / next**: no replay for late bus subscribers (daemon M2 needs a small ring
+buffer); `audio_status` emitted at 3 fixed points, not every mutation; `dropped` not surfaced in
+summary(). **Next**: #27 (contract fixtures + helper-contract.md), #28/#29 (cheap wins), or #30
+(TCC spike — gates packaging; needs a clean macOS VM).
+
+---
+
 ## Session 11 — 2026-06-10
 **Agent**: builder (macOS box, ultracode, branch **v2**)
 **Summary**: Built **feature #25 (M0a — engine/MCP package split + SessionRegistry + start()

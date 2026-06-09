@@ -33,6 +33,14 @@ Return / type notes:
 
 This scope writes no MCP/stdout protocol output of its own; all diagnostics go through the module logger `log = logging.getLogger(__name__)` (proc.py:24), consistent with the "stdout is sacred" constraint in docs/architecture.md.
 
+
+### Event hook (M0b, feature #26)
+
+`ProcessCapture` accepts an optional `emit=None` keyword (an `EventBus.publish`-shaped
+callable, normally `CaptureSession.events.publish`). When set, it emits
+`log_line` {stream,line} per merged line. Publishing never raises/blocks; with `emit=None` the component is
+silent and behaves exactly as before. See [events.md](events.md).
+
 ## Behavior
 1. **start() — prepare directory and args**: `out_dir.mkdir(parents=True, exist_ok=True)`. `command` is normalized to a list: `util.split_command(command)` if a string (POSIX `shlex.split` / Windows `CommandLineToArgvW`), else `list(command)`.
 2. **Spawn child** (proc.py:48-55): `subprocess.Popen(args, cwd=self.cwd, stdout=PIPE, stderr=PIPE, bufsize=1, text=True)`. `text=True` makes pipes yield decoded `str` lines; `bufsize=1` requests line buffering.

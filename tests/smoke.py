@@ -39,6 +39,9 @@ BASE = Path(tempfile.mkdtemp(prefix="capmcp-smoke-"))
 # session index into the temp dir BEFORE importing it so the suite stays
 # hermetic (never touches ~/.capture).
 os.environ["CAPTURE_SESSION_INDEX"] = str(BASE / "sessions.jsonl")
+# Shrink the events.jsonl snapshot interval so short captures exercise the
+# periodic-snapshot path, not just the final snapshot.
+os.environ["CAPTURE_EVENTS_SNAPSHOT_SECONDS"] = "0.5"
 
 from capture_mcp.core.audio import SAMPLE_RATE, AudioCapture  # noqa: E402
 from capture_mcp.core.asr.base import Segment  # noqa: E402
@@ -92,6 +95,18 @@ async def test_launch_mode() -> None:
     check("launch: logs on disk", (d / "output.log").exists() and (d / "stderr.log").exists())
     st = await capture_status(s["session_id"])
     check("status: queryable by id", st["session_id"] == s["session_id"])
+
+    events = [json.loads(x) for x in (d / "events.jsonl").read_text().strip().splitlines()]
+    states = [e["state"] for e in events if e["type"] == "state"]
+    check("events: lifecycle states in order", states == ["starting", "running", "stopping", "stopped"],
+          f"states={states}")
+    snaps = [e for e in events if e["type"] == "snapshot"]
+    check("events: periodic + final snapshots, final last", len(snaps) >= 2 and events[-1]["type"] == "snapshot",
+          f"snaps={len(snaps)}")
+    check("events: final snapshot has final counters",
+          snaps[-1]["summary"]["screenshots"] == fin["screenshots"]
+          and snaps[-1]["summary"]["state"] == "stopped",
+          f"snap_shots={snaps[-1]['summary']['screenshots']} fin={fin['screenshots']}")
 
 
 async def test_validation() -> None:
@@ -178,6 +193,38 @@ async def test_status_during_start() -> None:
         CaptureSession._start_audio = orig
 
 
+def test_event_bus() -> None:
+    """Subscribers receive component events (log_line, screenshot_taken) live."""
+    import queue as _queue
+
+    sess = CaptureSession(
+        str(BASE / "bus"),
+        command=_cmdline([sys.executable, "-c", _LAUNCH_CODE]),
+        screenshot_interval=0.4,
+        capture_audio=False,
+    )
+    sub = sess.events.subscribe()
+    sess.start()
+    time.sleep(1.4)
+    sess.stop()
+
+    got: list[dict] = []
+    while True:
+        try:
+            got.append(sub.get(timeout=0.05))
+        except _queue.Empty:
+            break
+    sub.close()
+    types = {e["type"] for e in got}
+    log_lines = [e for e in got if e["type"] == "log_line"]
+    check("bus: state events delivered", {"state"} <= types, f"types={sorted(types)}")
+    check("bus: log_line events with stream tags", len(log_lines) == 6
+          and {e["stream"] for e in log_lines} == {"out", "err"}, f"n={len(log_lines)}")
+    check("bus: screenshot_taken events delivered", any(e["type"] == "screenshot_taken" for e in got),
+          f"types={sorted(types)}")
+    check("bus: no drops on a small capture", sub.dropped == 0, f"dropped={sub.dropped}")
+
+
 def test_registry_history() -> None:
     """A fresh registry rebuilds finished sessions from the on-disk index."""
     idx = Path(os.environ["CAPTURE_SESSION_INDEX"])
@@ -227,6 +274,7 @@ async def main() -> int:
         await test_validation()
         test_audio_pipeline()
         await test_status_during_start()
+        test_event_bus()
         test_registry_history()
         test_parse_resolution()
     finally:

@@ -36,6 +36,14 @@ Methods: `start() -> None` and `stop() -> None`. Both are synchronous and blocki
 
 stdout/stderr contract of the audio *source* (consumed, not produced, by this scope): the source emits raw signed-16-bit little-endian mono PCM at 16 kHz on stdout; human-readable status on stderr. The Swift helper additionally prints `READY rate=<n> channels=1 fmt=s16le ...` then bytes (see `docs/architecture.md`); `audio.py` does not parse the READY line — it treats stdout as an opaque PCM byte stream.
 
+
+### Event hook (M0b, feature #26)
+
+`AudioCapture` accepts an optional `emit=None` keyword (an `EventBus.publish`-shaped
+callable, normally `CaptureSession.events.publish`). When set, it emits
+`transcript_segment` (the jsonl record + count) and `audio_status` {status,mode} at start / no-data failure / stop. Publishing never raises/blocks; with `emit=None` the component is
+silent and behaves exactly as before. See [events.md](events.md).
+
 ## Behavior
 1. `start()` creates `out_dir` (`mkdir parents/exist_ok`).
 2. It calls `asr_pkg.create(self.asr_name)`. On exception it records `self._asr_error`, logs a warning, and sets `self._asr = None` (capture continues without transcription) (`audio.py:90-95`).

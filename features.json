@@ -321,10 +321,10 @@
       "priority": "medium",
       "description": "M0b — EventBus + per-session events.jsonl: components push screenshot_taken/transcript_segment/log_line/state events alongside today's polled counters; CaptureSession appends an append-only events.jsonl per session (state transitions + periodic counter snapshots) so future GUI/daemon clients tail one file instead of fs-watching.",
       "acceptance_criteria": [
-        "A smoke capture produces events.jsonl with state transitions and counter snapshots",
-        "Existing polling (capture_status/summary()) unchanged"
+        "A smoke capture produces events.jsonl with state transitions and counter snapshots (DONE; starting->running->stopping->stopped + periodic and final snapshots, smoke 35/35)",
+        "Existing polling (capture_status/summary()) unchanged (DONE; all pre-existing smoke checks pass untouched)"
       ],
-      "passes": false,
+      "passes": true,
       "dependencies": [25]
     },
     {

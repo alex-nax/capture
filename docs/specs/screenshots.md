@@ -87,6 +87,14 @@ All diagnostics go through `log = logging.getLogger(__name__)` (warnings/excepti
 never `print`. This honors the architecture hard constraint that stdout is reserved
 for the MCP transport.
 
+
+### Event hook (M0b, feature #26)
+
+`Screenshotter` accepts an optional `emit=None` keyword (an `EventBus.publish`-shaped
+callable, normally `CaptureSession.events.publish`). When set, it emits
+`screenshot_taken` {path,count} / `screenshot_error` {errors}. Publishing never raises/blocks; with `emit=None` the component is
+silent and behaves exactly as before. See [events.md](events.md).
+
 ## Behavior
 
 Per tick (`_capture_once`):

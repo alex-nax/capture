@@ -12,7 +12,8 @@
 server.py            MCP entrypoint (thin frontend). Async tools: capture_start/stop/status.
 core/                THE ENGINE — frontend-independent (MCP today; daemon/CLI/GUI per specs/product-architecture.md)
   ├─ registry.py     SessionRegistry: bounded live tracking + disk-backed history (sessions.jsonl index)
-  └─ session.py      CaptureSession: orchestrates one capture; owns components; writes session.json
+  ├─ events.py       EventBus (push alongside poll) + EventsFileWriter (per-session events.jsonl)
+  └─ session.py      CaptureSession: orchestrates one capture; owns components + bus; writes session.json
        ├─ proc.py            ProcessCapture: launch + tee stdout/stderr (launch mode only)
        ├─ screenshots.py     Screenshotter: schedule + delegate pixel capture to platform
        └─ audio.py           AudioCapture: drive source -> chunk -> ASR -> transcript

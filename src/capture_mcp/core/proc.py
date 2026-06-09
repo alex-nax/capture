@@ -24,10 +24,12 @@ log = logging.getLogger(__name__)
 
 
 class ProcessCapture:
-    def __init__(self, command: str | list[str], out_dir: Path, *, cwd: str | None = None) -> None:
+    def __init__(self, command: str | list[str], out_dir: Path, *, cwd: str | None = None, emit=None) -> None:
         self.command = command
         self.out_dir = out_dir
         self.cwd = cwd
+        # Optional event hook (EventBus.publish-shaped); publishing never raises.
+        self._emit = emit
 
         self.proc: subprocess.Popen | None = None
         self._threads: list[threading.Thread] = []
@@ -102,6 +104,8 @@ class ProcessCapture:
                         if self._merged and not self._closed:
                             self._merged.write(stamp)
                             self.lines += 1
+                    if self._emit:
+                        self._emit("log_line", stream=tag, line=line.rstrip("\n"))
             finally:
                 raw.close()
 

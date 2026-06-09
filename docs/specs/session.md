@@ -10,7 +10,7 @@ The session scope defines `CaptureSession`, the orchestrator for a single captur
 
 - `src/capture_mcp/core/session.py` — the `CaptureSession` class (the entire scope).
 
-Dependencies it imports (owned by other scopes, not specced here): `capture_mcp.core.platform` (for `current().window_finder`, see [platform-abstraction.md](platform-abstraction.md)), `capture_mcp.core.audio.AudioCapture`, `capture_mcp.core.proc.ProcessCapture`, `capture_mcp.core.screenshots.Screenshotter` / `parse_resolution`, and `capture_mcp.core.util` (`fs_stamp`, `iso`, `now`).
+Dependencies it imports (owned by other scopes, not specced here): `capture_mcp.core.platform` (for `current().window_finder`, see [platform-abstraction.md](platform-abstraction.md)), `capture_mcp.core.audio.AudioCapture`, `capture_mcp.core.proc.ProcessCapture`, `capture_mcp.core.screenshots.Screenshotter` / `parse_resolution`, and `capture_mcp.core.util` (`fs_stamp`, `iso`, `now`), and `capture_mcp.core.events` (`EventBus` / `EventsFileWriter`, see [events.md](events.md)).
 
 ## Public contract
 
@@ -45,8 +45,8 @@ The constructor does NOT create directories, start anything, or write files.
 
 ### Methods
 
-- `start() -> dict` (lines 89–124) — starts the session, returns `summary()`. Raises `RuntimeError` if not in `created` state, or if launch mode fails to start the process. On any component-start failure, rolls back and re-raises. Sets state `"starting"` (and writes `session.json`) before component startup, which runs OUTSIDE the lock.
-- `stop() -> dict` (lines 117–134) — stops the session, returns `summary()`. Idempotent for non-`running` states (returns current summary without changing state).
+- `start() -> dict` (lines 97–142) — starts the session, returns `summary()`. Raises `RuntimeError` if not in `created` state, or if launch mode fails to start the process. On any component-start failure, rolls back and re-raises. Sets state `"starting"` (and writes `session.json`) before component startup, which runs OUTSIDE the lock.
+- `stop() -> dict` (lines 144–164) — stops the session, returns `summary()`. Idempotent for non-`running` states (returns current summary without changing state).
 - `summary() -> dict` (lines 208–226) — see "Outputs / artifacts" for exact fields.
 - `_stop_components() -> int | None` (lines 136–153) — internal best-effort teardown; returns process exit code or `None`. (Not part of external API but documented in focus notes.)
 - `_resolve_target()`, `_start_screenshots()`, `_start_audio()`, `_write_metadata()` — internal helpers.
@@ -71,9 +71,11 @@ The constructor does NOT create directories, start anything, or write files.
    c. If `capture_screenshots`, call `_start_screenshots()` (lines 102–103).
    d. If `capture_audio`, call `_start_audio()` (lines 104–105).
 6. On ANY exception in the try: call `_stop_components()`, then under the lock set `state = "error"` and write metadata, and re-raise. This is the partial-start rollback.
-7. On success: under the lock set `state = "running"` and write metadata; log an info line; return `summary()`.
+7. On success: under the lock set `state = "running"` and write metadata; publish the `"running"` state event; log an info line; return `summary()`.
 
-Only the `created`-check / `mkdir` / `t0` / `"starting"` transition runs under `self._lock` (with a `session.json` write recording `"starting"`). Component startup — `_resolve_target`, screenshots, audio/ASR load — runs OUTSIDE the lock, mirroring `stop()`'s teardown, so concurrent `stop()`/state reads return immediately observing `"starting"`. The `"error"` and `"running"` transitions re-take the lock.
+Each state transition also publishes a `state` event on `self.events` (an `EventBus`, public attribute) and the error/stopped paths close the `events.jsonl` writer (final snapshot) — see [events.md](events.md). Components receive `emit=self.events.publish`.
+
+Only the `created`-check / `mkdir` / `t0` / `"starting"` transition runs under `self._lock` (with a `session.json` write recording `"starting"`, the `events.jsonl` writer start, and the `"starting"` state event publish). Component startup — `_resolve_target`, screenshots, audio/ASR load — runs OUTSIDE the lock, mirroring `stop()`'s teardown, so concurrent `stop()`/state reads return immediately observing `"starting"`. The `"error"` and `"running"` transitions re-take the lock.
 
 ### `_resolve_target()` (lines 157–176)
 1. If `command` is set: create `ProcessCapture(command, dir, cwd=cwd)`, attempt `self.pid = self._proc.start()`. On exception, set `self._proc = None`, append `f"launch failed: {e}"` to notes, log the exception, and return (lines 158–166). (The launch-mode guard in `start()` then converts this into a raised error.)

@@ -11,18 +11,21 @@ Layout of a session directory::
         transcript.jsonl    {start,end,offset,text} per recognized segment
         transcript.txt      human-readable, timestamped
         audio.s16le         raw captured audio (16 kHz mono s16le)
+        events.jsonl        state transitions + periodic counter snapshots
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import secrets
 import threading
 from pathlib import Path
 
 from . import platform as _platform
 from .audio import AudioCapture
+from .events import EventBus, EventsFileWriter
 from .proc import ProcessCapture
 from .screenshots import Screenshotter, parse_resolution
 from .util import fs_stamp, iso, now
@@ -84,6 +87,11 @@ class CaptureSession:
         self._audio: AudioCapture | None = None
         self._lock = threading.Lock()
 
+        # Event surface (M0b): components publish to the bus; the writer tails
+        # it into <dir>/events.jsonl (state transitions + counter snapshots).
+        self.events = EventBus()
+        self._events_writer: EventsFileWriter | None = None
+
     # -- public api -----------------------------------------------------------
 
     def start(self) -> dict:
@@ -94,6 +102,14 @@ class CaptureSession:
             self.t0 = now()
             self.state = "starting"
             self._write_metadata()
+            self._events_writer = EventsFileWriter(
+                self.dir / "events.jsonl",
+                self.events,
+                self.summary,
+                interval=float(os.environ.get("CAPTURE_EVENTS_SNAPSHOT_SECONDS", "5.0")),
+            )
+            self._events_writer.start()
+            self.events.publish("state", state="starting", session_id=self.id)
 
         # Component startup can be slow (subprocess launch, ASR model load) and
         # runs OUTSIDE the lock — mirroring stop()'s teardown — so concurrent
@@ -114,11 +130,14 @@ class CaptureSession:
             with self._lock:
                 self.state = "error"
                 self._write_metadata()
+            self.events.publish("state", state="error", session_id=self.id)
+            self._close_events()
             raise
 
         with self._lock:
             self.state = "running"
             self._write_metadata()
+        self.events.publish("state", state="running", session_id=self.id)
         log.info("session %s started in %s (pid=%s)", self.id, self.dir, self.pid)
         return self.summary()
 
@@ -127,6 +146,7 @@ class CaptureSession:
             if self.state not in ("running",):
                 return self.summary()
             self.state = "stopping"
+        self.events.publish("state", state="stopping", session_id=self.id)
 
         # Heavy component teardown runs outside the lock so it never blocks
         # status queries; the final state transition re-takes the lock.
@@ -138,8 +158,18 @@ class CaptureSession:
             self.t1 = now()
             self.state = "stopped"
             self._write_metadata()
+        self.events.publish("state", state="stopped", session_id=self.id)
+        self._close_events()
         log.info("session %s stopped", self.id)
         return self.summary()
+
+    def _close_events(self) -> None:
+        if self._events_writer:
+            try:
+                self._events_writer.stop()
+            except Exception:
+                log.exception("events writer stop failed")
+            self._events_writer = None
 
     def _stop_components(self) -> int | None:
         """Stop any started capture components, best-effort. Returns proc rc."""
@@ -164,7 +194,7 @@ class CaptureSession:
 
     def _resolve_target(self) -> None:
         if self.command:
-            self._proc = ProcessCapture(self.command, self.dir, cwd=self.cwd)
+            self._proc = ProcessCapture(self.command, self.dir, cwd=self.cwd, emit=self.events.publish)
             try:
                 self.pid = self._proc.start()
             except Exception as e:
@@ -194,6 +224,7 @@ class CaptureSession:
             fmt=self.screenshot_format,
             resolution=self.screenshot_resolution,
             jpeg_quality=self.screenshot_jpeg_quality,
+            emit=self.events.publish,
         )
         self._shots.start()
 
@@ -206,6 +237,7 @@ class CaptureSession:
             chunk_seconds=self.audio_chunk_seconds,
             asr_backend=self.asr_backend,
             t0=self.t0,
+            emit=self.events.publish,
         )
         self._audio.start()
         if self._audio.status.startswith("asr-unavailable") or self._audio.status == "no-audio-source":

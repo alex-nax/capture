@@ -32,8 +32,8 @@ frontend. `core/` imports no frontend code.
 
 **[planned]** Target layout (names indicative):
 
-- `capture_mcp/core/` — **[current]** engine + `registry.py`; **[planned]** new
-  `events.py` (EventBus, M0b) and `permissions.py` (preflight, M2).
+- `capture_mcp/core/` — **[current]** engine + `registry.py` + `events.py` (EventBus +
+  per-session `events.jsonl`, M0b); **[planned]** `permissions.py` (preflight, M2).
 - `capture/daemon/` — `captured`: aiohttp HTTP+WebSocket `/v1` API over a unix domain
   socket (macOS/Linux) or 127.0.0.1 (Windows).
 - `capture/mcp/` — thin MCP server: daemon-first, embedded-engine fallback.
@@ -174,7 +174,8 @@ Live backlog for this scope (roadmap features #25–#35 in `features.json`):
 
 - **M0a done 2026-06-10** (#25): package split, SessionRegistry + disk-backed
   history (`CAPTURE_SESSION_INDEX`), `start()` lock fix (`"starting"` state).
-  Remaining M0: EventBus + per-session `events.jsonl` (#26).
+- **M0b done 2026-06-10** (#26): EventBus + per-session `events.jsonl`
+  (state transitions + counter snapshots; see [events.md](events.md)).
 - Contract fixtures + frozen `helper-contract.md`; fix the `audiocap.swift:14` "first
   line is READY" comment lie (READY is emitted later; probes must scan stderr) (#27).
 - `asr/openai_compat.py` + `minimal` extra — any `/v1/audio/transcriptions` endpoint
