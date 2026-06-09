@@ -176,8 +176,10 @@ Live backlog for this scope (roadmap features #25–#35 in `features.json`):
   history (`CAPTURE_SESSION_INDEX`), `start()` lock fix (`"starting"` state).
 - **M0b done 2026-06-10** (#26): EventBus + per-session `events.jsonl`
   (state transitions + counter snapshots; see [events.md](events.md)).
-- Contract fixtures + frozen `helper-contract.md`; fix the `audiocap.swift:14` "first
-  line is READY" comment lie (READY is emitted later; probes must scan stderr) (#27).
+- **M0c done 2026-06-10** (#27): `tests/contract/` (tools/list, session-dir layout,
+  PCM chunk-math goldens + `--regen`), frozen [helper-contract.md](helper-contract.md),
+  `audiocap.swift` READY comment fixed (scan stderr, not line 1), `audiocap_win.py`
+  shutdown NameError fixed.
 - `asr/openai_compat.py` + `minimal` extra — any `/v1/audio/transcriptions` endpoint
   (incl. the Nemotron WSL2 lab) becomes a plain remote backend (#28).
 - `list_windows` MCP tool (#29).

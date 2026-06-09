@@ -11,7 +11,11 @@
 //   audiocap --bundle <bundle.id> [--rate 16000]
 //
 // stdout : raw PCM (s16le, mono, <rate> Hz) — pipe this.
-// stderr : human-readable status; first line is "READY rate=<n> channels=1 fmt=s16le".
+// stderr : human-readable status. Diagnostics (content counts, target) come
+//          first; "READY rate=<n> channels=1 fmt=s16le target=..." is emitted
+//          once startCapture succeeds (and again on reconnects). Parents must
+//          SCAN stderr lines for the READY prefix, not read line 1.
+//          Frozen protocol: docs/specs/helper-contract.md.
 //
 // Requires the Screen Recording permission (System Settings ▸ Privacy &
 // Security ▸ Screen Recording) for the process that launches this helper.

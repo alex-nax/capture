@@ -247,6 +247,9 @@ This scope writes **no files of its own**. All on-disk artifacts (screenshots,
   `"starting"`, status returns while start is in flight), and the disk-backed
   history rebuild (see [session-registry.md](session-registry.md) Tests). The suite
   sets `CAPTURE_SESSION_INDEX` to a temp path before importing `server`.
+- `tests/contract/run_contracts.py` pins the tools/list contract (tool names +
+  input schemas, descriptions excluded) against `tests/contract/golden/`; it
+  fails on drift and regenerates with `--regen` after an intentional change.
 - Still uncovered here: `_present` blank-string semantics, multiple-running stop
   dispatch, prune-at-bound behavior, and the async/offload contract (no stdout
   writes) — open items.

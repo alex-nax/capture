@@ -7,10 +7,13 @@ on stderr (a ``READY ...`` line, matching the helper contract in
 ``docs/architecture.md``). Used by ``platform.windows.Win32AudioSource``.
 
 Robustness (mirrors the macOS helper's -3805 auto-reconnect): the capture loop
-**reopens the loopback stream** on any read error, and a watchdog reopens it if no
-data arrives for a while (a long silent stretch can leave a WASAPI loopback stream
-wedged). This keeps a multi-video / hour-long capture alive. Captures the full output
-mix, not a single process — true per-app WASAPI **process** loopback is a future item.
+**reopens the loopback stream** on any read error. This keeps a multi-video /
+hour-long capture alive. (``--stall-timeout`` is accepted for interface stability
+but currently unused — a no-data watchdog is an open item; blocking reads during
+silence are normally fine because WASAPI loopback delivers silence frames.)
+Captures the full output mix, not a single process — true per-app WASAPI
+**process** loopback is a future item (feature #34). Frozen protocol:
+``docs/specs/helper-contract.md``.
 
 Run with the project venv python (needs ``pyaudiowpatch`` + ``numpy``):
 
@@ -171,13 +174,12 @@ def main() -> int:
             pos = 0.0
             continue
 
-    with state["lock"]:
-        try:
-            if state["stream"] is not None:
-                state["stream"].stop_stream()
-                state["stream"].close()
-        except Exception:
-            pass
+    try:
+        if stream is not None:
+            stream.stop_stream()
+            stream.close()
+    except Exception:
+        pass
     p.terminate()
     return 0
 

@@ -1,5 +1,38 @@
 # Progress Log
 
+## Session 13 — 2026-06-10
+**Agent**: builder (macOS box, ultracode, branch **v2**)
+**Summary**: Built **feature #27 (M0c — contract fixtures + frozen helper contract)**. The
+frozen interfaces now have a regression gate before any daemon/GUI layering starts.
+- **`tests/contract/run_contracts.py` + `golden/`** (standalone, no pytest): pins
+  (1) **tools/list** — tool names + input schemas, descriptions stripped so doc edits aren't
+  contract breaks; (2) **session-dir layout** — file set, session.json key structure,
+  events.jsonl event keys + state sequence + final-line type (OS-neutral: key names only, no
+  timestamps/paths/counts); (3) **PCM chunk math** — 20s @ 8s windows → exactly 3 segments,
+  start_offsets [0.5, 8.5, 16.5], end_offsets [7.5, 15.5, 19.5], 640000 raw bytes. Drift →
+  exit 1 with a mini-diff and a pointer to `--regen` (which requires the matching spec update).
+- **`docs/specs/helper-contract.md` (new, FROZEN)**: the process-boundary protocol all audio
+  helpers speak — argv; PCM-only stdout (16kHz mono s16le, unbuffered); stderr `READY ` line
+  **scanned, not line 1** (diagnostics precede it); exit codes 0/1/2 (+3/4/5 macOS startup);
+  -3801/-3803 fatal vs -3805 reconnect-with-backoff taxonomy; Windows reopen-on-error analogue.
+  The planned native Windows per-process helper (#34) must be a drop-in behind this file.
+- **Drift fixed while freezing**: `audiocap.swift` header comment claimed "first line is READY"
+  (false — content/target diagnostics come first) → rewritten; **`audiocap_win.py` shutdown
+  referenced a nonexistent `state` dict → NameError on SIGTERM/SIGINT** → fixed to close the
+  actual stream; its docstring claimed a stall watchdog that doesn't exist → docstring now says
+  `--stall-timeout` is reserved/unused (open item).
+- Docs wired: specs README index row; screencapturekit-helper.md points at the frozen contract;
+  mcp-server.md Tests + AGENTS.md + capture-continue skill mention the contract runner;
+  product-architecture.md M0c → done.
+**Verification**: smoke **35/35**; contracts **3/3 hold**; injected golden drift → exit 1 (then
+restored); `audiocap_win.py` py_compile clean; `audiocap.swift` compiles to a temp path (the
+stably-signed `helper/audiocap` binary was NOT touched — TCC grant intact).
+**Known issues / next**: helper protocol verification is still manual (folds into #31 `capture
+doctor`); per-OS golden variance unproven until the Windows box runs the suite. **Next**: #28
+(openai_compat ASR + minimal extra), #29 (list_windows tool), or #30 (TCC spike, needs clean VM).
+
+---
+
 ## Session 12 — 2026-06-10
 **Agent**: builder (macOS box, ultracode, branch **v2**)
 **Summary**: Built **feature #26 (M0b — EventBus + per-session events.jsonl)**, completing M0

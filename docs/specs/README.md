@@ -29,6 +29,7 @@ Workflow:
 | Audio | [audio.md](audio.md) | Source selection (app helper / mic ffmpeg); 16 kHz mono s16le contract; chunking + offsets; first-byte epoch anchoring; transcripts; reader/stop ordering; failure-status surfacing |
 | ASR | [asr.md](asr.md) | `ASRBackend` interface; `create()` factory + auto-fallback; local Whisper (mlx/faster); remote Riva/Nemotron |
 | Windows | [windows.md](windows.md) | Quartz `CGWindowList` discovery (pid/app → `CGWindowID`); layer-0/largest-first; on-screen→all-windows cross-Space fallback |
+| Helper contract (frozen) | [helper-contract.md](helper-contract.md) | Process-boundary protocol for ALL audio helpers: argv; PCM-only stdout (16 kHz mono s16le); `READY` scanned (not line 1) on stderr; exit codes; `-3801`/`-3803` fatal vs `-3805` reconnect |
 | ScreenCaptureKit helper | [screencapturekit-helper.md](screencapturekit-helper.md) | `audiocap` CLI; stdout PCM + stderr status contract; `AVAudioConverter`; `-3805` auto-reconnect; shutdown guard; signals |
 | Permissions & signing | [permissions-and-signing.md](permissions-and-signing.md) | Screen Recording (TCC); stable self-signed identity; `build_helper` signing; `-3805` (transient) vs `-3801`/`-3803` (permission) |
 | Platform abstraction | [platform-abstraction.md](platform-abstraction.md) | `WindowFinder`/`ScreenGrabber`/`AudioSource` interfaces + `current()` factory; macOS (screencapture/Quartz/helper) and Windows (GDI+/`EnumWindows`/ctypes) backends; macOS+Windows support |

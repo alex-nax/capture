@@ -1,0 +1,179 @@
+[
+  {
+    "inputSchema": {
+      "properties": {
+        "app_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "App Name"
+        },
+        "asr_backend": {
+          "default": "auto",
+          "title": "Asr Backend",
+          "type": "string"
+        },
+        "audio_chunk_seconds": {
+          "default": 8.0,
+          "title": "Audio Chunk Seconds",
+          "type": "number"
+        },
+        "audio_source": {
+          "default": "auto",
+          "title": "Audio Source",
+          "type": "string"
+        },
+        "bundle_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bundle Id"
+        },
+        "capture_audio": {
+          "default": true,
+          "title": "Capture Audio",
+          "type": "boolean"
+        },
+        "capture_screenshots": {
+          "default": true,
+          "title": "Capture Screenshots",
+          "type": "boolean"
+        },
+        "command": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Command"
+        },
+        "cwd": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cwd"
+        },
+        "output_dir": {
+          "title": "Output Dir",
+          "type": "string"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pid"
+        },
+        "screenshot_format": {
+          "default": "png",
+          "title": "Screenshot Format",
+          "type": "string"
+        },
+        "screenshot_interval": {
+          "default": 1.0,
+          "title": "Screenshot Interval",
+          "type": "number"
+        },
+        "screenshot_jpeg_quality": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Screenshot Jpeg Quality"
+        },
+        "screenshot_resolution": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Screenshot Resolution"
+        }
+      },
+      "required": [
+        "output_dir"
+      ],
+      "title": "capture_startArguments",
+      "type": "object"
+    },
+    "name": "capture_start"
+  },
+  {
+    "inputSchema": {
+      "properties": {
+        "session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Session Id"
+        }
+      },
+      "title": "capture_stopArguments",
+      "type": "object"
+    },
+    "name": "capture_stop"
+  },
+  {
+    "inputSchema": {
+      "properties": {
+        "session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Session Id"
+        }
+      },
+      "title": "capture_statusArguments",
+      "type": "object"
+    },
+    "name": "capture_status"
+  }
+]

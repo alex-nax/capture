@@ -333,10 +333,10 @@
       "priority": "high",
       "description": "M0c — contract fixtures + frozen helper contract: tests/contract/ with a golden MCP tools/list schema dump, a recorded StubASR session-dir fixture (session.json + transcript.jsonl + events.jsonl layout), and PCM chunk/offset fixtures for the 8s-window logic; docs/specs/helper-contract.md freezing the audiocap protocol (argv, 16kHz mono s16le PCM on stdout, READY scanned on stderr, -3801/-3803 fatal vs -3805 transient); fix the audiocap.swift:14 'first line is READY' comment lie.",
       "acceptance_criteria": [
-        "Contract tests pass against current code and fail on schema/layout drift",
-        "helper-contract.md exists and matches audiocap.swift + audiocap_win.py reality"
+        "Contract tests pass against current code and fail on schema/layout drift (DONE; 3/3 hold, injected drift exits 1, --regen path works)",
+        "helper-contract.md exists and matches audiocap.swift + audiocap_win.py reality (DONE; also fixed the READY comment lie, the audiocap_win shutdown NameError, and the phantom-watchdog docstring)"
       ],
-      "passes": false,
+      "passes": true,
       "dependencies": [25, 26]
     },
     {

@@ -50,6 +50,9 @@ intent, then the code to know reality, and the two must agree.
   screenshots, async MCP tools, audio chunking/offsets (stub ASR), `parse_resolution`.
 - **Real ASR:** `say -o /tmp/s.aiff "hello world"; ffmpeg -i /tmp/s.aiff -ac 1 -ar 16000 -f s16le /tmp/s.s16le`
   then run a chunk through `capture_mcp.core.asr.whisper_local.MlxWhisper(model="mlx-community/whisper-tiny")`.
+- **Contract tests**: `python tests/contract/run_contracts.py` — pins tools/list schemas,
+  session-dir layout, and PCM chunk math against `tests/contract/golden/`. Fails on drift;
+  after an INTENTIONAL interface change update the spec, then `--regen`.
 - **Swift helper:** `bash scripts/build_helper.sh` then `./helper/audiocap --system --rate 16000`
   — expect a `READY ...` line on stderr and PCM bytes on stdout (needs Screen Recording).
 - **End-to-end window+audio:** attach to a real app by `pid` and confirm screenshots land in
