@@ -301,6 +301,144 @@
       ],
       "passes": true,
       "dependencies": [1]
+    },
+    {
+      "id": 25,
+      "category": "core",
+      "priority": "high",
+      "description": "M0a — engine/MCP package split + SessionRegistry: move engine modules to capture/core (verbatim), thin capture/mcp server; extract the _sessions dict/_prune_locked from server.py into a SessionRegistry that rebuilds history from <output_dir>/capture-*/session.json at startup; fix start() holding session._lock through slow component startup (add a 'starting' state, start components outside the lock, mirroring stop()). See docs/specs/product-architecture.md.",
+      "acceptance_criteria": [
+        "MCP behavior identical: tools/list schemas unchanged, smoke 20/20",
+        "Server restart no longer loses session history (registry rebuilt from session.json files)",
+        "capture-mcp console script still works; capture_status responds while another session is starting"
+      ],
+      "passes": false,
+      "dependencies": [8, 11]
+    },
+    {
+      "id": 26,
+      "category": "core",
+      "priority": "medium",
+      "description": "M0b — EventBus + per-session events.jsonl: components push screenshot_taken/transcript_segment/log_line/state events alongside today's polled counters; CaptureSession appends an append-only events.jsonl per session (state transitions + periodic counter snapshots) so future GUI/daemon clients tail one file instead of fs-watching.",
+      "acceptance_criteria": [
+        "A smoke capture produces events.jsonl with state transitions and counter snapshots",
+        "Existing polling (capture_status/summary()) unchanged"
+      ],
+      "passes": false,
+      "dependencies": [25]
+    },
+    {
+      "id": 27,
+      "category": "testing",
+      "priority": "high",
+      "description": "M0c — contract fixtures + frozen helper contract: tests/contract/ with a golden MCP tools/list schema dump, a recorded StubASR session-dir fixture (session.json + transcript.jsonl + events.jsonl layout), and PCM chunk/offset fixtures for the 8s-window logic; docs/specs/helper-contract.md freezing the audiocap protocol (argv, 16kHz mono s16le PCM on stdout, READY scanned on stderr, -3801/-3803 fatal vs -3805 transient); fix the audiocap.swift:14 'first line is READY' comment lie.",
+      "acceptance_criteria": [
+        "Contract tests pass against current code and fail on schema/layout drift",
+        "helper-contract.md exists and matches audiocap.swift + audiocap_win.py reality"
+      ],
+      "passes": false,
+      "dependencies": [25, 26]
+    },
+    {
+      "id": 28,
+      "category": "asr",
+      "priority": "medium",
+      "description": "asr/openai_compat.py — small backend POSTing WAV-wrapped PCM to any OpenAI-compatible /v1/audio/transcriptions endpoint, plus a 'minimal' extra in pyproject.toml (screenshots+logs-only install). Turns the Nemotron WSL2/Docker lab into a plain remote endpoint.",
+      "acceptance_criteria": [
+        "asr_backend pointing at a compatible endpoint yields timestamped transcript segments",
+        "pip install 'capture-mcp[minimal]' captures screenshots+logs with no ASR deps"
+      ],
+      "passes": false,
+      "dependencies": [7]
+    },
+    {
+      "id": 29,
+      "category": "core",
+      "priority": "medium",
+      "description": "list_windows MCP tool — expose WindowFinder discovery (title, app, pid, window id, bounds) so agents get the same window picker the GUI will use.",
+      "acceptance_criteria": [
+        "tools/list shows list_windows; returns layer-0 windows largest-first on macOS and EnumWindows results on Windows"
+      ],
+      "passes": false,
+      "dependencies": [20]
+    },
+    {
+      "id": 30,
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "TCC attribution spike (GATES the daemon architecture): on a clean macOS 14 and 15 VM, verify that a launchd-agent-spawned, Developer-ID-signed PyInstaller daemon is the TCC-responsible process for Screen Recording, that the grant persists across app updates (same Team ID + bundle id), the daemon-restart-after-grant flow, and the macOS 15 periodic re-approval behavior. Document as a repeatable checklist in docs/specs/product-architecture.md.",
+      "acceptance_criteria": [
+        "Written spike report: attribution works (or the documented fallback decision if it does not)",
+        "Grant survives a simulated app update with unchanged Team ID/bundle id",
+        "macOS 15 re-approval nag behavior recorded with screenshots"
+      ],
+      "passes": false,
+      "dependencies": [15]
+    },
+    {
+      "id": 31,
+      "category": "infrastructure",
+      "priority": "high",
+      "description": "M1 — packaged signed engine, no GUI: PyInstaller onedir of the engine+MCP, Developer ID + notarization, PREBUILT signed audiocap (kills the swiftc/Xcode-CLT requirement for end users), capture doctor (permission preflight, CGRequestScreenCaptureAccess trigger, System Settings deep link), distributed via brew tap + GitHub releases.",
+      "acceptance_criteria": [
+        "brew install <tap>/capture then 'grant once' yields a working audio capture on a machine with no git/Xcode CLT/Python",
+        "Packaged-bundle smoke: a real capture runs from the installed artifact",
+        "From-source init.sh path still works unchanged"
+      ],
+      "passes": false,
+      "dependencies": [27, 30]
+    },
+    {
+      "id": 32,
+      "category": "core",
+      "priority": "high",
+      "description": "M2 — captured daemon + /v1 API + CLI: aiohttp HTTP+WS over UDS+bearer token (127.0.0.1 on Windows), endpoint discovery via ~/.capture/daemon.json (0600), /v1 surface per docs/specs/product-architecture.md, daemon-level ASR model pool, capture CLI (start/stop/status/tail/doctor/daemon install|uninstall) writing launchd agent / logon task / systemd user unit; MCP server gains daemon-first mode with embedded fallback (CAPTURE_MCP_EMBEDDED=1).",
+      "acceptance_criteria": [
+        "Agent-started capture is visible via CLI status; sessions survive client exits",
+        "One Screen Recording grant (to the daemon) gives working audio from two different terminals' MCP agents",
+        "JSON-Schema round-trip contract tests pass; pydantic schema checked in"
+      ],
+      "passes": false,
+      "dependencies": [31]
+    },
+    {
+      "id": 33,
+      "category": "gui",
+      "priority": "high",
+      "description": "M3 — GPUI app v1 on macOS: tray/menu-bar icon (tray-icon+muda), main window (session list from daemon registry, new-capture form with /v1/windows picker), session detail (live preview via RenderImage with cache eviction, transcript/log tails), onboarding (SMAppService daemon registration, Grant flow with permission.updated push, ends with a visible 5-second self-test capture), Settings (ASR model manager with resumable+SHA256 downloads). GPUI pinned to a frozen zed git rev + compatible gpui-component rev, cargo vendor, quarterly bump policy.",
+      "acceptance_criteria": [
+        "Capture.dmg: drag-install, onboarding to first successful self-test capture without a terminal",
+        "An MCP-agent-started capture appears live in the GUI session list",
+        "Quitting the GUI does not stop a running capture"
+      ],
+      "passes": false,
+      "dependencies": [32]
+    },
+    {
+      "id": 34,
+      "category": "gui",
+      "priority": "medium",
+      "description": "M4 — Windows release: GPUI app on the DX11 backend, Inno Setup installer (+ winget), logon-task daemon install, interactive-station preflight UX, and per-process audio via a NATIVE helper binary (windows-rs, ActivateAudioInterfaceAsync + PROCESS_LOOPBACK with INCLUDE_TARGET_PROCESS_TREE for Chromium-family apps) speaking the frozen 16kHz s16le PCM stdout contract — closes the per-process half of #21. Ship with honest SmartScreen messaging (Trusted Signing unavailable to individuals; OV cert does not clear cold-start).",
+      "acceptance_criteria": [
+        "CaptureSetup-x64.exe installs and first capture works without a terminal",
+        "Per-process loopback isolates a Chromium app's audio while other apps play sound",
+        "GUI labels system-mix vs per-process source correctly"
+      ],
+      "passes": false,
+      "dependencies": [21, 27, 33]
+    },
+    {
+      "id": 35,
+      "category": "infrastructure",
+      "priority": "medium",
+      "description": "M5 — Linux: third platform backend (X11 window discovery + screenshots first; Wayland via xdg-desktop-portal ScreenCast — picker-only targeting, persistent share indicator, re-persisted restore tokens, documented app_name degradation; PipeWire per-app audio with a reconnect-tracking helper using -3805-style semantics), systemd user unit, then GPUI app on wgpu (Vulkan requirement documented; engine artifact must not link GPUI so headless/SSH agents keep working).",
+      "acceptance_criteria": [
+        "MCP agent captures screenshots+logs on X11 Linux with no GUI installed",
+        "Wayland capture works through the portal flow with documented semantics",
+        "PipeWire per-app audio yields a transcript for a target app while another app plays sound"
+      ],
+      "passes": false,
+      "dependencies": [20, 32]
     }
   ]
 }

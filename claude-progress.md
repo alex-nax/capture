@@ -1,5 +1,42 @@
 # Progress Log
 
+## Session 10 — 2026-06-10
+**Agent**: designer (macOS box, ultracode)
+**Summary**: Decided the product direction for taking capture-mcp beyond agent-only use (easy
+install, GUI, multi-OS) via a 12-agent design study (4 codebase readers + GPUI web research +
+3 independent proposals + 3-lens judge panel + completeness critic). Owner constraints fixed
+during the session: **native GUI only — no web UI/webview ever; the GUI is GPUI (Zed's Rust
+framework); MCP stays first-class**.
+- **Decision — daemon-peers architecture**: extract the engine into a signed `captured` daemon
+  with a versioned local `/v1` HTTP+WS API (UDS+token; 127.0.0.1 on Windows); GPUI app, MCP
+  server, and a new CLI are thin peer clients. Won 2-of-3 judge lenses. Key wins: sessions
+  survive client restarts (GUI quit ≠ dead meeting capture), and the daemon becomes the
+  TCC-responsible process so **one** Screen Recording grant covers every terminal's agent +
+  GUI + cron — dissolving the worst documented pain in permissions-and-signing.md. Rejected:
+  GUI-owned Python sidecar (kills live captures with the GUI; defers the TCC fix), full Rust
+  engine port (~2× premium, parity risk on PrintWindow/DPI-ladder/WASAPI-reconnect; kept as a
+  contract-preserving later option behind /v1).
+- **Spec**: new `docs/specs/product-architecture.md` (decision record + plan, [current] vs
+  [planned] marked) + index row. Captures the critic's load-bearing findings: TCC csreq pins
+  Team ID + bundle id (cert renewal safe, bundle-id churn not); macOS 15 periodic re-approval
+  breaks "grant once forever"; Azure Trusted Signing unavailable to individuals (v1 Windows
+  ships with SmartScreen warnings); Wayland portal can't target windows by name (app_name
+  degrades); no machine-wide session index exists today (GUI history needs a capture root);
+  Windows per-process loopback must be a native helper with PROCESS_TREE mode, not Python
+  ctypes async-COM.
+- **features.json**: seeded #25–#35 — M0 split (registry/EventBus/events.jsonl/lock fix #25–26),
+  contract fixtures + frozen helper-contract.md (#27), asr/openai_compat.py + minimal extra
+  (#28), list_windows MCP tool (#29), **clean-VM TCC attribution spike that gates the daemon
+  bet (#30)**, M1 packaged signed engine via brew (#31), M2 daemon+CLI (#32), M3 GPUI macOS
+  app (#33), M4 Windows + native per-process-loopback helper (#34), M5 Linux (#35).
+**Verification**: design-only session — no engine code touched; smoke not rerun. Full study
+artifacts (3 proposals, 3 verdicts, 33-finding critique) in /tmp/wf_design/ (ephemeral; the
+spec + features.json carry everything durable).
+**Next suggested task**: #25 (M0a package split + SessionRegistry — pure refactor, agents see
+zero change), then #30 (TCC spike) before any packaging work; #28/#29 are cheap independent wins.
+
+---
+
 ## Session 9 — 2026-06-08
 **Agent**: builder (macOS box)
 **Summary**: Used capture live to transcribe a Google Meet standup (per-app audio via
