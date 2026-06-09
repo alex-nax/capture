@@ -5,8 +5,8 @@ _Status: current as of 2026-06-10. Source of truth = the code; update this spec 
 ## Purpose
 
 The MCP server is the entrypoint and orchestration layer for capture-mcp. It exposes
-on-demand process capture to an MCP client over stdio as three tools
-(`capture_start`, `capture_stop`, `capture_status`). It validates arguments,
+on-demand process capture to an MCP client over stdio as four tools
+(`capture_start`, `capture_stop`, `capture_status`, `list_windows`). It validates arguments,
 constructs `CaptureSession` objects and tracks them via the shared
 `core.registry.SessionRegistry` (bounded live tracking + disk-backed history — see
 [session-registry.md](session-registry.md)), and offloads all blocking work to worker
@@ -95,6 +95,22 @@ Returns a `dict`:
 - If omitted: `{"sessions": registry.summaries()}` — every session this server has
   created **plus** finished sessions recovered from the on-disk index at startup,
   oldest first, up to the registry bound.
+
+### Tool: `list_windows` (`server.py:188-202`)
+
+Async handler (added in feature #29). Parameters:
+
+- `app_name: str | None = None` — case-insensitive substring filter.
+- `pid: int | None = None` — process id filter.
+
+Returns `{"windows": [...], "count": <len>}` where each entry is a JSON-ready
+dict with keys `window_id`, `pid`, `app_name`, `title`, `width`, `height`,
+ordered largest-area first (the first match is what `capture_start` would
+target). Backed by `core.list_windows()` -> `platform.current().window_finder
+.find()` (the same picker the daemon's `/v1/windows` and the GUI will use),
+offloaded via `anyio.to_thread.run_sync`. May be empty (no error). Note: on
+macOS without the Screen Recording grant, window titles can be empty
+strings — fields are stable, contents permission-dependent.
 
 ### Errors
 
@@ -249,7 +265,8 @@ This scope writes **no files of its own**. All on-disk artifacts (screenshots,
   sets `CAPTURE_SESSION_INDEX` to a temp path before importing `server`.
 - `tests/contract/run_contracts.py` pins the tools/list contract (tool names +
   input schemas, descriptions excluded) against `tests/contract/golden/`; it
-  fails on drift and regenerates with `--regen` after an intentional change.
+  fails on drift and regenerates with `--regen` after an intentional change
+  (done for the `list_windows` addition, feature #29).
 - Still uncovered here: `_present` blank-string semantics, multiple-running stop
   dispatch, prune-at-bound behavior, and the async/offload contract (no stdout
   writes) — open items.

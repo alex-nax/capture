@@ -175,5 +175,38 @@
       "type": "object"
     },
     "name": "capture_status"
+  },
+  {
+    "inputSchema": {
+      "properties": {
+        "app_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "App Name"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pid"
+        }
+      },
+      "title": "list_windowsArguments",
+      "type": "object"
+    },
+    "name": "list_windows"
   }
 ]

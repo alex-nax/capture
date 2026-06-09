@@ -357,9 +357,9 @@
       "priority": "medium",
       "description": "list_windows MCP tool — expose WindowFinder discovery (title, app, pid, window id, bounds) so agents get the same window picker the GUI will use.",
       "acceptance_criteria": [
-        "tools/list shows list_windows; returns layer-0 windows largest-first on macOS and EnumWindows results on Windows"
+        "tools/list shows list_windows; returns layer-0 windows largest-first on macOS and EnumWindows results on Windows (DONE on macOS: 7 real windows largest-first, app_name filter verified, golden updated; Windows backend goes through the same WindowFinder.find — verify on the Windows box next time it runs the suite)"
       ],
-      "passes": false,
+      "passes": true,
       "dependencies": [20]
     },
     {

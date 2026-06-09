@@ -20,6 +20,7 @@ import sys
 import anyio
 from mcp.server.fastmcp import FastMCP
 
+from .core import list_windows as _list_windows
 from .core.registry import SessionRegistry
 from .core.session import CaptureSession
 
@@ -183,6 +184,22 @@ async def capture_status(session_id: str | None = None) -> dict:
             raise ValueError(f"unknown session_id {session_id!r}")
         return summary
     return {"sessions": registry.summaries()}
+
+
+@mcp.tool()
+async def list_windows(app_name: str | None = None, pid: int | None = None) -> dict:
+    """List on-screen top-level windows (the picker for capture targets).
+
+    Use this to discover what `capture_start` can attach to: each entry has
+    `window_id`, `pid`, `app_name`, `title`, `width`, `height`, ordered
+    largest-first (the first match is what `capture_start` would target).
+
+    Args:
+        app_name: Optional case-insensitive substring filter (e.g. "Safari").
+        pid: Optional process id filter.
+    """
+    windows = await anyio.to_thread.run_sync(lambda: _list_windows(pid=pid, app_name=app_name))
+    return {"windows": windows, "count": len(windows)}
 
 
 def main() -> None:

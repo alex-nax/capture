@@ -1,5 +1,28 @@
 # Progress Log
 
+## Session 15 — 2026-06-10
+**Agent**: builder (macOS box, ultracode, branch **v2**)
+**Summary**: Built **feature #29 (`list_windows` MCP tool)** — agents now have the same window
+picker the daemon (`/v1/windows`) and GPUI GUI will use.
+- **`core.list_windows(pid=None, app_name=None)` (new)**: JSON-ready dicts (window_id, pid,
+  app_name, title, width, height) from `platform.current().window_finder.find()`, largest-area
+  first; lives in core so MCP/daemon/CLI/GUI all wrap the identical function.
+- **`list_windows` MCP tool**: optional app_name (case-insensitive substring) / pid filters,
+  offloaded via anyio.to_thread; returns `{"windows": [...], "count": n}`; empty result is not
+  an error. Note: without the Screen Recording grant, macOS window titles may be empty strings
+  (fields stable, contents permission-dependent).
+- **Contract workflow exercised for real**: the tools/list golden correctly FAILED on the new
+  tool (2/3), spec updated first (mcp-server.md: four tools + new section), then `--regen` →
+  3/3. This is the intended sequence for every future tool-surface change.
+**Verification**: smoke **43/43** (4 new: shape+count, entry fields, largest-first ordering on 7
+real windows, app_name filter — 'Google Chrome' → 2); contracts 3/3 after regen.
+**Known issues / next**: Windows-side verification of the tool pends the Windows box (same
+WindowFinder seam, expected to just work). **Next**: #30 (TCC attribution spike — NEEDS A CLEAN
+macOS 14/15 VM from Alex; gates #31 packaging and the daemon milestones), or jump to #32 daemon
+groundwork that doesn't depend on the spike.
+
+---
+
 ## Session 14 — 2026-06-10
 **Agent**: builder (macOS box, ultracode, branch **v2**)
 **Summary**: Built **feature #28 (openai-compat remote ASR backend + `minimal` extra)**.

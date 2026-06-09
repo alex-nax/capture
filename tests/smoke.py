@@ -48,7 +48,7 @@ from capture_mcp.core.asr.base import Segment  # noqa: E402
 from capture_mcp.core.registry import SessionRegistry  # noqa: E402
 from capture_mcp.core.screenshots import parse_resolution  # noqa: E402
 from capture_mcp.core.session import CaptureSession  # noqa: E402
-from capture_mcp.server import capture_start, capture_status, capture_stop  # noqa: E402
+from capture_mcp.server import capture_start, capture_status, capture_stop, list_windows  # noqa: E402
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
@@ -334,6 +334,25 @@ def test_registry_history() -> None:
     check("registry: summaries oldest-first", list(by_id) == sorted(by_id))
 
 
+async def test_list_windows() -> None:
+    res = await list_windows()
+    wins = res["windows"]
+    check("windows: shape + count", isinstance(wins, list) and res["count"] == len(wins),
+          f"count={res['count']}")
+    fields = ["app_name", "height", "pid", "title", "width", "window_id"]
+    check("windows: entry fields", all(sorted(w) == fields for w in wins),
+          f"n={len(wins)}")
+    areas = [w["width"] * w["height"] for w in wins]
+    check("windows: largest-first", areas == sorted(areas, reverse=True), f"areas={areas[:5]}")
+    if wins:
+        name = wins[0]["app_name"]
+        sub = await list_windows(app_name=name)
+        ok = sub["count"] >= 1 and all(name.lower() in w["app_name"].lower() for w in sub["windows"])
+        check("windows: app_name filter", ok, f"{name!r} -> {sub['count']}")
+    else:
+        check("windows: app_name filter", True, "skipped (no windows; headless?)")
+
+
 def test_parse_resolution() -> None:
     check("parse: WxH/fmt", parse_resolution("1280x720/jpg") == (1280, 720, "jpg"))
     check("parse: WxH", parse_resolution("640x480") == (640, 480, None))
@@ -355,6 +374,7 @@ async def main() -> int:
         test_openai_compat()
         test_event_bus()
         test_registry_history()
+        await test_list_windows()
         test_parse_resolution()
     finally:
         shutil.rmtree(BASE, ignore_errors=True)

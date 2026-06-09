@@ -61,7 +61,8 @@ These are frozen interfaces that every layer below builds on.
 - Contract firewall: the daemon emits JSON Schema from its pydantic models; the Rust
   client types are generated from that schema (typify); round-trip contract tests run in
   CI from both sides. The MCP server consumes the same schema.
-- New MCP tool `list_windows`, so agents get the same window picker as the GUI.
+- **[current]** MCP tool `list_windows` (#29, 2026-06-10): agents share the engine's
+  window picker (`core.list_windows()`), the same function `/v1/windows` will wrap.
 
 ## Behavior
 
@@ -183,7 +184,7 @@ Live backlog for this scope (roadmap features #25–#35 in `features.json`):
 - **Done 2026-06-10** (#28): `asr/openai_compat.py` (stdlib-only) + `minimal` extra —
   any `/v1/audio/transcriptions` endpoint (incl. the Nemotron WSL2 lab) is a plain
   remote backend via `CAPTURE_OPENAI_ASR_URL`.
-- `list_windows` MCP tool (#29).
+- **Done 2026-06-10** (#29): `list_windows` MCP tool over `core.list_windows()`.
 - **TCC attribution spike on a clean VM — gates the whole daemon architecture** (#30).
 - **M1** packaged signed engine, no GUI: PyInstaller + Developer ID + notarization +
   prebuilt helper + `capture doctor` + brew tap (#31).

@@ -20,7 +20,7 @@ Workflow:
 
 | Scope | Spec | Covers |
 |-------|------|--------|
-| MCP server | [mcp-server.md](mcp-server.md) | FastMCP stdio entrypoint; async `capture_start`/`capture_stop`/`capture_status`; exactly-one-target validation; bounded session registry |
+| MCP server | [mcp-server.md](mcp-server.md) | FastMCP stdio entrypoint; async `capture_start`/`capture_stop`/`capture_status`/`list_windows`; exactly-one-target validation; bounded session registry |
 | Session | [session.md](session.md) | `CaptureSession` lifecycle (created→starting→running→stopping→stopped/error); start/stop rollback; session dir layout; `summary()` + `session.json` |
 | Events | [events.md](events.md) | `EventBus` (publish never raises/blocks; bounded per-subscriber queues) + `EventsFileWriter` (`events.jsonl`: state transitions + counter snapshots, `CAPTURE_EVENTS_SNAPSHOT_SECONDS`); component `emit` hooks |
 | Session registry | [session-registry.md](session-registry.md) | `SessionRegistry` (core/registry.py): bounded live tracking; append-only `sessions.jsonl` index (`CAPTURE_SESSION_INDEX`); history rebuild on restart (stopped/error/interrupted/unknown) |
