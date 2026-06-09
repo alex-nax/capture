@@ -11,10 +11,10 @@ rules, all ASR access goes through this interface and no other module imports a 
 directly.
 
 ## Files
-- `src/capture_mcp/asr/__init__.py` — registry / factory (`create`, `available_backends`); re-exports `ASRBackend`, `Segment`.
-- `src/capture_mcp/asr/base.py` — interface + `Segment` dataclass.
-- `src/capture_mcp/asr/whisper_local.py` — local Whisper backends (`MlxWhisper`, `FasterWhisper`) and their `load()`.
-- `src/capture_mcp/asr/nemotron.py` — remote Riva / Nemotron adapter (`NemotronRiva`) and its `load()`.
+- `src/capture_mcp/core/asr/__init__.py` — registry / factory (`create`, `available_backends`); re-exports `ASRBackend`, `Segment`.
+- `src/capture_mcp/core/asr/base.py` — interface + `Segment` dataclass.
+- `src/capture_mcp/core/asr/whisper_local.py` — local Whisper backends (`MlxWhisper`, `FasterWhisper`) and their `load()`.
+- `src/capture_mcp/core/asr/nemotron.py` — remote Riva / Nemotron adapter (`NemotronRiva`) and its `load()`.
 
 ## Public contract
 

@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from capture_mcp.asr.whisper_local import FasterWhisper  # noqa: E402
+from capture_mcp.core.asr.whisper_local import FasterWhisper  # noqa: E402
 
 
 def fmt(t: float) -> str:

@@ -44,7 +44,7 @@ def main() -> int:
         # Load the model once through the installed backend to trigger the download.
         code = (
             "import numpy as np;"
-            "from capture_mcp.asr.whisper_local import MlxWhisper, FasterWhisper;"
+            "from capture_mcp.core.asr.whisper_local import MlxWhisper, FasterWhisper;"
             f"m={a.model!r};"
             "be=None\n"
             "try:\n"

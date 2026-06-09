@@ -1,5 +1,41 @@
 # Progress Log
 
+## Session 11 — 2026-06-10
+**Agent**: builder (macOS box, ultracode, branch **v2**)
+**Summary**: Built **feature #25 (M0a — engine/MCP package split + SessionRegistry + start()
+lock fix)**, the first roadmap milestone from docs/specs/product-architecture.md.
+- **Package split**: engine modules moved verbatim (`git mv`) to `src/capture_mcp/core/`
+  (session/screenshots/audio/proc/util/windows + platform/ + asr/); `server.py` stays put
+  (console script + `.mcp.json` entries unchanged) and is now a thin frontend. All intra-engine
+  imports were already relative, so the move was clean. New rule in docs/architecture.md:
+  **core/ imports no frontend code**.
+- **`core/registry.py` (new)**: `SessionRegistry` — bounded live tracking (same never-evict-live
+  prune semantics, extracted from server.py) + **disk-backed history**: append-only
+  `~/.capture/sessions.jsonl` index (override `CAPTURE_SESSION_INDEX`; smoke points it at a
+  temp file), rebuilt at construction by re-reading each `session.json`. Recovered states:
+  finished kept as-is; live-at-crash → `interrupted`; missing session.json → `unknown`;
+  corrupt index lines tolerated. `capture_status` now lists recovered sessions;
+  `capture_stop` on a recovered id returns its record (idempotent-stop semantics).
+- **start() lock fix**: new `"starting"` state; component startup (subprocess, ASR load) runs
+  OUTSIDE `session._lock`, mirroring stop(); session.json now also written at `starting` (what
+  makes crash→`interrupted` recovery work). Server registers sessions **pre-start**, so status
+  shows `starting` and failed starts stay visible as `error` instead of vanishing.
+- Scripts/skill imports updated (`capture_youtube_playlist`, `transcribe_audio`,
+  `run_interactive.ps1`, skill `set_model.py`); specs updated in the same change:
+  **new session-registry.md**, mcp-server.md + session.md rewritten where behavior changed,
+  all docs' module paths → `core/`, architecture.md module map, product-architecture.md M0a
+  flipped to [current].
+**Verification**: smoke **28/28** (20 baseline + 8 new: status-visible-during-slow-start,
+status-not-blocked, registry rebuild/interrupted/unknown/ordering); cross-process restart
+verified (proc1 captures+stops → proc2 fresh server sees it, status+stop work);
+`mcp.list_tools()` → same 3 tools, `output_dir` still the only required param.
+**Known issues / next**: stop() during `"starting"` is a documented no-op (auto-stop flag is an
+open item for M2); index file grows unbounded (compaction folded into M2). **Next**: #26 (M0b
+EventBus + events.jsonl), #27 (contract fixtures + helper-contract.md), or #30 (TCC spike —
+gates all packaging).
+
+---
+
 ## Session 10 — 2026-06-10
 **Agent**: designer (macOS box, ultracode)
 **Summary**: Decided the product direction for taking capture-mcp beyond agent-only use (easy

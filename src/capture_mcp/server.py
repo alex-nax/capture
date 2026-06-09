@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import logging
 import sys
-import threading
 
 import anyio
 from mcp.server.fastmcp import FastMCP
 
-from .session import CaptureSession
+from .core.registry import SessionRegistry
+from .core.session import CaptureSession
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,24 +36,10 @@ mcp = FastMCP("capture-mcp")
 # FastMCP runs sync tools ON the event loop, so we declare the handlers async and
 # offload that work with anyio.to_thread.run_sync to keep stdio responsive.
 
-_sessions: dict[str, CaptureSession] = {}
-_lock = threading.Lock()
-MAX_SESSIONS = 100
-
-
-def _prune_locked() -> None:
-    """Evict oldest *finished* sessions to bound retained history. Caller holds _lock.
-
-    Running sessions are never evicted, so this bounds retained finished sessions
-    rather than the absolute registry size (which is fine — concurrent live
-    captures are few).
-    """
-    if len(_sessions) <= MAX_SESSIONS:
-        return
-    # ids are timestamp-prefixed, so lexical order == chronological order.
-    finished = sorted(sid for sid, s in _sessions.items() if s.state != "running")
-    for sid in finished[: len(_sessions) - MAX_SESSIONS]:
-        _sessions.pop(sid, None)
+# Live tracking + disk-backed history (rebuilt from CAPTURE_SESSION_INDEX /
+# ~/.capture/sessions.jsonl at startup) lives in core.registry; this layer
+# only orchestrates.
+registry = SessionRegistry()
 
 
 @mcp.tool()
@@ -142,11 +128,11 @@ async def capture_start(
         asr_backend=asr_backend,
         cwd=cwd,
     )
-    summary = await anyio.to_thread.run_sync(session.start)
-    with _lock:
-        _sessions[session.id] = session
-        _prune_locked()
-    return summary
+    # Register BEFORE the (possibly slow) start so capture_status can already
+    # see the session in state "starting"; a failed start stays visible as
+    # state "error" instead of vanishing.
+    registry.add(session)
+    return await anyio.to_thread.run_sync(session.start)
 
 
 @mcp.tool()
@@ -160,10 +146,8 @@ async def capture_stop(session_id: str | None = None) -> dict:
 
     Returns the final session summary.
     """
-    with _lock:
-        running = [s for s in _sessions.values() if s.state == "running"]
-
     if session_id is None:
+        running = registry.running()
         if not running:
             return {"stopped": [], "note": "no running captures"}
         if len(running) > 1:
@@ -173,11 +157,15 @@ async def capture_stop(session_id: str | None = None) -> dict:
             )
         return await anyio.to_thread.run_sync(running[0].stop)
 
-    with _lock:
-        session = _sessions.get(session_id)
-    if not session:
-        raise ValueError(f"unknown session_id {session_id!r}")
-    return await anyio.to_thread.run_sync(session.stop)
+    session = registry.get(session_id)
+    if session is not None:
+        return await anyio.to_thread.run_sync(session.stop)
+    # A session recovered from a previous server's on-disk history is already
+    # finished — return its record (mirrors stop() on a stopped live session).
+    record = registry.history_record(session_id)
+    if record is not None:
+        return record
+    raise ValueError(f"unknown session_id {session_id!r}")
 
 
 @mcp.tool()
@@ -186,15 +174,15 @@ async def capture_status(session_id: str | None = None) -> dict:
 
     Args:
         session_id: If given, return that session's summary; otherwise return a
-            list of all sessions this server has created.
+            list of all sessions this server knows about — those it created
+            plus finished ones recovered from the on-disk index at startup.
     """
-    with _lock:
-        if session_id is not None:
-            session = _sessions.get(session_id)
-            if not session:
-                raise ValueError(f"unknown session_id {session_id!r}")
-            return session.summary()
-        return {"sessions": [s.summary() for s in _sessions.values()]}
+    if session_id is not None:
+        summary = registry.summary(session_id)
+        if summary is None:
+            raise ValueError(f"unknown session_id {session_id!r}")
+        return summary
+    return {"sessions": registry.summaries()}
 
 
 def main() -> None:

@@ -49,7 +49,7 @@ intent, then the code to know reality, and the two must agree.
 - **Hermetic suite (no permissions/GPU):** `python tests/smoke.py` — launch-mode logs +
   screenshots, async MCP tools, audio chunking/offsets (stub ASR), `parse_resolution`.
 - **Real ASR:** `say -o /tmp/s.aiff "hello world"; ffmpeg -i /tmp/s.aiff -ac 1 -ar 16000 -f s16le /tmp/s.s16le`
-  then run a chunk through `capture_mcp.asr.whisper_local.MlxWhisper(model="mlx-community/whisper-tiny")`.
+  then run a chunk through `capture_mcp.core.asr.whisper_local.MlxWhisper(model="mlx-community/whisper-tiny")`.
 - **Swift helper:** `bash scripts/build_helper.sh` then `./helper/audiocap --system --rate 16000`
   — expect a `READY ...` line on stderr and PCM bytes on stdout (needs Screen Recording).
 - **End-to-end window+audio:** attach to a real app by `pid` and confirm screenshots land in

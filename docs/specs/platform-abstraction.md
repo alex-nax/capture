@@ -12,17 +12,17 @@ shared. `platform.current()` returns the backend for the running OS. Follow-up d
 on a Windows/NVIDIA box, which also enables the Whisper-vs-Nemotron benchmark (feature #23).
 
 ## Files
-- `src/capture_mcp/platform/base.py` — interfaces `WindowFinder`, `ScreenGrabber`,
+- `src/capture_mcp/core/platform/base.py` — interfaces `WindowFinder`, `ScreenGrabber`,
   `AudioSource`; the `WindowRef` dataclass; the `fit_box(sw,sh,bw,bh)` helper; and the
   `Platform` aggregate (holds one of each backend).
-- `src/capture_mcp/platform/__init__.py` — `current()` factory + re-exports. Selects a backend
+- `src/capture_mcp/core/platform/__init__.py` — `current()` factory + re-exports. Selects a backend
   by `sys.platform` (`darwin`→macos, `win32`→windows), overridable by env `CAPTURE_PLATFORM`,
   and caches one `Platform` per resolved name (`_cache`).
-- `src/capture_mcp/platform/macos.py` — `MacWindowFinder` (delegates to `capture_mcp.windows`,
+- `src/capture_mcp/core/platform/macos.py` — `MacWindowFinder` (delegates to `capture_mcp.core.windows`,
   the Quartz module), `MacScreenGrabber` (`screencapture` + `sips`), `MacAudioSource` (the
   ScreenCaptureKit `audiocap` helper, else `ffmpeg` `avfoundation`), `MacOSPlatform`. Also owns
   `helper_path()` and the screenshot helpers `_sc_format`/`_sips_format`/`_png_size`.
-- `src/capture_mcp/platform/windows.py` — `Win32WindowFinder` (`EnumWindows`), `Win32ScreenGrabber`
+- `src/capture_mcp/core/platform/windows.py` — `Win32WindowFinder` (`EnumWindows`), `Win32ScreenGrabber`
   (GDI `BitBlt`/`PrintWindow` → GDI+ scale + encode; sets per-monitor **DPI awareness** at import so
   captures aren't cropped on a scaled display), `Win32AudioSource` (WASAPI system loopback),
   `WindowsPlatform`.

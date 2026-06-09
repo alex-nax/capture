@@ -21,7 +21,8 @@ Workflow:
 | Scope | Spec | Covers |
 |-------|------|--------|
 | MCP server | [mcp-server.md](mcp-server.md) | FastMCP stdio entrypoint; async `capture_start`/`capture_stop`/`capture_status`; exactly-one-target validation; bounded session registry |
-| Session | [session.md](session.md) | `CaptureSession` lifecycle (created→running→stopping→stopped/error); start/stop rollback; session dir layout; `summary()` + `session.json` |
+| Session | [session.md](session.md) | `CaptureSession` lifecycle (created→starting→running→stopping→stopped/error); start/stop rollback; session dir layout; `summary()` + `session.json` |
+| Session registry | [session-registry.md](session-registry.md) | `SessionRegistry` (core/registry.py): bounded live tracking; append-only `sessions.jsonl` index (`CAPTURE_SESSION_INDEX`); history rebuild on restart (stopped/error/interrupted/unknown) |
 | Screenshots | [screenshots.md](screenshots.md) | Grid-scheduled `screencapture`; window targeting + `_last_wid` cross-Space cache; whole-screen fallback; `parse_resolution`; sips resize/convert; jpeg quality; rc=0-but-no-file quirk |
 | Process logs | [process-logs.md](process-logs.md) | Launch-mode `stdout.log`/`stderr.log`/merged `output.log`; pump threads; teardown ordering; attach-mode stdio limitation |
 | Audio | [audio.md](audio.md) | Source selection (app helper / mic ffmpeg); 16 kHz mono s16le contract; chunking + offsets; first-byte epoch anchoring; transcripts; reader/stop ordering; failure-status surfacing |

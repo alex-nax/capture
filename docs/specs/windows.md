@@ -15,13 +15,13 @@ on-screen `CGWindowID`(s) so that the screenshotter can grab just that window vi
 The module also resolves a pid from an app name when a session is in attach-by-app mode.
 
 ## Files
-- `src/capture_mcp/windows.py` — the entire scope (the macOS Quartz discovery).
+- `src/capture_mcp/core/windows.py` — the entire scope (the macOS Quartz discovery).
 
 Consumers (not part of this scope, listed for context) — both now go through the platform finder,
 not this module directly:
-- `src/capture_mcp/platform/macos.py` — `MacWindowFinder.find` calls `find_windows` and maps to `WindowRef`.
-- `src/capture_mcp/screenshots.py` — `Screenshotter._resolve_window_id` calls `self._finder.primary(...)`.
-- `src/capture_mcp/session.py` — `CaptureSession` calls `platform.current().window_finder.primary(app_name=...)` to derive a pid/title in attach-by-app mode.
+- `src/capture_mcp/core/platform/macos.py` — `MacWindowFinder.find` calls `find_windows` and maps to `WindowRef`.
+- `src/capture_mcp/core/screenshots.py` — `Screenshotter._resolve_window_id` calls `self._finder.primary(...)`.
+- `src/capture_mcp/core/session.py` — `CaptureSession` calls `platform.current().window_finder.primary(app_name=...)` to derive a pid/title in attach-by-app mode.
 
 ## Public contract
 This is an internal Python module (no CLI, no MCP tool surface). Its public symbols:
@@ -77,7 +77,7 @@ For `primary_window` (lines 84-86): call `find_windows`, return `wins[0]` if any
 - **Largest-first ordering.** Results are always sorted by pixel area, descending. `primary_window` therefore returns the largest matching window.
 - **No zero-size windows.** Windows with `width < 1` or `height < 1` are excluded.
 - **On-screen preferred, all-windows as fallback.** `find_windows` only consults the full (all-Spaces) window list when the on-screen query yields nothing, so it can still target a window on another Space/Desktop or in fullscreen — `screencapture -l` captures by id regardless of Space.
-- **Lazy Quartz import.** Quartz is imported inside `_list_windows`, not at module top, so importing `capture_mcp.windows` succeeds even where Quartz is unavailable; the dependency is only required at call time.
+- **Lazy Quartz import.** Quartz is imported inside `_list_windows`, not at module top, so importing `capture_mcp.core.windows` succeeds even where Quartz is unavailable; the dependency is only required at call time.
 - **No I/O / no blocking side effects beyond the Quartz query.** The module reads window metadata only; it does not capture, write files, or spawn processes. Per `docs/architecture.md`, components do not know about each other or the MCP layer — this module exposes pure helpers consumed by `screenshots.py`/`session.py`.
 - **macOS-only.** Per the Platform section of `docs/architecture.md`, this is a macOS Quartz backend; cross-platform support would mean a new `windows` backend behind the same `find_windows`/`primary_window` interface.
 

@@ -308,11 +308,11 @@
       "priority": "high",
       "description": "M0a — engine/MCP package split + SessionRegistry: move engine modules to capture/core (verbatim), thin capture/mcp server; extract the _sessions dict/_prune_locked from server.py into a SessionRegistry that rebuilds history from <output_dir>/capture-*/session.json at startup; fix start() holding session._lock through slow component startup (add a 'starting' state, start components outside the lock, mirroring stop()). See docs/specs/product-architecture.md.",
       "acceptance_criteria": [
-        "MCP behavior identical: tools/list schemas unchanged, smoke 20/20",
-        "Server restart no longer loses session history (registry rebuilt from session.json files)",
-        "capture-mcp console script still works; capture_status responds while another session is starting"
+        "MCP behavior identical: tools/list schemas unchanged, smoke 20/20 (DONE; suite grew to 28/28)",
+        "Server restart no longer loses session history (registry rebuilt from session.json files) (DONE; verified cross-process, Session 10)",
+        "capture-mcp console script still works; capture_status responds while another session is starting (DONE; smoke test_status_during_start)"
       ],
-      "passes": false,
+      "passes": true,
       "dependencies": [8, 11]
     },
     {

@@ -31,14 +31,21 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from capture_mcp.audio import SAMPLE_RATE, AudioCapture  # noqa: E402
-from capture_mcp.asr.base import Segment  # noqa: E402
-from capture_mcp.screenshots import parse_resolution  # noqa: E402
-from capture_mcp.server import capture_start, capture_status, capture_stop  # noqa: E402
-
 PASS, FAIL = "PASS", "FAIL"
 results: list[tuple[str, str, str]] = []
 BASE = Path(tempfile.mkdtemp(prefix="capmcp-smoke-"))
+
+# The server builds its SessionRegistry at import time; point the on-disk
+# session index into the temp dir BEFORE importing it so the suite stays
+# hermetic (never touches ~/.capture).
+os.environ["CAPTURE_SESSION_INDEX"] = str(BASE / "sessions.jsonl")
+
+from capture_mcp.core.audio import SAMPLE_RATE, AudioCapture  # noqa: E402
+from capture_mcp.core.asr.base import Segment  # noqa: E402
+from capture_mcp.core.registry import SessionRegistry  # noqa: E402
+from capture_mcp.core.screenshots import parse_resolution  # noqa: E402
+from capture_mcp.core.session import CaptureSession  # noqa: E402
+from capture_mcp.server import capture_start, capture_status, capture_stop  # noqa: E402
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
@@ -117,7 +124,7 @@ def test_audio_pipeline() -> None:
         def close(self):
             pass
 
-    import capture_mcp.asr as asrpkg
+    import capture_mcp.core.asr as asrpkg
 
     orig = asrpkg.create
     asrpkg.create = lambda name="auto": StubASR()
@@ -141,6 +148,67 @@ def test_audio_pipeline() -> None:
     check("audio: offsets advance", offs == sorted(offs) and offs[0] == 0.5, f"offsets={offs}")
 
 
+async def test_status_during_start() -> None:
+    """start() must not hold the session lock through slow component startup."""
+    out = str(BASE / "slowstart")
+    orig = CaptureSession._start_audio
+    CaptureSession._start_audio = lambda self: time.sleep(1.2)  # simulate slow ASR load
+    try:
+        t0 = time.monotonic()
+        task = asyncio.create_task(
+            capture_start(
+                output_dir=out,
+                command=_cmdline([sys.executable, "-c", "import time; time.sleep(3)"]),
+                capture_screenshots=False,
+                capture_audio=True,
+            )
+        )
+        await asyncio.sleep(0.4)  # inside the slow start
+        st = await capture_status()
+        dt = time.monotonic() - t0
+        starting = [s for s in st["sessions"] if s["state"] == "starting"]
+        check("startlock: visible as 'starting' mid-start", len(starting) == 1,
+              f"states={sorted(s['state'] for s in st['sessions'])}")
+        check("startlock: status not blocked by start", dt < 1.0, f"dt={dt:.2f}s")
+        s = await task
+        check("startlock: reaches running", s["state"] == "running", s["state"])
+        fin = await capture_stop(s["session_id"])
+        check("startlock: stops clean", fin["state"] == "stopped", fin["state"])
+    finally:
+        CaptureSession._start_audio = orig
+
+
+def test_registry_history() -> None:
+    """A fresh registry rebuilds finished sessions from the on-disk index."""
+    idx = Path(os.environ["CAPTURE_SESSION_INDEX"])
+
+    reg = SessionRegistry(index_path=idx)
+    stopped = [s for s in reg.summaries() if s["state"] == "stopped"]
+    check("registry: stopped sessions recovered from disk", len(stopped) >= 2, f"n={len(stopped)}")
+
+    # A session recorded as live by a process that died -> "interrupted";
+    # an index entry whose session.json is gone -> "unknown"; corrupt index
+    # lines are tolerated.
+    fake_id = "19990101T000000-abc123"
+    fake = BASE / "fakehist" / f"capture-{fake_id}"
+    fake.mkdir(parents=True, exist_ok=True)
+    (fake / "session.json").write_text(
+        json.dumps({"config": {}, "summary": {"session_id": fake_id, "state": "running", "dir": str(fake)}})
+    )
+    with idx.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"id": fake_id, "dir": str(fake)}) + "\n")
+        f.write(json.dumps({"id": "19990101T000001-gone00", "dir": str(BASE / "nonexistent")}) + "\n")
+        f.write("{not json\n")
+
+    reg2 = SessionRegistry(index_path=idx)
+    by_id = {s["session_id"]: s for s in reg2.summaries()}
+    check("registry: live-at-crash -> interrupted", by_id.get(fake_id, {}).get("state") == "interrupted",
+          str(by_id.get(fake_id, {}).get("state")))
+    check("registry: missing session.json -> unknown",
+          by_id.get("19990101T000001-gone00", {}).get("state") == "unknown")
+    check("registry: summaries oldest-first", list(by_id) == sorted(by_id))
+
+
 def test_parse_resolution() -> None:
     check("parse: WxH/fmt", parse_resolution("1280x720/jpg") == (1280, 720, "jpg"))
     check("parse: WxH", parse_resolution("640x480") == (640, 480, None))
@@ -158,6 +226,8 @@ async def main() -> int:
         await test_launch_mode()
         await test_validation()
         test_audio_pipeline()
+        await test_status_during_start()
+        test_registry_history()
         test_parse_resolution()
     finally:
         shutil.rmtree(BASE, ignore_errors=True)

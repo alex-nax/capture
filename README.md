@@ -91,7 +91,7 @@ Recording* — required for both screenshots and per-app audio.
 
 ## ASR backends
 
-The ASR layer is pluggable (`src/capture_mcp/asr/`):
+The ASR layer is pluggable (`src/capture_mcp/core/asr/`):
 
 - **Local (default).** `mlx-whisper` (Apple-Silicon-native) or `faster-whisper`.
   Runs entirely on this Mac; downloads model weights on first use.

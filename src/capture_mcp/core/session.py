@@ -92,27 +92,35 @@ class CaptureSession:
                 raise RuntimeError(f"session already {self.state}")
             self.dir.mkdir(parents=True, exist_ok=True)
             self.t0 = now()
+            self.state = "starting"
+            self._write_metadata()
 
-            try:
-                self._resolve_target()
-                # A launch-mode session whose command never started has captured
-                # nothing — fail loudly rather than report a phantom 'running'.
-                if self.command and self._proc is None:
-                    raise RuntimeError(self.notes[-1] if self.notes else "could not launch command")
-                if self.capture_screenshots:
-                    self._start_screenshots()
-                if self.capture_audio:
-                    self._start_audio()
-            except Exception:
-                self._stop_components()
+        # Component startup can be slow (subprocess launch, ASR model load) and
+        # runs OUTSIDE the lock — mirroring stop()'s teardown — so concurrent
+        # stop()/state reads return immediately, observing "starting". stop()
+        # is a documented no-op until the session reaches "running".
+        try:
+            self._resolve_target()
+            # A launch-mode session whose command never started has captured
+            # nothing — fail loudly rather than report a phantom 'running'.
+            if self.command and self._proc is None:
+                raise RuntimeError(self.notes[-1] if self.notes else "could not launch command")
+            if self.capture_screenshots:
+                self._start_screenshots()
+            if self.capture_audio:
+                self._start_audio()
+        except Exception:
+            self._stop_components()
+            with self._lock:
                 self.state = "error"
                 self._write_metadata()
-                raise
+            raise
 
+        with self._lock:
             self.state = "running"
             self._write_metadata()
-            log.info("session %s started in %s (pid=%s)", self.id, self.dir, self.pid)
-            return self.summary()
+        log.info("session %s started in %s (pid=%s)", self.id, self.dir, self.pid)
+        return self.summary()
 
     def stop(self) -> dict:
         with self._lock:

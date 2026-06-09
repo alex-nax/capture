@@ -24,15 +24,16 @@ the owner:
 
 ## Files
 
-**[current]** Everything lives in `src/capture_mcp/` (engine + MCP in one package; the
-engine modules `session.py`, `screenshots.py`, `audio.py`, `proc.py`, `platform/`, `asr/`
-already import nothing from `server.py` — the extraction seam exists).
+**[current]** M0a (feature #25, 2026-06-10) split the package: the engine lives in
+`src/capture_mcp/core/` (`session.py`, `screenshots.py`, `audio.py`, `proc.py`,
+`platform/`, `asr/`, plus the new `registry.py` — `SessionRegistry` with disk-backed
+history, see [session-registry.md](session-registry.md)); `server.py` is a thin MCP
+frontend. `core/` imports no frontend code.
 
 **[planned]** Target layout (names indicative):
 
-- `capture/core/` — engine moved verbatim: `CaptureSession`, components, `platform/`,
-  `asr/`; plus new `registry.py` (SessionRegistry), `events.py` (EventBus),
-  `permissions.py` (preflight).
+- `capture_mcp/core/` — **[current]** engine + `registry.py`; **[planned]** new
+  `events.py` (EventBus, M0b) and `permissions.py` (preflight, M2).
 - `capture/daemon/` — `captured`: aiohttp HTTP+WebSocket `/v1` API over a unix domain
   socket (macOS/Linux) or 127.0.0.1 (Windows).
 - `capture/mcp/` — thin MCP server: daemon-first, embedded-engine fallback.
@@ -171,8 +172,9 @@ delete/reveal, and disk-budget surfacing (1 fps PNG + raw PCM ≈ 0.5–2 GB/hou
 
 Live backlog for this scope (roadmap features #25–#35 in `features.json`):
 
-- **M0** engine extraction: package split, SessionRegistry w/ disk-backed history,
-  EventBus + per-session `events.jsonl`, `start()` lock fix (#25, #26).
+- **M0a done 2026-06-10** (#25): package split, SessionRegistry + disk-backed
+  history (`CAPTURE_SESSION_INDEX`), `start()` lock fix (`"starting"` state).
+  Remaining M0: EventBus + per-session `events.jsonl` (#26).
 - Contract fixtures + frozen `helper-contract.md`; fix the `audiocap.swift:14` "first
   line is READY" comment lie (READY is emitted later; probes must scan stderr) (#27).
 - `asr/openai_compat.py` + `minimal` extra — any `/v1/audio/transcriptions` endpoint

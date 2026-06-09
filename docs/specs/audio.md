@@ -6,9 +6,9 @@ _Status: current as of 2026-06-07. Source of truth = the code; update this spec 
 Capture a single audio stream for a session, slice it into fixed-length windows, run each window through an ASR backend, and write timestamped transcripts plus the raw PCM. The scope owns: source selection (per-app helper vs. microphone via `ffmpeg`), the 16 kHz mono s16le byte contract, chunking and offset accounting, anchoring timestamps to first-byte wall-clock arrival, and keeping audio/ASR failures visible in the session status surface. It deliberately knows nothing about other capture components or the MCP layer (see `docs/architecture.md` dependency rules).
 
 ## Files
-- `src/capture_mcp/audio.py` — the entire scope: `AudioCapture` class, reader/transcribe loop, lifecycle (`start`/`stop`), and teardown. The **source command** (which subprocess emits the PCM) is built per-OS by the platform abstraction, not here.
+- `src/capture_mcp/core/audio.py` — the entire scope: `AudioCapture` class, reader/transcribe loop, lifecycle (`start`/`stop`), and teardown. The **source command** (which subprocess emits the PCM) is built per-OS by the platform abstraction, not here.
 
-Collaborators referenced but out of scope: `src/capture_mcp/platform/` (the `AudioSource.command(...)` that selects the helper/ffmpeg; see [platform-abstraction.md](platform-abstraction.md) — `helper_path()` now lives in `platform/macos.py`), `src/capture_mcp/asr/` (the `ASRBackend`/`Segment` interface and `create()` factory), `src/capture_mcp/util.py` (`now`, `iso`), `helper/audiocap` (compiled Swift helper, a process boundary).
+Collaborators referenced but out of scope: `src/capture_mcp/core/platform/` (the `AudioSource.command(...)` that selects the helper/ffmpeg; see [platform-abstraction.md](platform-abstraction.md) — `helper_path()` now lives in `platform/macos.py`), `src/capture_mcp/core/asr/` (the `ASRBackend`/`Segment` interface and `create()` factory), `src/capture_mcp/core/util.py` (`now`, `iso`), `helper/audiocap` (compiled Swift helper, a process boundary).
 
 ## Public contract
 Module constants (`audio.py:35-37`):

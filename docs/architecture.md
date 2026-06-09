@@ -9,7 +9,9 @@
 ## Module map
 
 ```
-server.py            MCP entrypoint. Async tools: capture_start/stop/status.
+server.py            MCP entrypoint (thin frontend). Async tools: capture_start/stop/status.
+core/                THE ENGINE — frontend-independent (MCP today; daemon/CLI/GUI per specs/product-architecture.md)
+  ├─ registry.py     SessionRegistry: bounded live tracking + disk-backed history (sessions.jsonl index)
   └─ session.py      CaptureSession: orchestrates one capture; owns components; writes session.json
        ├─ proc.py            ProcessCapture: launch + tee stdout/stderr (launch mode only)
        ├─ screenshots.py     Screenshotter: schedule + delegate pixel capture to platform
@@ -18,18 +20,20 @@ server.py            MCP entrypoint. Async tools: capture_start/stop/status.
                  ├─ whisper_local.py   mlx-whisper / faster-whisper (local default)
                  ├─ nemotron.py        NVIDIA Riva / Nemotron-3.5 (remote)
                  └─ __init__.py        create(name) factory ("auto" -> local, fallback riva)
-platform/            OS abstraction: WindowFinder / ScreenGrabber / AudioSource + current() factory
+core/platform/       OS abstraction: WindowFinder / ScreenGrabber / AudioSource + current() factory
   ├─ base.py            interfaces, WindowRef, fit_box, Platform aggregate
   ├─ macos.py           screencapture/sips, Quartz (via windows.py), audiocap/ffmpeg
   └─ windows.py         GDI+ screenshots, EnumWindows discovery, ffmpeg dshow audio
-windows.py           macOS Quartz CGWindowList helpers (pid/app -> CGWindowID); used by platform/macos
+core/windows.py      macOS Quartz CGWindowList helpers (pid/app -> CGWindowID); used by platform/macos
 helper/audiocap.swift   Standalone ScreenCaptureKit binary: per-app audio -> s16le PCM on stdout
-util.py                 timestamps (iso/fs_stamp), split_command, shared helpers
+core/util.py            timestamps (iso/fs_stamp), split_command, shared helpers
 ```
 
 ## Dependency rules
-- `server.py` only **orchestrates**: validate args, create/track `CaptureSession`, offload to
-  threads. It must not contain capture logic.
+- `server.py` only **orchestrates**: validate args, create sessions, track them via
+  `core.registry.SessionRegistry`, offload to threads. It must not contain capture logic.
+- **`core/` must not import any frontend** (no `mcp`, no server module): the engine is
+  consumed by the MCP server today and by the daemon/CLI/GUI later (product-architecture.md).
 - `session.py` owns component lifecycles. Components (`proc`, `screenshots`, `audio`) do **not**
   know about each other or about the MCP layer.
 - All ASR access goes through the `ASRBackend` interface. Adding a backend = new module +
