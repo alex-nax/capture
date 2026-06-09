@@ -185,7 +185,10 @@ Live backlog for this scope (roadmap features #25–#35 in `features.json`):
   any `/v1/audio/transcriptions` endpoint (incl. the Nemotron WSL2 lab) is a plain
   remote backend via `CAPTURE_OPENAI_ASR_URL`.
 - **Done 2026-06-10** (#29): `list_windows` MCP tool over `core.list_windows()`.
-- **TCC attribution spike on a clean VM — gates the whole daemon architecture** (#30).
+- **TCC attribution spike — gates the whole daemon architecture** (#30). Kit
+  prepared 2026-06-10: `spike/tcc-attribution/` (`make_kit.sh` → one tarball;
+  five numbered scripts on the target Mac; universal prebuilt `audiocap`, no
+  Xcode/Dev-account needed on the target). Awaiting the run on the spare Mac.
 - **M1** packaged signed engine, no GUI: PyInstaller + Developer ID + notarization +
   prebuilt helper + `capture doctor` + brew tap (#31).
 - **M2** `captured` daemon + `/v1` + CLI; MCP daemon-first mode (#32).

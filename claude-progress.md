@@ -1,5 +1,35 @@
 # Progress Log
 
+## Session 16 — 2026-06-10
+**Agent**: builder (macOS box, ultracode, branch **v2**)
+**Summary**: Prepared the **#30 TCC-attribution spike kit** for Alex's spare Mac (the feature
+itself stays open until the spike RUNS there — its criteria need the actual report/screenshots).
+- **`spike/tcc-attribution/`**: dev-side `make_kit.sh` builds a **universal (arm64+x86_64,
+  min macOS 13) audiocap** and tars a self-contained kit (68 KB) → `dist/capture-tcc-spike.tar.gz`.
+  Target Mac needs NO Xcode, NO Apple Developer account, no admin: `01_setup.sh` (uv → py3.12 →
+  PyInstaller → builds **CaptureSpike.app** via `--windowed --osx-bundle-identifier` — PyInstaller's
+  own .app layout is codesign-clean), `02_install.sh` (self-signed stable identity, deep-sign,
+  launchd agent), `03_check.sh` (THE test: grant → kickstart → audio_flowing verdict),
+  `04_update_sim.sh` (same-identity update; `--rotate-identity` negative control),
+  `05_collect.sh` (evidence tarball), `uninstall.sh`. Daemon stub `captured_spike.py` respawns
+  audiocap, scans the frozen helper contract (READY / -3801/-3803 / -3805), writes
+  `~/CaptureSpike/status.json` with a human-readable `verdict` every 2s.
+- **Dry-run on this box caught two real kit bugs** before they hit the spare Mac:
+  (1) codesign rejects a symlinked CFBundleExecutable → switched to PyInstaller-built .app;
+  (2) a stray `version.txt` in Contents/MacOS breaks bundle sealing ("code object is not signed")
+  → version now ships via `--add-data`/`_MEIPASS`. Final kit verified here end-to-end short of
+  launchd persistence (auto-mode policy correctly blocked installing an agent on the dev box):
+  bundle deep-signs + verifies strict; foreground daemon run → READY scanned, **307 KB PCM in
+  10 s, verdict "AUDIO FLOWING"** (this box has a grant; the spare Mac is the real test).
+- product-architecture.md #30 item now points at the kit.
+**Verification**: all six kit scripts `bash -n` clean; full 01→build→sign→run chain exercised
+with the final artifacts; smoke/contracts untouched (35-43/43 + 3/3 from Session 15 still stand).
+**Next**: Alex runs the kit on the spare Mac (runbook: spike/tcc-attribution/README.md), brings
+back `tcc-spike-results-*.tar.gz`; then #30 gets its verdict written into product-architecture.md
+and #31 (packaged signed engine) is unblocked — or redirected if the result is negative.
+
+---
+
 ## Session 15 — 2026-06-10
 **Agent**: builder (macOS box, ultracode, branch **v2**)
 **Summary**: Built **feature #29 (`list_windows` MCP tool)** — agents now have the same window
