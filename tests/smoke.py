@@ -193,6 +193,84 @@ async def test_status_during_start() -> None:
         CaptureSession._start_audio = orig
 
 
+def _start_stub_asr_server():
+    """Minimal OpenAI-compatible /v1/audio/transcriptions server (hermetic)."""
+    import http.server
+    import threading as _threading
+
+    seen = {"requests": 0, "wav_ok": False, "model": None, "auth": None}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            seen["requests"] += 1
+            seen["wav_ok"] = b"RIFF" in body and b"WAVE" in body
+            if b'name="model"' in body:
+                seen["model"] = body.split(b'name="model"\r\n\r\n')[1].split(b"\r\n")[0].decode()
+            seen["auth"] = self.headers.get("Authorization")
+            resp = json.dumps({
+                "text": "hello world",
+                "segments": [
+                    {"start": 0.5, "end": 1.5, "text": " hello "},
+                    {"start": 2.0, "end": 3.0, "text": "world"},
+                    {"start": 3.5, "end": 4.0, "text": "   "},  # blank: must be skipped
+                ],
+            }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
+
+        def log_message(self, *a):  # keep smoke output clean
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    _threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}/v1/audio/transcriptions"
+    return srv, url, seen
+
+
+def test_openai_compat() -> None:
+    from capture_mcp.core.asr.openai_compat import OpenAICompat
+
+    srv, url, seen = _start_stub_asr_server()
+    try:
+        # Direct backend: WAV upload, auth/model fields, verbose_json mapping.
+        be = OpenAICompat(url, model="whisper-x", api_key="sek")
+        segs = be.transcribe(np.zeros(SAMPLE_RATE * 4, dtype=np.float32), SAMPLE_RATE)
+        check("openai: segments mapped, blanks skipped",
+              [(s.start, s.end, s.text) for s in segs] == [(0.5, 1.5, "hello"), (2.0, 3.0, "world")],
+              str([(s.start, s.end, s.text) for s in segs]))
+        check("openai: wav + model + bearer reached server",
+              seen["wav_ok"] and seen["model"] == "whisper-x" and seen["auth"] == "Bearer sek",
+              str(seen))
+
+        # Full pipeline: AudioCapture with asr_backend="openai" via env config.
+        out = BASE / "openai"
+        raw = BASE / "openai.s16le"
+        raw.write_bytes(np.zeros(SAMPLE_RATE * 20, dtype="<i2").tobytes())
+        os.environ["CAPTURE_OPENAI_ASR_URL"] = url
+        try:
+            ac = AudioCapture(out, source="mic", chunk_seconds=8.0, t0=1000.0, asr_backend="openai")
+            ac._build_command = lambda: ([sys.executable, "-c", _STREAM_CODE, str(raw)], "file")
+            ac.start()
+            while ac._proc and ac._proc.poll() is None:
+                time.sleep(0.1)
+            time.sleep(0.5)
+            ac.stop()
+        finally:
+            del os.environ["CAPTURE_OPENAI_ASR_URL"]
+
+        lines = [json.loads(x) for x in (out / "transcript.jsonl").read_text().strip().splitlines()]
+        offs = [r["start_offset"] for r in lines]
+        check("openai: pipeline yields timestamped segments", len(lines) == 6
+              and offs == [0.5, 2.0, 8.5, 10.0, 16.5, 18.0], f"offsets={offs}")
+        check("openai: absolute timestamps present", all(r["start"] and r["end"] for r in lines))
+    finally:
+        srv.shutdown()
+
+
 def test_event_bus() -> None:
     """Subscribers receive component events (log_line, screenshot_taken) live."""
     import queue as _queue
@@ -274,6 +352,7 @@ async def main() -> int:
         await test_validation()
         test_audio_pipeline()
         await test_status_during_start()
+        test_openai_compat()
         test_event_bus()
         test_registry_history()
         test_parse_resolution()

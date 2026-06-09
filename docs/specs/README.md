@@ -27,7 +27,7 @@ Workflow:
 | Screenshots | [screenshots.md](screenshots.md) | Grid-scheduled `screencapture`; window targeting + `_last_wid` cross-Space cache; whole-screen fallback; `parse_resolution`; sips resize/convert; jpeg quality; rc=0-but-no-file quirk |
 | Process logs | [process-logs.md](process-logs.md) | Launch-mode `stdout.log`/`stderr.log`/merged `output.log`; pump threads; teardown ordering; attach-mode stdio limitation |
 | Audio | [audio.md](audio.md) | Source selection (app helper / mic ffmpeg); 16 kHz mono s16le contract; chunking + offsets; first-byte epoch anchoring; transcripts; reader/stop ordering; failure-status surfacing |
-| ASR | [asr.md](asr.md) | `ASRBackend` interface; `create()` factory + auto-fallback; local Whisper (mlx/faster); remote Riva/Nemotron |
+| ASR | [asr.md](asr.md) | `ASRBackend` interface; `create()` factory + auto-fallback; local Whisper (mlx/faster); remote OpenAI-compatible endpoint (stdlib-only, `CAPTURE_OPENAI_ASR_URL`); remote Riva/Nemotron |
 | Windows | [windows.md](windows.md) | Quartz `CGWindowList` discovery (pid/app → `CGWindowID`); layer-0/largest-first; on-screen→all-windows cross-Space fallback |
 | Helper contract (frozen) | [helper-contract.md](helper-contract.md) | Process-boundary protocol for ALL audio helpers: argv; PCM-only stdout (16 kHz mono s16le); `READY` scanned (not line 1) on stderr; exit codes; `-3801`/`-3803` fatal vs `-3805` reconnect |
 | ScreenCaptureKit helper | [screencapturekit-helper.md](screencapturekit-helper.md) | `audiocap` CLI; stdout PCM + stderr status contract; `AVAudioConverter`; `-3805` auto-reconnect; shutdown guard; signals |

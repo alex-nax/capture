@@ -345,10 +345,10 @@
       "priority": "medium",
       "description": "asr/openai_compat.py — small backend POSTing WAV-wrapped PCM to any OpenAI-compatible /v1/audio/transcriptions endpoint, plus a 'minimal' extra in pyproject.toml (screenshots+logs-only install). Turns the Nemotron WSL2/Docker lab into a plain remote endpoint.",
       "acceptance_criteria": [
-        "asr_backend pointing at a compatible endpoint yields timestamped transcript segments",
-        "pip install 'capture-mcp[minimal]' captures screenshots+logs with no ASR deps"
+        "asr_backend pointing at a compatible endpoint yields timestamped transcript segments (DONE; smoke: direct backend + full AudioCapture pipeline against a stub server, 6 segments at offsets 0.5/2.0/8.5/10.0/16.5/18.0)",
+        "pip install 'capture-mcp[minimal]' captures screenshots+logs with no ASR deps (DONE; verified in a fresh uv venv: no mlx/faster-whisper/riva importable, real capture produced screenshots+logs)"
       ],
-      "passes": false,
+      "passes": true,
       "dependencies": [7]
     },
     {

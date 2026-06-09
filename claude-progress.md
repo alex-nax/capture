@@ -1,5 +1,36 @@
 # Progress Log
 
+## Session 14 — 2026-06-10
+**Agent**: builder (macOS box, ultracode, branch **v2**)
+**Summary**: Built **feature #28 (openai-compat remote ASR backend + `minimal` extra)**.
+- **`core/asr/openai_compat.py` (new, stdlib-only — urllib + wave, zero new deps)**: POSTs each
+  float32 chunk as an in-memory 16-bit WAV (multipart/form-data, `response_format=verbose_json`,
+  optional model/language fields, optional Bearer auth) to any OpenAI-compatible
+  `/v1/audio/transcriptions` endpoint. Maps `segments` → per-segment `Segment`s (blank text
+  skipped, start/end clamped to the chunk); plain `text` → one full-chunk segment; HTTP errors
+  raise with the body's first 500 bytes (AudioCapture counts them as asr_errors and continues).
+  Env: `CAPTURE_OPENAI_ASR_URL` (required) / `_MODEL` / `_KEY` / `_LANGUAGE` / `_TIMEOUT`.
+  The Nemotron WSL2/Docker lab, whisper.cpp server, faster-whisper-server, or api.openai.com are
+  now just configured endpoints.
+- **Factory**: names `openai`/`openai-compat`/`openai_compat`; `auto` chain is now local →
+  openai-compat (only if URL env set) → Riva/Nemotron. Local stays preferred; force remote with
+  an explicit name.
+- **`minimal` extra (pyproject)**: named empty extra documenting/enabling the screenshots+logs-only
+  install; remote transcription still works from it because the new backend is stdlib-only.
+- Specs: asr.md (backend contract, env, auto chain, names), specs README ASR row,
+  product-architecture #28 → done.
+**Verification**: smoke **39/39** (4 new: direct backend WAV/model/Bearer verified server-side
+against a hermetic stub HTTP server, blank-segment skipping; full AudioCapture pipeline with
+`asr_backend="openai"` → 6 timestamped segments at offsets 0.5/2.0/8.5/10.0/16.5/18.0);
+contracts 3/3; **fresh-venv minimal install verified** (uv venv → `.[minimal]` → no
+mlx/faster-whisper/riva present → real capture: 3 screenshots, logs, events.jsonl). Note: first
+`screencapture` from a brand-new venv binary can take >1s (cold TCC consult) — harmless, but
+worth remembering when writing time-sensitive tests.
+**Next**: #29 (list_windows MCP tool — last cheap pre-daemon win), then #30 (TCC spike, needs a
+clean macOS VM from Alex) before #31 packaging.
+
+---
+
 ## Session 13 — 2026-06-10
 **Agent**: builder (macOS box, ultracode, branch **v2**)
 **Summary**: Built **feature #27 (M0c — contract fixtures + frozen helper contract)**. The

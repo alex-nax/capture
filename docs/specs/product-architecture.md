@@ -180,8 +180,9 @@ Live backlog for this scope (roadmap features #25–#35 in `features.json`):
   PCM chunk-math goldens + `--regen`), frozen [helper-contract.md](helper-contract.md),
   `audiocap.swift` READY comment fixed (scan stderr, not line 1), `audiocap_win.py`
   shutdown NameError fixed.
-- `asr/openai_compat.py` + `minimal` extra — any `/v1/audio/transcriptions` endpoint
-  (incl. the Nemotron WSL2 lab) becomes a plain remote backend (#28).
+- **Done 2026-06-10** (#28): `asr/openai_compat.py` (stdlib-only) + `minimal` extra —
+  any `/v1/audio/transcriptions` endpoint (incl. the Nemotron WSL2 lab) is a plain
+  remote backend via `CAPTURE_OPENAI_ASR_URL`.
 - `list_windows` MCP tool (#29).
 - **TCC attribution spike on a clean VM — gates the whole daemon architecture** (#30).
 - **M1** packaged signed engine, no GUI: PyInstaller + Developer ID + notarization +

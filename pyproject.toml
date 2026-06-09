@@ -14,6 +14,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Screenshots+logs-only install: the base deps already exclude all ASR weight;
+# this named (empty) extra makes that intent explicit and installable as
+# `pip install 'capture-mcp[minimal]'`. Remote transcription still works from
+# a minimal install via the stdlib-only openai-compat backend
+# (CAPTURE_OPENAI_ASR_URL -> any /v1/audio/transcriptions server).
+minimal = []
 # Apple-Silicon-native default ASR backend (macOS/arm64 only).
 mlx = ["mlx-whisper>=0.4.0; sys_platform == 'darwin'"]
 # Cross-platform CPU/GPU ASR backend (faster-whisper CUDA on the Windows/NVIDIA box).
