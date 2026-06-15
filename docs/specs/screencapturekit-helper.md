@@ -118,15 +118,13 @@ File persistence (session.json, transcripts, recordings) is the parent process's
 - **Hardcoded stream config:** `channelCount = 1`, `excludesCurrentProcessAudio = true`, `width = 128`, `height = 128`, `minimumFrameInterval = 1/1`, `queueDepth = 6`.
 - **Hardcoded reconnect tuning:** backoff `0.25 * reconnects` capped at `2.0s`; give-up threshold `reconnects > 20` while `!everGotData`.
 
-## Known limitations / open items
-- **Self-signed grant is fragile across rebuilds on macOS 15** (observed 2026-06-15, 15.7.3):
-  rebuilding the helper with the *same* self-signed identity (`capture-mcp-codesign`) LOST the
-  Screen Recording grant (→ `displays=0` / `exit(4)`) and needed re-approval — unlike macOS 26
-  where the same-identity rebuild kept it (#30). So on macOS 15 a self-signed helper rebuild
-  requires re-granting Screen Recording (run `./helper/audiocap --system` from an interactive
-  terminal → approve in System Settings → Screen Recording, then quit & reopen the terminal). The
-  Developer ID production path (Team ID) should be more robust but must be verified per-version in
-  #31. See product-architecture.md ([confirmed #30, with a version caveat]).
+- **`displays=0` means the LAUNCHING process lacks Screen Recording** — not a helper bug. The
+  grant attaches to the responsible process (the GUI terminal/app that spawns the helper, or the
+  signed launchd daemon in the packaged product). A same-identity rebuild does NOT lose the grant
+  when launched from a granted Terminal (verified macOS 15.7.3, 2026-06-15: `displays=2`, READY).
+  A *non-granted* shell (e.g. a headless/agent execution context) gets `displays=0` even though a
+  granted Terminal on the same machine works — so test the helper from the terminal that actually
+  holds the grant.
 - **Resampler tail loss:** the converter is retained across callbacks, so only the final buffer's tail at stream end can be lost (described as negligible, lines 67-72).
 - **READY is not literally the first stderr line:** the header comment says "first line is READY" but `content:` and `target=...` lines are emitted before it. Parents should scan for the READY token rather than read line 1. (Documentation/code discrepancy.)
 - **Output endianness** is native host order (little-endian on supported Apple hardware) rather than explicitly byte-swapped; correct in practice but implicit.

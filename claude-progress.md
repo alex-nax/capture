@@ -27,8 +27,16 @@ valuable finding; needs Alex to re-grant).
 **Verification**: source compiles; Python smoke 68/68 (unaffected). The enumeration-retry itself
 could NOT be functionally verified here (the macOS-26 flakiness isn't reproducible on 15, and the
 rebuilt helper can't capture until the grant is restored).
-**Next**: Alex re-grants Screen Recording (above). Then any GUI/daemon capture works again. The
-audiocap retry deploys on the next rebuild (and is the real test on the macOS-26 box).
+**CORRECTION (same session)**: FALSE ALARM — I did NOT break the grant. Alex ran
+`./helper/audiocap --system` from his own Terminal → `displays=2`, READY, **audio flowing**. The
+rebuilt same-identity helper works fine from a Screen-Recording-granted Terminal on macOS 15.7.3.
+The `displays=0` I saw was the **Claude Code shell's execution context** (not a granted GUI app) —
+an artifact of where I run commands, NOT a TCC regression. Reverted the overstated
+"macOS-15-keys-self-signed-to-cdhash" claim in product-architecture.md ([confirmed #30] stands,
+no contradicting evidence) and screencapturekit-helper.md (displays=0 = launching process lacks
+the grant). LESSON #2: don't escalate a result from a non-granted execution context into a TCC
+finding — verify from the context that actually holds the grant. The enumeration-retry source
+change stands (good); it's only functionally testable on the macOS-26 box.
 
 ---
 

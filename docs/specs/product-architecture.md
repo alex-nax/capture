@@ -112,18 +112,20 @@ behind the stable `/v1` API.
   speaking this same contract — async-COM `ActivateAudioInterfaceAsync` from Python
   ctypes is impractical, and Chromium-family apps need process-**tree** loopback (window
   PID ≠ audio-rendering PID).
-- **[confirmed #30, with a version caveat]** TCC persistence keys on the **code-signing identity
-  + stable bundle identifier** (the designated requirement) on **macOS 26** (the spike: grant
-  survived a same-identity rebuild, lost on identity rotation). **BUT on macOS 15.7.3 a
-  same-identity rebuild of the SELF-SIGNED dev helper LOST the grant** (observed 2026-06-15:
-  rebuilding `helper/audiocap` with the same `capture-mcp-codesign` identity → `displays=0` /
-  `app-audio-failed (rc=4): no display available` until re-approved). So with a **self-signed,
-  untrusted cert (no Team ID), macOS 15 effectively keys the grant to the cdhash** (every rebuild
-  needs re-approval; possibly compounded by Sequoia's periodic re-approval). The product's
-  **Developer ID** cert pins a real **Team ID** in the csreq, which *should* survive rebuilds on
-  all versions — **but #31 must re-verify grant persistence on macOS 15 with the actual Developer
-  ID build**, not assume the macOS-26 self-signed result generalizes. Stable signing identity
-  across updates remains mandatory; app/daemon/helper need deliberate `CFBundleIdentifier`s.
+- **[confirmed #30]** TCC persistence keys on the **code-signing identity + stable bundle
+  identifier** (the designated requirement), not the cert serial or path — the spike confirmed
+  the grant survives a same-identity rebuild and is lost on identity rotation. Cross-checked on
+  **macOS 15.7.3 (2026-06-15)**: a same-identity rebuild of `helper/audiocap` (same
+  `capture-mcp-codesign` identity) **still captured** when launched from a Screen-Recording-granted
+  Terminal (`displays=2`, READY, audio flowing) — consistent with identity/responsible-process
+  keying on both versions. (A red herring along the way: running the rebuilt helper from a
+  *non-granted* shell — e.g. the Claude Code execution context — returns `displays=0` /
+  `app-audio-failed (rc=4)`, which is just "the launching process lacks Screen Recording", not a
+  grant regression.) So a **stable signing identity across updates is mandatory**: ship the
+  engine/daemon/helper with a Developer ID cert (stable Team ID + `CFBundleIdentifier`); never
+  rotate it casually. **#31 should still confirm grant persistence with the actual Developer ID
+  build per macOS version**, but no contradicting evidence exists. App/daemon/helper need
+  deliberate `CFBundleIdentifier`s and Info.plists.
 - **[#30 follow-up]** On **macOS 26**, `SCShareableContent` enumeration is intermittently flaky
   (spike saw `audiocap` `exit 5` "enumeration failed" interleaved with healthy audio; the daemon's
   respawn loop rode through it). The real `audiocap.swift` should add a **bounded retry** on the
