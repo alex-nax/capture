@@ -40,6 +40,19 @@ agent_kickstart() {
   launchctl kickstart -k "gui/$(id -u)/$AGENT_LABEL"
 }
 
+audio_flowing() {  # exit 0 iff status.json reports audio_flowing
+  python3 -c "import json,sys; sys.exit(0 if json.load(open('$STATUS_JSON'))['audio_flowing'] else 1)" 2>/dev/null
+}
+
+wait_for_audio() {  # poll status.json until audio_flowing or <timeout> seconds elapse
+  local t="${1:-240}" i=0
+  while [ "$i" -lt "$t" ]; do
+    audio_flowing && return 0
+    sleep 3; i=$((i+3))
+  done
+  return 1
+}
+
 show_status() {  # pretty-print the daemon's status.json (waits up to $1 seconds for it)
   local wait="${1:-10}" i=0
   while [ ! -f "$STATUS_JSON" ] && [ "$i" -lt "$wait" ]; do sleep 1; i=$((i+1)); done

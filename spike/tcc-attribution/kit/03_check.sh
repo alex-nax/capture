@@ -27,11 +27,23 @@ cat <<'EOM'
 =================================================================================
 
 EOM
-read -r -p "Press Enter once the toggle is ON..."
 
-log "Restarting the daemon (launchctl kickstart) to pick the grant up cleanly..."
-agent_kickstart
-sleep 6
+# Agent-driven runs set CAPTURE_SPIKE_NONINTERACTIVE=1: instead of blocking on a
+# TTY `read`, open the Settings deep link and POLL status.json until the human
+# enables the toggle (audio starts flowing) or a timeout. The grant itself still
+# requires a human click — an agent can't toggle it — but the script no longer
+# hangs waiting for Enter, so Claude can run the whole spike and just relay step 2.
+if [ -n "${CAPTURE_SPIKE_NONINTERACTIVE:-}" ]; then
+  open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture" 2>/dev/null || true
+  log "NON-INTERACTIVE: enable the toggle in System Settings now — polling up to 4 min for audio..."
+  agent_kickstart 2>/dev/null || true
+  wait_for_audio 240 || true
+else
+  read -r -p "Press Enter once the toggle is ON..."
+  log "Restarting the daemon (launchctl kickstart) to pick the grant up cleanly..."
+  agent_kickstart
+  sleep 6
+fi
 
 log "Status after grant:"
 show_status 20 || true
