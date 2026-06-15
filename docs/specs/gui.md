@@ -29,6 +29,8 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
     transcript + latest screenshot path) + the tray event loop.
   - `gui/src/tray.rs` — macOS menu-bar status item (`tray-icon` 0.24 + `muda` 0.19):
     a title that reflects the running-capture count + an Open/Stop-all/Quit menu.
+  - `gui/src/hotkey.rs` — global hotkey ⌃⌘R (`global-hotkey` 0.8, Carbon
+    RegisterEventHotKey, no accessibility permission) that toggles capture.
   - `gui/src/main.rs` — `Application::new().run(...)`, opens one window.
 
 ## Public contract
@@ -68,6 +70,11 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
   captures** (off-thread `/v1/.../stop` of every running session), **Quit**
   (`std::process::exit`). Menu actions hit the daemon directly — independent of the
   main window.
+- **Global hotkey (⌃⌘R):** registered on the main thread in `new()` (`hotkey::build()`);
+  `GlobalHotKeyEvent::receiver()` is drained in the same tray loop. On key-down it
+  **toggles**: if any capture is running → Stop all; else → start on the selected
+  window (or a "select a window first" hint). Works from anywhere (no main window
+  focus needed). The manager is held in the view so it stays registered.
 - All daemon calls run off the main thread (background executor / a dedicated SSE
   thread); failures land in the status line, never crash the UI.
 
@@ -106,10 +113,13 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
   never repeat, so over a long capture the image cache grows — switch to
   `RenderImage` with eviction (product-architecture.md) before long-run use. The live
   transcript/preview itself is **done** (SSE).
-- **Tray menu latency** ~250 ms (the drain interval) — fine for menu clicks; lower it
-  or use `MenuEvent::set_event_handler` if it ever feels laggy. **Global hotkey**
-  (`global-hotkey`) and a **proper menu-bar icon** (vs the text title) + `LSUIElement`
-  (hide the Dock icon, needs the .app Info.plist) are still pending.
+- **Tray/hotkey latency** ~250 ms (the drain interval) — fine for clicks/presses; lower
+  it or use `set_event_handler` if it ever feels laggy.
+- **Hotkey "start" needs a window selected** in the picker (the "stop from anywhere"
+  direction works unconditionally); a frontmost-window default would need engine
+  z-order (the daemon's window list is largest-first, not front-to-back).
+- A **proper menu-bar icon** (vs the text title) + `LSUIElement` (hide the Dock icon,
+  needs the .app Info.plist) are still pending.
 - **No packaging** (.app bundle / DMG, signing) — that's M4-adjacent and needs the
   Developer ID story (#31).
 - **No start-options UI** beyond per-app audio + 2 s interval; no ASR/model picker,

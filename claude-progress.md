@@ -1,5 +1,33 @@
 # Progress Log
 
+## Session 26 — 2026-06-15
+**Agent**: builder (macOS box, branch **v2**; v2 was squashed to one commit + pushed to GitHub
+this session per Alex's request — origin/v2 = 162222a, current-dated; local tag v2-presquash keeps
+the granular history; new commits continue normally on top)
+**Summary**: Built **#33 slice 4 — global hotkey ⌃⌘R** (the spec's `global-hotkey` crate),
+completing the menu-bar-app trio (tray-icon + muda + global-hotkey).
+- **`gui/src/hotkey.rs` (new)**: registers ⌃⌘R via `global-hotkey` 0.8 (Carbon
+  RegisterEventHotKey — **no accessibility permission** needed); returns the manager (kept alive in
+  the view = stays registered) + the hotkey id.
+- **`gui/src/app.rs`**: `GlobalHotKeyEvent::receiver()` drained in the existing 250ms tray loop;
+  on key-down → `toggle_capture` (running → stop_all; else start on the selected window). A UI hint
+  "⌃⌘R toggles capture from anywhere" renders when registration succeeds.
+- **Verification**: `cargo build` clean; the GUI ran and **showed the hotkey hint** (= manager +
+  register both succeeded → hotkey is registered with the system) with a live capture listed. The
+  actual key-press→toggle path could NOT be auto-verified: a synthetic keystroke (osascript) timed
+  out (Terminal lacks Accessibility) and synthetic CGEvents don't reliably trigger Carbon hotkeys —
+  needs a real hardware ⌃⌘R (Alex can confirm). Honest status recorded in features.json #33.
+- Specs: gui.md (hotkey files/behavior; "start" needs a selected window — frontmost-default would
+  need engine z-order; menu-bar icon + LSUIElement still pending).
+**#33 status**: slices 1–4 DONE (window + daemon client + picker + start/stop + live session list +
+SSE live transcript/preview + menu-bar tray + global hotkey). **Remaining**: a real menu-bar icon +
+LSUIElement, onboarding + Settings, RenderImage eviction for the preview, `.app`/DMG
+packaging+signing (#31, needs Alex's Developer ID), gpui 0.2.2 → zed git rev for Linux/a11y.
+**Next**: the audiocap macOS-26 enumeration-retry (#30 follow-up, Python-side) or GUI onboarding/
+Settings. #31 packaging needs Alex's Developer ID.
+
+---
+
 ## Session 25 — 2026-06-15
 **Agent**: builder (macOS box, branch **v2**)
 **Summary**: Built **#33 slice 3 — menu-bar (tray) presence** for the GPUI app, via the spec's

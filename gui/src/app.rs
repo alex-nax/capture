@@ -9,11 +9,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use gpui::{div, img, prelude::*, px, rgb, App, ClickEvent, Context, SharedString, Timer, Window};
 use muda::MenuEvent;
 
 use crate::daemon::{self, Daemon, Health, Session, WindowInfo};
 use crate::tray::{self, Tray};
+use crate::hotkey;
 
 /// Live data for the selected session, written by the SSE thread, read by render.
 #[derive(Default)]
@@ -32,6 +34,8 @@ pub struct CaptureApp {
     selected_session: Option<String>,  // session whose detail is shown
     live: Arc<Mutex<LiveState>>,
     tray: Option<Tray>,
+    _hotkey_mgr: Option<GlobalHotKeyManager>, // kept alive = stays registered
+    hotkey_id: u32,
     message: SharedString,
     out_dir: String,
     polling: bool,
@@ -66,10 +70,16 @@ impl CaptureApp {
             selected_session: None,
             live: Arc::new(Mutex::new(LiveState::default())),
             tray: tray::build(),
+            _hotkey_mgr: None,
+            hotkey_id: 0,
             message: "".into(),
             out_dir: default_out_dir(),
             polling: false,
         };
+        if let Some((mgr, id)) = hotkey::build() {
+            app._hotkey_mgr = Some(mgr);
+            app.hotkey_id = id;
+        }
         app.refresh_blocking();
         app.start_poll(cx);
         app.spawn_sse();
@@ -77,20 +87,45 @@ impl CaptureApp {
         app
     }
 
+    fn toggle_capture(&mut self, cx: &mut Context<Self>) {
+        if self.sessions.iter().any(|s| s.state == "running") {
+            self.stop_all(cx);
+        } else {
+            self.start_capture(cx);
+        }
+    }
+
     /// Drain menu-bar events (~4×/s) and keep the menu-bar title in sync with the
     /// running-capture count. Runs on the GPUI main thread (tray UI is main-thread).
     fn start_tray_loop(&mut self, cx: &mut Context<Self>) {
-        if self.tray.is_none() {
+        if self.tray.is_none() && self.hotkey_id == 0 {
             return;
         }
         cx.spawn(async move |this, cx| loop {
             Timer::after(Duration::from_millis(250)).await;
+            // Menu-bar clicks.
             while let Ok(ev) = MenuEvent::receiver().try_recv() {
                 let id = ev.id().as_ref().to_string();
                 if this.update(cx, |v, cx| v.on_menu(&id, cx)).is_err() {
                     return;
                 }
             }
+            // Global hotkey (⌃⌘R) — toggle on key-down.
+            while let Ok(ev) = GlobalHotKeyEvent::receiver().try_recv() {
+                if ev.state == HotKeyState::Pressed {
+                    if this
+                        .update(cx, |v, cx| {
+                            if ev.id == v.hotkey_id {
+                                v.toggle_capture(cx);
+                            }
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+            // Keep the menu-bar title synced to the running count.
             if this
                 .update(cx, |v, _cx| {
                     let n = v.sessions.iter().filter(|s| s.state == "running").count();
@@ -352,6 +387,11 @@ impl Render for CaptureApp {
             }
             _ => "no daemon — run: capture daemon start".to_string(),
         };
+        let hotkey_hint = if self.hotkey_id != 0 {
+            format!("{} toggles capture from anywhere", hotkey::LABEL)
+        } else {
+            String::new()
+        };
 
         let window_rows: Vec<_> = self
             .windows
@@ -477,6 +517,7 @@ impl Render for CaptureApp {
             .text_sm()
             .child(div().text_xl().child("capture"))
             .child(div().text_color(rgb(0x9aa0a6)).child(header))
+            .child(div().text_color(rgb(0x6a8a9a)).child(hotkey_hint))
             .child(div().text_color(rgb(0xffcc66)).child(self.message.clone()))
             .child(
                 div()

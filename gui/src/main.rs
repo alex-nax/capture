@@ -2,6 +2,7 @@
 
 mod app;
 mod daemon;
+mod hotkey;
 mod tray;
 
 use app::CaptureApp;
