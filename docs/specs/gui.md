@@ -11,9 +11,9 @@ ever**, and the MCP/agent path stays first-class. The GUI is a thin peer of the
 daemon (like the MCP server and CLI): all capture logic stays in the Python engine
 behind `/v1`; the Rust side is UI + a daemon client only.
 
-**This slice (#33 slice 1, macOS):** a single-window dashboard — daemon health, a
-window picker, start/stop, and a live-polled session list — proving the
-GPUI↔daemon integration end to end.
+**Current (#33 slices 1–2, macOS):** a single-window dashboard — daemon health, a
+window picker, start/stop, a live-polled session list, and a **live session-detail
+pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
 
 ## Files
 
@@ -22,16 +22,19 @@ GPUI↔daemon integration end to end.
   - `gui/Cargo.toml` — `gpui = "0.2.2"` (crates.io), `ureq` (blocking HTTP),
     `serde`/`serde_json`, `dirs`.
   - `gui/src/daemon.rs` — `Daemon` client (mirrors `daemon/client.py`): `discover()`
-    from `~/.capture/daemon.json`, `health/sessions/windows/start/stop`.
-  - `gui/src/app.rs` — `CaptureApp` GPUI view (`Render`) + the poll loop + handlers.
+    from `~/.capture/daemon.json`, `health/sessions/windows/start/stop/transcript`,
+    and `open_events()` (the `/v1/events` SSE line reader).
+  - `gui/src/app.rs` — `CaptureApp` GPUI view (`Render`) + the poll loop + handlers +
+    the background SSE thread feeding a shared `LiveState` (tracked session's
+    transcript + latest screenshot path).
   - `gui/src/main.rs` — `Application::new().run(...)`, opens one window.
 
 ## Public contract
 
 - The GUI consumes only the daemon `/v1` API ([daemon.md](daemon.md)) — it adds no
-  new backend surface. Today: `GET /v1/health`, `GET /v1/sessions`, `GET /v1/windows`,
-  `POST /v1/sessions`, `POST /v1/sessions/{id}/stop`. (SSE `/v1/events`, the live
-  preview, and the schema-generated types are slice-2 — see Known limitations.)
+  new backend surface: `GET /v1/health`, `GET /v1/sessions`, `GET /v1/windows`,
+  `POST /v1/sessions`, `POST /v1/sessions/{id}/stop`,
+  `GET /v1/sessions/{id}/transcript` (backfill), and `GET /v1/events` (SSE, live).
 - No CLI/flags yet; the binary opens the window. Reads the same
   `CAPTURE_DAEMON_JSON` discovery file as the CLI.
 
@@ -49,8 +52,14 @@ GPUI↔daemon integration end to end.
   shared registry means the new session appears in the list (and to the CLI / any
   MCP agent) on the next poll.
 - **Stop:** each running session row has a "Stop" button → `POST .../stop`.
-- All daemon calls run off the main thread; failures land in the status line, never
-  crash the UI.
+- **Live detail pane:** clicking a session (or auto-selecting the newest running one)
+  tracks it: a backfill of its transcript via `GET .../transcript`, then a background
+  SSE thread on `/v1/events` appends new `transcript_segment` text and updates the
+  latest `screenshot_taken` path into a shared `LiveState`. The pane renders the
+  latest screenshot via `img(PathBuf)` and the last ~12 transcript lines; the poll
+  loop's `cx.notify()` repaints it ~1×/s.
+- All daemon calls run off the main thread (background executor / a dedicated SSE
+  thread); failures land in the status line, never crash the UI.
 
 ## Invariants & constraints
 
@@ -83,9 +92,10 @@ GPUI↔daemon integration end to end.
 
 ## Known limitations / open items
 
-- **Slice 1 = polling, not push.** Wire `/v1/events` (SSE) for a live transcript /
-  screenshot preview (`RenderImage`, not URI-cached `img()` — avoids the hours-long
-  cache leak noted in product-architecture.md).
+- **Screenshot preview uses `img(PathBuf)`** (URI-cached). Timestamped filenames
+  never repeat, so over a long capture the image cache grows — switch to
+  `RenderImage` with eviction (product-architecture.md) before long-run use. The live
+  transcript/preview itself is **done** (SSE).
 - **No tray / menu-bar presence or global hotkey yet** (`tray-icon` + `muda` +
   `global-hotkey`, per the spec) — slice 2+.
 - **No packaging** (.app bundle / DMG, signing) — that's M4-adjacent and needs the

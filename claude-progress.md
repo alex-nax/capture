@@ -1,5 +1,34 @@
 # Progress Log
 
+## Session 24 — 2026-06-15
+**Agent**: builder (macOS box, branch **v2**)
+**Summary**: Built **#33 slice 2 — the GUI live session-detail pane** (transcript streaming +
+screenshot preview over `/v1/events` SSE), turning the polled list into a real live view.
+- **`gui/src/daemon.rs`**: added `transcript(id, tail)` (REST backfill) and `open_events()` — the
+  `/v1/events` SSE line reader (a **no-timeout** ureq agent; the 30s agent would kill the stream).
+- **`gui/src/app.rs`**: a background **std::thread** reads SSE forever (reconnect loop) and, for the
+  tracked session, appends `transcript_segment` text + the latest `screenshot_taken` path into a
+  shared `Arc<Mutex<LiveState>>`. Clicking a session (or auto-selecting the newest running one)
+  backfills its transcript via REST then tracks it live. The detail pane renders the latest
+  screenshot via `img(PathBuf)` + the last ~12 transcript lines; the 1s poll loop repaints it.
+  Two-column lists (windows | sessions) to make room.
+- **Verified visually** (two screenshots ~10s apart on the live YouTube capture): the session
+  counts grew (15s/6seg → 36s/12seg), the **transcript grew live** (new lines streamed in via SSE),
+  and the **screenshot preview rendered the actual video frame**. Exactly the ask.
+- Specs: gui.md (SSE behavior, contract, files; moved SSE out of Known-limitations to done; the
+  `img()` cache-leak-on-long-runs → RenderImage is the remaining preview note); features.json #33.
+**Verification**: `cargo build` clean; manual end-to-end on macOS (screenshots). Python untouched
+(68/68 + 4/4 stand).
+**#33 status**: slices 1–2 DONE (window + daemon client + picker + start/stop + live session list +
+**live transcript/preview via SSE**). **Remaining**: tray/menu-bar + global hotkey, onboarding +
+Settings/ASR-model manager, RenderImage-with-eviction for the preview, `.app`/DMG packaging+signing
+(#31), gpui 0.2.2 → zed git rev for Linux/a11y.
+**Next**: tray/menu-bar presence (tray-icon+muda) or the audiocap macOS-26 enumeration-retry. #31
+packaging needs Alex's Developer ID. (Per [[feedback-keep-momentum]]: I'll keep going on the
+clear next step rather than asking.)
+
+---
+
 ## Session 23 — 2026-06-15
 **Agent**: builder (macOS box, branch **v2**)
 **Summary**: Built **#33 slice 1 — the native GPUI GUI app** (`capture-gui`). Alex chose

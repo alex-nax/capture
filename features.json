@@ -25,7 +25,9 @@
         "Process exit code is recorded"
       ],
       "passes": true,
-      "dependencies": [1]
+      "dependencies": [
+        1
+      ]
     },
     {
       "id": 3,
@@ -50,7 +52,9 @@
         "rc=0-but-missing-file is treated as an error (screencapture quirk)"
       ],
       "passes": true,
-      "dependencies": [3]
+      "dependencies": [
+        3
+      ]
     },
     {
       "id": 5,
@@ -63,7 +67,9 @@
         "Format honored (png/jpg/...) via screencapture -t or sips re-encode"
       ],
       "passes": true,
-      "dependencies": [4]
+      "dependencies": [
+        4
+      ]
     },
     {
       "id": 6,
@@ -76,7 +82,9 @@
         "raw audio saved to audio.s16le"
       ],
       "passes": true,
-      "dependencies": [1]
+      "dependencies": [
+        1
+      ]
     },
     {
       "id": 7,
@@ -89,7 +97,9 @@
         "CAPTURE_WHISPER_MODEL env overrides the model"
       ],
       "passes": true,
-      "dependencies": [6]
+      "dependencies": [
+        6
+      ]
     },
     {
       "id": 8,
@@ -102,7 +112,11 @@
         "session.json written on start, stop, and error"
       ],
       "passes": true,
-      "dependencies": [2, 4, 6]
+      "dependencies": [
+        2,
+        4,
+        6
+      ]
     },
     {
       "id": 9,
@@ -127,7 +141,9 @@
         "anyio declared as a direct dependency"
       ],
       "passes": true,
-      "dependencies": [1]
+      "dependencies": [
+        1
+      ]
     },
     {
       "id": 11,
@@ -138,7 +154,9 @@
         "_prune_locked keeps running sessions and evicts oldest finished beyond MAX_SESSIONS"
       ],
       "passes": true,
-      "dependencies": [1]
+      "dependencies": [
+        1
+      ]
     },
     {
       "id": 12,
@@ -149,7 +167,11 @@
         "python tests/smoke.py prints 20/20 passed without special permissions"
       ],
       "passes": true,
-      "dependencies": [1, 4, 6]
+      "dependencies": [
+        1,
+        4,
+        6
+      ]
     },
     {
       "id": 13,
@@ -161,7 +183,9 @@
         "VERIFIED against a real Riva endpoint returning timestamped transcripts"
       ],
       "passes": false,
-      "dependencies": [7]
+      "dependencies": [
+        7
+      ]
     },
     {
       "id": 14,
@@ -173,13 +197,15 @@
         "Graceful message when Microphone permission is missing"
       ],
       "passes": false,
-      "dependencies": [6]
+      "dependencies": [
+        6
+      ]
     },
     {
       "id": 15,
       "category": "infrastructure",
       "priority": "high",
-      "description": "Stable code-signing identity so the helper's Screen Recording (TCC) grant persists across rebuilds. scripts/setup_codesign.sh creates the self-signed cert. Session 9: fixed two bugs that made it fail on macOS+OpenSSL-3 — PKCS#12 export now uses -legacy + a non-empty passphrase (empty/AES-MAC p12 fail `security import` MAC verification), and have_identity() detects via `find-identity -p codesigning` WITHOUT -v (a self-signed cert is untrusted so never lists under -v). The skill installer (skills/capture/scripts/install.sh) now runs setup_codesign.sh instead of an ad-hoc build, so skill-based installs get the persistent grant too.",
+      "description": "Stable code-signing identity so the helper's Screen Recording (TCC) grant persists across rebuilds. scripts/setup_codesign.sh creates the self-signed cert. Session 9: fixed two bugs that made it fail on macOS+OpenSSL-3 \u2014 PKCS#12 export now uses -legacy + a non-empty passphrase (empty/AES-MAC p12 fail `security import` MAC verification), and have_identity() detects via `find-identity -p codesigning` WITHOUT -v (a self-signed cert is untrusted so never lists under -v). The skill installer (skills/capture/scripts/install.sh) now runs setup_codesign.sh instead of an ad-hoc build, so skill-based installs get the persistent grant too.",
       "acceptance_criteria": [
         "scripts/setup_codesign.sh creates a codesigning identity and signs the helper (DONE; fixed for OpenSSL 3)",
         "build_helper.sh signs with CODESIGN_IDENTITY (DONE)",
@@ -188,7 +214,9 @@
         "skill install.sh stably signs the helper so skill installs also get a persistent grant (DONE)"
       ],
       "passes": true,
-      "dependencies": [9]
+      "dependencies": [
+        9
+      ]
     },
     {
       "id": 16,
@@ -200,7 +228,10 @@
         "Latency lower than the fixed-window approach"
       ],
       "passes": false,
-      "dependencies": [6, 13]
+      "dependencies": [
+        6,
+        13
+      ]
     },
     {
       "id": 17,
@@ -211,7 +242,9 @@
         "When the child exits, screenshots/audio stop and state becomes 'stopped' without an explicit capture_stop"
       ],
       "passes": false,
-      "dependencies": [8]
+      "dependencies": [
+        8
+      ]
     },
     {
       "id": 18,
@@ -222,7 +255,9 @@
         "Bundled helper requests permissions via its own Info.plist and is notarizable"
       ],
       "passes": false,
-      "dependencies": [15]
+      "dependencies": [
+        15
+      ]
     },
     {
       "id": 19,
@@ -233,7 +268,9 @@
         "pytest green locally; smoke test wrapped as pytest cases"
       ],
       "passes": false,
-      "dependencies": [12]
+      "dependencies": [
+        12
+      ]
     },
     {
       "id": 20,
@@ -246,7 +283,11 @@
         "smoke test still 20/20 on macOS through the abstraction"
       ],
       "passes": true,
-      "dependencies": [4, 6, 8]
+      "dependencies": [
+        4,
+        6,
+        8
+      ]
     },
     {
       "id": 21,
@@ -259,7 +300,9 @@
         "Session output layout + tool params identical to macOS"
       ],
       "passes": true,
-      "dependencies": [20]
+      "dependencies": [
+        20
+      ]
     },
     {
       "id": 22,
@@ -271,7 +314,9 @@
         "pyproject extras gate macOS-only (pyobjc) and arm64-only (mlx) deps by platform"
       ],
       "passes": true,
-      "dependencies": [20]
+      "dependencies": [
+        20
+      ]
     },
     {
       "id": 23,
@@ -283,7 +328,10 @@
         "A results doc compares accuracy and speed; verifies the Riva/Nemotron adapter end-to-end (closes #13)"
       ],
       "passes": false,
-      "dependencies": [13, 21]
+      "dependencies": [
+        13,
+        21
+      ]
     },
     {
       "id": 24,
@@ -300,67 +348,81 @@
         "install.ps1 installs capture-mcp on Windows (find Python, venv, faster-whisper extra, smoke) and prints the bin path; SKILL.md documents macOS+Windows install paths (DONE, Session 9)"
       ],
       "passes": true,
-      "dependencies": [1]
+      "dependencies": [
+        1
+      ]
     },
     {
       "id": 25,
       "category": "core",
       "priority": "high",
-      "description": "M0a — engine/MCP package split + SessionRegistry: move engine modules to capture/core (verbatim), thin capture/mcp server; extract the _sessions dict/_prune_locked from server.py into a SessionRegistry that rebuilds history from <output_dir>/capture-*/session.json at startup; fix start() holding session._lock through slow component startup (add a 'starting' state, start components outside the lock, mirroring stop()). See docs/specs/product-architecture.md.",
+      "description": "M0a \u2014 engine/MCP package split + SessionRegistry: move engine modules to capture/core (verbatim), thin capture/mcp server; extract the _sessions dict/_prune_locked from server.py into a SessionRegistry that rebuilds history from <output_dir>/capture-*/session.json at startup; fix start() holding session._lock through slow component startup (add a 'starting' state, start components outside the lock, mirroring stop()). See docs/specs/product-architecture.md.",
       "acceptance_criteria": [
         "MCP behavior identical: tools/list schemas unchanged, smoke 20/20 (DONE; suite grew to 28/28)",
         "Server restart no longer loses session history (registry rebuilt from session.json files) (DONE; verified cross-process, Session 10)",
         "capture-mcp console script still works; capture_status responds while another session is starting (DONE; smoke test_status_during_start)"
       ],
       "passes": true,
-      "dependencies": [8, 11]
+      "dependencies": [
+        8,
+        11
+      ]
     },
     {
       "id": 26,
       "category": "core",
       "priority": "medium",
-      "description": "M0b — EventBus + per-session events.jsonl: components push screenshot_taken/transcript_segment/log_line/state events alongside today's polled counters; CaptureSession appends an append-only events.jsonl per session (state transitions + periodic counter snapshots) so future GUI/daemon clients tail one file instead of fs-watching.",
+      "description": "M0b \u2014 EventBus + per-session events.jsonl: components push screenshot_taken/transcript_segment/log_line/state events alongside today's polled counters; CaptureSession appends an append-only events.jsonl per session (state transitions + periodic counter snapshots) so future GUI/daemon clients tail one file instead of fs-watching.",
       "acceptance_criteria": [
         "A smoke capture produces events.jsonl with state transitions and counter snapshots (DONE; starting->running->stopping->stopped + periodic and final snapshots, smoke 35/35)",
         "Existing polling (capture_status/summary()) unchanged (DONE; all pre-existing smoke checks pass untouched)"
       ],
       "passes": true,
-      "dependencies": [25]
+      "dependencies": [
+        25
+      ]
     },
     {
       "id": 27,
       "category": "testing",
       "priority": "high",
-      "description": "M0c — contract fixtures + frozen helper contract: tests/contract/ with a golden MCP tools/list schema dump, a recorded StubASR session-dir fixture (session.json + transcript.jsonl + events.jsonl layout), and PCM chunk/offset fixtures for the 8s-window logic; docs/specs/helper-contract.md freezing the audiocap protocol (argv, 16kHz mono s16le PCM on stdout, READY scanned on stderr, -3801/-3803 fatal vs -3805 transient); fix the audiocap.swift:14 'first line is READY' comment lie.",
+      "description": "M0c \u2014 contract fixtures + frozen helper contract: tests/contract/ with a golden MCP tools/list schema dump, a recorded StubASR session-dir fixture (session.json + transcript.jsonl + events.jsonl layout), and PCM chunk/offset fixtures for the 8s-window logic; docs/specs/helper-contract.md freezing the audiocap protocol (argv, 16kHz mono s16le PCM on stdout, READY scanned on stderr, -3801/-3803 fatal vs -3805 transient); fix the audiocap.swift:14 'first line is READY' comment lie.",
       "acceptance_criteria": [
         "Contract tests pass against current code and fail on schema/layout drift (DONE; 3/3 hold, injected drift exits 1, --regen path works)",
         "helper-contract.md exists and matches audiocap.swift + audiocap_win.py reality (DONE; also fixed the READY comment lie, the audiocap_win shutdown NameError, and the phantom-watchdog docstring)"
       ],
       "passes": true,
-      "dependencies": [25, 26]
+      "dependencies": [
+        25,
+        26
+      ]
     },
     {
       "id": 28,
       "category": "asr",
       "priority": "medium",
-      "description": "asr/openai_compat.py — small backend POSTing WAV-wrapped PCM to any OpenAI-compatible /v1/audio/transcriptions endpoint, plus a 'minimal' extra in pyproject.toml (screenshots+logs-only install). Turns the Nemotron WSL2/Docker lab into a plain remote endpoint.",
+      "description": "asr/openai_compat.py \u2014 small backend POSTing WAV-wrapped PCM to any OpenAI-compatible /v1/audio/transcriptions endpoint, plus a 'minimal' extra in pyproject.toml (screenshots+logs-only install). Turns the Nemotron WSL2/Docker lab into a plain remote endpoint.",
       "acceptance_criteria": [
         "asr_backend pointing at a compatible endpoint yields timestamped transcript segments (DONE; smoke: direct backend + full AudioCapture pipeline against a stub server, 6 segments at offsets 0.5/2.0/8.5/10.0/16.5/18.0)",
         "pip install 'capture-mcp[minimal]' captures screenshots+logs with no ASR deps (DONE; verified in a fresh uv venv: no mlx/faster-whisper/riva importable, real capture produced screenshots+logs)"
       ],
       "passes": true,
-      "dependencies": [7]
+      "dependencies": [
+        7
+      ]
     },
     {
       "id": 29,
       "category": "core",
       "priority": "medium",
-      "description": "list_windows MCP tool — expose WindowFinder discovery (title, app, pid, window id, bounds) so agents get the same window picker the GUI will use.",
+      "description": "list_windows MCP tool \u2014 expose WindowFinder discovery (title, app, pid, window id, bounds) so agents get the same window picker the GUI will use.",
       "acceptance_criteria": [
-        "tools/list shows list_windows; returns layer-0 windows largest-first on macOS and EnumWindows results on Windows (DONE on macOS: 7 real windows largest-first, app_name filter verified, golden updated; Windows backend goes through the same WindowFinder.find — verify on the Windows box next time it runs the suite)"
+        "tools/list shows list_windows; returns layer-0 windows largest-first on macOS and EnumWindows results on Windows (DONE on macOS: 7 real windows largest-first, app_name filter verified, golden updated; Windows backend goes through the same WindowFinder.find \u2014 verify on the Windows box next time it runs the suite)"
       ],
       "passes": true,
-      "dependencies": [20]
+      "dependencies": [
+        20
+      ]
     },
     {
       "id": 30,
@@ -368,31 +430,36 @@
       "priority": "high",
       "description": "TCC attribution spike (GATES the daemon architecture): on a clean macOS 14 and 15 VM, verify that a launchd-agent-spawned, Developer-ID-signed PyInstaller daemon is the TCC-responsible process for Screen Recording, that the grant persists across app updates (same Team ID + bundle id), the daemon-restart-after-grant flow, and the macOS 15 periodic re-approval behavior. Document as a repeatable checklist in docs/specs/product-architecture.md.",
       "acceptance_criteria": [
-        "Written spike report: attribution works (or the documented fallback decision if it does not) (DONE 2026-06-15, macOS 26.5.1/arm64: PASS — launchd→signed .app PyInstaller daemon→audiocap streamed audio with no terminal grant; spike/tcc-attribution/results/FINDINGS.md)",
-        "Grant survives a simulated app update with unchanged identity/bundle id (DONE: same-identity rebuild+re-sign → audio flowed immediately, respawns=0, no re-prompt; identity ROTATION lost the grant — negative control confirms keying to the signing identity)",
-        "re-approval / robustness notes recorded (DONE: macOS 26 SCShareableContent enumeration is intermittently flaky — audiocap exit 5 rode by the respawn loop; follow-up logged to add a bounded enumeration retry to audiocap.swift)"
+        "Written spike report: attribution works (or the documented fallback decision if it does not) (DONE 2026-06-15, macOS 26.5.1/arm64: PASS \u2014 launchd\u2192signed .app PyInstaller daemon\u2192audiocap streamed audio with no terminal grant; spike/tcc-attribution/results/FINDINGS.md)",
+        "Grant survives a simulated app update with unchanged identity/bundle id (DONE: same-identity rebuild+re-sign \u2192 audio flowed immediately, respawns=0, no re-prompt; identity ROTATION lost the grant \u2014 negative control confirms keying to the signing identity)",
+        "re-approval / robustness notes recorded (DONE: macOS 26 SCShareableContent enumeration is intermittently flaky \u2014 audiocap exit 5 rode by the respawn loop; follow-up logged to add a bounded enumeration retry to audiocap.swift)"
       ],
       "passes": true,
-      "dependencies": [15]
+      "dependencies": [
+        15
+      ]
     },
     {
       "id": 31,
       "category": "infrastructure",
       "priority": "high",
-      "description": "M1 — packaged signed engine, no GUI: PyInstaller onedir of the engine+MCP, Developer ID + notarization, PREBUILT signed audiocap (kills the swiftc/Xcode-CLT requirement for end users), capture doctor (permission preflight, CGRequestScreenCaptureAccess trigger, System Settings deep link), distributed via brew tap + GitHub releases.",
+      "description": "M1 \u2014 packaged signed engine, no GUI: PyInstaller onedir of the engine+MCP, Developer ID + notarization, PREBUILT signed audiocap (kills the swiftc/Xcode-CLT requirement for end users), capture doctor (permission preflight, CGRequestScreenCaptureAccess trigger, System Settings deep link), distributed via brew tap + GitHub releases.",
       "acceptance_criteria": [
         "brew install <tap>/capture then 'grant once' yields a working audio capture on a machine with no git/Xcode CLT/Python",
         "Packaged-bundle smoke: a real capture runs from the installed artifact",
         "From-source init.sh path still works unchanged"
       ],
       "passes": false,
-      "dependencies": [27, 30]
+      "dependencies": [
+        27,
+        30
+      ]
     },
     {
       "id": 32,
       "category": "core",
       "priority": "high",
-      "description": "M2 — captured daemon + /v1 API + CLI: aiohttp HTTP+WS over UDS+bearer token (127.0.0.1 on Windows), endpoint discovery via ~/.capture/daemon.json (0600), /v1 surface per docs/specs/product-architecture.md, daemon-level ASR model pool, capture CLI (start/stop/status/tail/doctor/daemon install|uninstall) writing launchd agent / logon task / systemd user unit; MCP server gains daemon-first mode with embedded fallback (CAPTURE_MCP_EMBEDDED=1).",
+      "description": "M2 \u2014 captured daemon + /v1 API + CLI: aiohttp HTTP+WS over UDS+bearer token (127.0.0.1 on Windows), endpoint discovery via ~/.capture/daemon.json (0600), /v1 surface per docs/specs/product-architecture.md, daemon-level ASR model pool, capture CLI (start/stop/status/tail/doctor/daemon install|uninstall) writing launchd agent / logon task / systemd user unit; MCP server gains daemon-first mode with embedded fallback (CAPTURE_MCP_EMBEDDED=1).",
       "acceptance_criteria": [
         "Agent-started capture is visible via CLI status; sessions survive client exits (DONE: captured /v1 API on 127.0.0.1+token over a shared SessionRegistry; `capture` CLI + the MCP server (daemon-first) are both clients; smoke test_daemon + test_cli_daemon + test_mcp_daemon_first, 62/62)",
         "One Screen Recording grant (to the daemon) gives working audio from two different terminals' MCP agents (MECHANISM DONE: both terminals' MCP agents proxy to the one daemon via daemon-first dispatch, so they share its registry+grant. The stable-grant BENEFIT still needs the packaged signed launchd daemon #31/#30 to be the TCC-responsible process)",
@@ -402,48 +469,59 @@
         "[REMAINING for passes:true] UDS transport (SSE replaces the planned WS for events); daemon lifecycle install (launchd/systemd/logon-task); Rust type generation from /v1 schema; the cross-terminal-AUDIO benefit (needs #31)"
       ],
       "passes": false,
-      "dependencies": [31]
+      "dependencies": [
+        31
+      ]
     },
     {
       "id": 33,
       "category": "gui",
       "priority": "high",
-      "description": "M3 — GPUI app v1 on macOS: tray/menu-bar icon (tray-icon+muda), main window (session list from daemon registry, new-capture form with /v1/windows picker), session detail (live preview via RenderImage with cache eviction, transcript/log tails), onboarding (SMAppService daemon registration, Grant flow with permission.updated push, ends with a visible 5-second self-test capture), Settings (ASR model manager with resumable+SHA256 downloads). GPUI pinned to a frozen zed git rev + compatible gpui-component rev, cargo vendor, quarterly bump policy.",
+      "description": "M3 \u2014 GPUI app v1 on macOS: tray/menu-bar icon (tray-icon+muda), main window (session list from daemon registry, new-capture form with /v1/windows picker), session detail (live preview via RenderImage with cache eviction, transcript/log tails), onboarding (SMAppService daemon registration, Grant flow with permission.updated push, ends with a visible 5-second self-test capture), Settings (ASR model manager with resumable+SHA256 downloads). GPUI pinned to a frozen zed git rev + compatible gpui-component rev, cargo vendor, quarterly bump policy.",
       "acceptance_criteria": [
         "Capture.dmg: drag-install, onboarding to first successful self-test capture without a terminal (PENDING: packaging is M4-adjacent, needs Developer ID #31)",
-        "An MCP-agent-started capture appears live in the GUI session list (DONE slice 1: gui/ GPUI app polls /v1/sessions; verified — captures started via the CLI/GUI appear in the GUI list with live shots/segs counts, and history sessions recovered from the disk index show too)",
-        "Quitting the GUI does not stop a running capture (DONE: the GUI is a thin daemon client; the daemon owns the session — verified, captures outlive the GUI process)",
-        "[DONE slice 1, macOS, crates.io gpui 0.2.2] gui/ Cargo project: daemon client (daemon.rs) + GPUI window (app.rs) — health header, /v1/windows picker, Start/Stop buttons (start: per-app audio on the selected window), live-polled session list; built + ran + screenshotted on macOS. docs/specs/gui.md.",
-        "[REMAINING for passes:true] SSE /v1/events live preview+transcript (RenderImage); tray/menu-bar + global hotkey; onboarding + Settings/ASR-model manager; .app/DMG packaging + signing (#31); migrate gpui 0.2.2 -> pinned zed git rev for Linux/a11y"
+        "An MCP-agent-started capture appears live in the GUI session list (DONE slice 1: gui/ GPUI app polls /v1/sessions; verified \u2014 captures started via the CLI/GUI appear in the GUI list with live shots/segs counts, and history sessions recovered from the disk index show too)",
+        "Quitting the GUI does not stop a running capture (DONE: the GUI is a thin daemon client; the daemon owns the session \u2014 verified, captures outlive the GUI process)",
+        "[DONE slices 1-2, macOS, gpui 0.2.2] gui/: daemon client (health/sessions/windows/start/stop/transcript + /v1/events SSE reader) + GPUI window \u2014 health header, /v1/windows picker, Start/Stop, live-polled session list, and a LIVE session-detail pane (screenshot preview via img() + transcript streamed over SSE; auto-opens the running capture). Built+ran+screenshotted: transcript grew live and the preview rendered the video frame. docs/specs/gui.md.",
+        "[REMAINING for passes:true] RenderImage with eviction for the preview (img() cache leak on long runs); tray/menu-bar + global hotkey; onboarding + Settings/ASR-model manager; .app/DMG packaging + signing (#31); migrate gpui 0.2.2 -> pinned zed git rev for Linux/a11y"
       ],
       "passes": false,
-      "dependencies": [32]
+      "dependencies": [
+        32
+      ]
     },
     {
       "id": 34,
       "category": "gui",
       "priority": "medium",
-      "description": "M4 — Windows release: GPUI app on the DX11 backend, Inno Setup installer (+ winget), logon-task daemon install, interactive-station preflight UX, and per-process audio via a NATIVE helper binary (windows-rs, ActivateAudioInterfaceAsync + PROCESS_LOOPBACK with INCLUDE_TARGET_PROCESS_TREE for Chromium-family apps) speaking the frozen 16kHz s16le PCM stdout contract — closes the per-process half of #21. Ship with honest SmartScreen messaging (Trusted Signing unavailable to individuals; OV cert does not clear cold-start).",
+      "description": "M4 \u2014 Windows release: GPUI app on the DX11 backend, Inno Setup installer (+ winget), logon-task daemon install, interactive-station preflight UX, and per-process audio via a NATIVE helper binary (windows-rs, ActivateAudioInterfaceAsync + PROCESS_LOOPBACK with INCLUDE_TARGET_PROCESS_TREE for Chromium-family apps) speaking the frozen 16kHz s16le PCM stdout contract \u2014 closes the per-process half of #21. Ship with honest SmartScreen messaging (Trusted Signing unavailable to individuals; OV cert does not clear cold-start).",
       "acceptance_criteria": [
         "CaptureSetup-x64.exe installs and first capture works without a terminal",
         "Per-process loopback isolates a Chromium app's audio while other apps play sound",
         "GUI labels system-mix vs per-process source correctly"
       ],
       "passes": false,
-      "dependencies": [21, 27, 33]
+      "dependencies": [
+        21,
+        27,
+        33
+      ]
     },
     {
       "id": 35,
       "category": "infrastructure",
       "priority": "medium",
-      "description": "M5 — Linux: third platform backend (X11 window discovery + screenshots first; Wayland via xdg-desktop-portal ScreenCast — picker-only targeting, persistent share indicator, re-persisted restore tokens, documented app_name degradation; PipeWire per-app audio with a reconnect-tracking helper using -3805-style semantics), systemd user unit, then GPUI app on wgpu (Vulkan requirement documented; engine artifact must not link GPUI so headless/SSH agents keep working).",
+      "description": "M5 \u2014 Linux: third platform backend (X11 window discovery + screenshots first; Wayland via xdg-desktop-portal ScreenCast \u2014 picker-only targeting, persistent share indicator, re-persisted restore tokens, documented app_name degradation; PipeWire per-app audio with a reconnect-tracking helper using -3805-style semantics), systemd user unit, then GPUI app on wgpu (Vulkan requirement documented; engine artifact must not link GPUI so headless/SSH agents keep working).",
       "acceptance_criteria": [
         "MCP agent captures screenshots+logs on X11 Linux with no GUI installed",
         "Wayland capture works through the portal flow with documented semantics",
         "PipeWire per-app audio yields a transcript for a target app while another app plays sound"
       ],
       "passes": false,
-      "dependencies": [20, 32]
+      "dependencies": [
+        20,
+        32
+      ]
     }
   ]
 }

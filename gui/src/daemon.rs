@@ -64,6 +64,16 @@ struct Windows {
     windows: Vec<WindowInfo>,
 }
 
+#[derive(Deserialize, Clone)]
+pub struct TranscriptSeg {
+    pub text: String,
+}
+
+#[derive(Deserialize)]
+struct Transcript {
+    segments: Vec<TranscriptSeg>,
+}
+
 fn daemon_json_path() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("CAPTURE_DAEMON_JSON") {
         return Some(PathBuf::from(p));
@@ -123,6 +133,29 @@ impl Daemon {
             .into_json()
             .map_err(|e| e.to_string())?;
         Ok(r.windows)
+    }
+
+    pub fn transcript(&self, id: &str, tail: u32) -> Result<Vec<TranscriptSeg>, String> {
+        let r: Transcript = Self::agent()
+            .get(&format!("{}/v1/sessions/{}/transcript", self.endpoint, id))
+            .query("tail", &tail.to_string())
+            .set("Authorization", &self.auth())
+            .call()
+            .map_err(|e| e.to_string())?
+            .into_json()
+            .map_err(|e| e.to_string())?;
+        Ok(r.segments)
+    }
+
+    /// Open the `/v1/events` SSE stream as a line reader. Uses a NO-timeout agent
+    /// (the stream is long-lived); the caller reads `data: {json}` lines forever.
+    pub fn open_events(&self) -> Result<Box<dyn std::io::BufRead + Send>, String> {
+        let resp = ureq::agent()
+            .get(&format!("{}/v1/events", self.endpoint))
+            .set("Authorization", &self.auth())
+            .call()
+            .map_err(|e| e.to_string())?;
+        Ok(Box::new(std::io::BufReader::new(resp.into_reader())))
     }
 
     pub fn start(&self, body: serde_json::Value) -> Result<Session, String> {
