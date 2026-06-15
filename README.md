@@ -12,6 +12,8 @@ An MCP server that captures everything a target process produces, **on demand**:
 
 An agent calls `capture_start` to begin saving to a chosen location and
 `capture_stop` to end it and stop using disk. `capture_status` reports progress.
+Prefer to drive it yourself? There's also a `capture` **CLI** and a native
+menu-bar **GUI** — no agent needed (see **[Run it manually](#run-it-manually-without-an-agent--daemon-cli-gui)** below).
 
 > Platform: **macOS** (tested on 15.x, Apple Silicon) and **Windows** (10/11, NVIDIA box).
 > OS-specific capture (screenshots, window discovery, audio) lives behind a platform
@@ -117,6 +119,72 @@ Example `claude_desktop_config.json` / `.mcp.json` entry:
   }
 }
 ```
+
+## Run it manually (without an agent) — daemon, CLI, GUI
+
+Beyond the MCP tools, the engine is also driven by a local **daemon** (an HTTP `/v1`
+API), a **`capture` CLI**, and a native **menu-bar GUI** — all thin clients of the
+same capture engine and the same live session registry, so a capture started by one
+shows up in the others. (Design: [`docs/specs/product-architecture.md`](docs/specs/product-architecture.md);
+API: [`docs/specs/daemon.md`](docs/specs/daemon.md); GUI: [`docs/specs/gui.md`](docs/specs/gui.md).)
+
+After `uv pip install -e .` you get three console scripts: `capture-mcp` (MCP server),
+`captured` (daemon), `capture` (CLI). If your venv predates them, re-run the install —
+or use the `python -m capture_mcp.<daemon|cli|server>` forms shown below.
+
+### CLI (simplest)
+
+```bash
+# start the local daemon (spawns it in the background; writes ~/.capture/daemon.json)
+capture daemon start                 # or: python -m capture_mcp.cli daemon start
+
+capture windows                      # list on-screen windows (app, pid, title)
+
+# start a capture — pick ONE target: --app / --pid / --command
+capture start --out ~/.capture/runs --app "Safari"
+#   options: --pid N | --command "cmd" | --interval 2 | --no-audio | --no-screenshots
+#            --audio-source app|mic | --asr auto|local|openai|nemotron
+
+capture status                       # all sessions + live counters
+capture tail <session_id> -n 20      # last N transcript segments
+capture watch                        # stream live events (state/screenshots/transcript); Ctrl-C
+capture stop                         # stop the running capture (or pass a <session_id>)
+capture daemon stop                  # shut the daemon down
+```
+
+Output lands in `<out>/capture-<id>/` (layout above). The daemon keeps sessions alive
+across CLI calls; an MCP agent transparently uses the daemon when one is running
+(`CAPTURE_MCP_EMBEDDED=1` forces the in-process engine instead).
+
+### Daemon (run it in the foreground)
+
+`capture daemon start` spawns it for you; to run it yourself and watch its logs:
+
+```bash
+captured                             # or: python -m capture_mcp.daemon
+# serves http://127.0.0.1:<port>; endpoint + bearer token in ~/.capture/daemon.json (0600)
+```
+
+### GUI (native menu-bar app, macOS)
+
+```bash
+# build once (needs Rust — https://rustup.rs ; gpui's first compile is heavy)
+cargo build --manifest-path gui/Cargo.toml          # add --release for an optimized build
+# run it (needs a daemon: `capture daemon start`)
+./gui/target/debug/capture-gui
+```
+
+A window with a daemon-health header, a window picker, Start/Stop, a live session list,
+and a live **transcript + screenshot preview** (streamed over `/v1/events`). It also adds
+a **menu-bar item** (`● capture` idle, `⦿ N` while N capture) with an Open / Stop-all /
+Quit menu, and a global hotkey **⌃⌘R** to toggle capture from anywhere.
+
+### Screen Recording note
+
+Per-app audio + screenshots need the **Screen Recording** grant for whichever process
+launches the capture — your Terminal, the daemon, or your MCP client. Run from a terminal
+you've granted (System Settings ▸ Privacy & Security ▸ Screen Recording). If the helper
+prints `displays=0` / `no display available`, the launching process simply isn't granted.
 
 ## How per-app audio works
 
