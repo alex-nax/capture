@@ -1,0 +1,17 @@
+{
+  "updated": "2026-06-15T13:00:25Z",
+  "daemon_started": "2026-06-15T13:00:18Z",
+  "daemon_pid": 14942,
+  "daemon_version": "1.0.1",
+  "helper_pid": 14947,
+  "helper_rc": null,
+  "ready": true,
+  "ready_line": "READY rate=16000 channels=1 fmt=s16le target=system",
+  "audio_bytes": 188416,
+  "audio_flowing": true,
+  "permission_error": false,
+  "transient_3805_count": 0,
+  "last_stderr": "audio flowing",
+  "respawns": 0,
+  "verdict": "AUDIO FLOWING \u2014 attribution works"
+}

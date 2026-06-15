@@ -202,7 +202,7 @@ def main() -> int:
               "out": str(out_dir), "current": None, "completed": [], "errors": []}
     write_status(status_path, status)
 
-    from capture_mcp.session import CaptureSession
+    from capture_mcp.core.session import CaptureSession
     sess = None
     driver = None
     try:

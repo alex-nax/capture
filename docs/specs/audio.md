@@ -6,9 +6,9 @@ _Status: current as of 2026-06-07. Source of truth = the code; update this spec 
 Capture a single audio stream for a session, slice it into fixed-length windows, run each window through an ASR backend, and write timestamped transcripts plus the raw PCM. The scope owns: source selection (per-app helper vs. microphone via `ffmpeg`), the 16 kHz mono s16le byte contract, chunking and offset accounting, anchoring timestamps to first-byte wall-clock arrival, and keeping audio/ASR failures visible in the session status surface. It deliberately knows nothing about other capture components or the MCP layer (see `docs/architecture.md` dependency rules).
 
 ## Files
-- `src/capture_mcp/audio.py` — the entire scope: `AudioCapture` class, reader/transcribe loop, lifecycle (`start`/`stop`), and teardown. The **source command** (which subprocess emits the PCM) is built per-OS by the platform abstraction, not here.
+- `src/capture_mcp/core/audio.py` — the entire scope: `AudioCapture` class, reader/transcribe loop, lifecycle (`start`/`stop`), and teardown. The **source command** (which subprocess emits the PCM) is built per-OS by the platform abstraction, not here.
 
-Collaborators referenced but out of scope: `src/capture_mcp/platform/` (the `AudioSource.command(...)` that selects the helper/ffmpeg; see [platform-abstraction.md](platform-abstraction.md) — `helper_path()` now lives in `platform/macos.py`), `src/capture_mcp/asr/` (the `ASRBackend`/`Segment` interface and `create()` factory), `src/capture_mcp/util.py` (`now`, `iso`), `helper/audiocap` (compiled Swift helper, a process boundary).
+Collaborators referenced but out of scope: `src/capture_mcp/core/platform/` (the `AudioSource.command(...)` that selects the helper/ffmpeg; see [platform-abstraction.md](platform-abstraction.md) — `helper_path()` now lives in `platform/macos.py`), `src/capture_mcp/core/asr/` (the `ASRBackend`/`Segment` interface and `create()` factory), `src/capture_mcp/core/util.py` (`now`, `iso`), `helper/audiocap` (compiled Swift helper, a process boundary).
 
 ## Public contract
 Module constants (`audio.py:35-37`):
@@ -35,6 +35,14 @@ Public/observed attributes (read by the session/status surface):
 Methods: `start() -> None` and `stop() -> None`. Both are synchronous and blocking (the orchestrator is responsible for offloading them off the event loop per `docs/architecture.md`). All other methods (`_build_command`, `_read_loop`, `_transcribe`, etc.) are internal; note `_build_command` is monkeypatched by the smoke test, so its `(cmd, mode)` return shape is effectively a test seam.
 
 stdout/stderr contract of the audio *source* (consumed, not produced, by this scope): the source emits raw signed-16-bit little-endian mono PCM at 16 kHz on stdout; human-readable status on stderr. The Swift helper additionally prints `READY rate=<n> channels=1 fmt=s16le ...` then bytes (see `docs/architecture.md`); `audio.py` does not parse the READY line — it treats stdout as an opaque PCM byte stream.
+
+
+### Event hook (M0b, feature #26)
+
+`AudioCapture` accepts an optional `emit=None` keyword (an `EventBus.publish`-shaped
+callable, normally `CaptureSession.events.publish`). When set, it emits
+`transcript_segment` (the jsonl record + count) and `audio_status` {status,mode} at start / no-data failure / stop. Publishing never raises/blocks; with `emit=None` the component is
+silent and behaves exactly as before. See [events.md](events.md).
 
 ## Behavior
 1. `start()` creates `out_dir` (`mkdir parents/exist_ok`).

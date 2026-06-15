@@ -22,13 +22,13 @@ behavior described below now lives in `platform/macos.py:MacScreenGrabber`.
 
 ## Files
 
-- `src/capture_mcp/screenshots.py` — `parse_resolution`, `VALID_FORMATS`, `_extension`, and the
+- `src/capture_mcp/core/screenshots.py` — `parse_resolution`, `VALID_FORMATS`, `_extension`, and the
   `Screenshotter` class (scheduling + delegation). The `_png_size`/`_fit`(→`base.fit_box`)/
   `_sc_format`/`_sips_format`/`_run_cmd` helpers and the `screencapture`/`sips` command-building
-  MOVED to `src/capture_mcp/platform/macos.py`; the Windows equivalent is
-  `src/capture_mcp/platform/windows.py`.
-- Dependencies it uses (not owned by this scope): `src/capture_mcp/platform/` (the
-  `WindowFinder`/`ScreenGrabber` backends), `src/capture_mcp/util.py` (`now`, `fs_stamp`).
+  MOVED to `src/capture_mcp/core/platform/macos.py`; the Windows equivalent is
+  `src/capture_mcp/core/platform/windows.py`.
+- Dependencies it uses (not owned by this scope): `src/capture_mcp/core/platform/` (the
+  `WindowFinder`/`ScreenGrabber` backends), `src/capture_mcp/core/util.py` (`now`, `fs_stamp`).
 
 ## Public contract
 
@@ -86,6 +86,14 @@ There is no return value from the capture loop; results are observed via `count`
 All diagnostics go through `log = logging.getLogger(__name__)` (warnings/exceptions),
 never `print`. This honors the architecture hard constraint that stdout is reserved
 for the MCP transport.
+
+
+### Event hook (M0b, feature #26)
+
+`Screenshotter` accepts an optional `emit=None` keyword (an `EventBus.publish`-shaped
+callable, normally `CaptureSession.events.publish`). When set, it emits
+`screenshot_taken` {path,count} / `screenshot_error` {errors}. Publishing never raises/blocks; with `emit=None` the component is
+silent and behaves exactly as before. See [events.md](events.md).
 
 ## Behavior
 

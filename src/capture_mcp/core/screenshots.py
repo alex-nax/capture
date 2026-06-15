@@ -77,6 +77,7 @@ class Screenshotter:
         resolution: tuple[int, int] | None = None,
         jpeg_quality: int | None = None,
         whole_screen_fallback: bool = True,
+        emit=None,
     ) -> None:
         fmt = (fmt or "png").lower()
         if fmt not in VALID_FORMATS:
@@ -90,6 +91,8 @@ class Screenshotter:
         self.resolution = resolution
         self.jpeg_quality = jpeg_quality
         self.whole_screen_fallback = whole_screen_fallback
+        # Optional event hook (EventBus.publish-shaped); publishing never raises.
+        self._emit = emit
 
         plat = _platform.current()
         self._finder = plat.window_finder
@@ -149,8 +152,12 @@ class Screenshotter:
         )
         if ok:
             self.count += 1
+            if self._emit:
+                self._emit("screenshot_taken", path=str(final), count=self.count)
         else:
             self.errors += 1
+            if self._emit:
+                self._emit("screenshot_error", errors=self.errors)
 
     # -- loop -----------------------------------------------------------------
 

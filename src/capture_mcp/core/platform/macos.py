@@ -25,9 +25,11 @@ from .base import AudioSource, Platform, ScreenGrabber, WindowFinder, WindowRef,
 
 log = logging.getLogger(__name__)
 
-# Repo root holding the compiled Swift helper: src/capture_mcp/platform/macos.py
-# -> parents[3] == repo root.
-_HELPER = Path(__file__).resolve().parents[3] / "helper" / "audiocap"
+# Repo root holding the compiled Swift helper: src/capture_mcp/core/platform/macos.py
+# -> parents[0]=platform, [1]=core, [2]=capture_mcp, [3]=src, [4]=repo root.
+# (The M0a split (#25) moved this module one level deeper into core/, so the
+# walk-up gained one step — a too-short walk silently disables per-app audio.)
+_HELPER = Path(__file__).resolve().parents[4] / "helper" / "audiocap"
 
 
 def helper_path() -> Path | None:

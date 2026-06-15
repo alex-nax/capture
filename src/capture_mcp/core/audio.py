@@ -52,6 +52,7 @@ class AudioCapture:
         chunk_seconds: float = 8.0,
         asr_backend: str = "auto",
         t0: float | None = None,
+        emit=None,
     ) -> None:
         self.out_dir = out_dir
         self.pid = pid
@@ -60,6 +61,8 @@ class AudioCapture:
         self.chunk_seconds = max(1.0, float(chunk_seconds))
         self.asr_name = asr_backend
         self.t0 = t0 if t0 is not None else now()
+        # Optional event hook (EventBus.publish-shaped); publishing never raises.
+        self._emit = emit
 
         self._proc: subprocess.Popen | None = None
         self._reader: threading.Thread | None = None
@@ -120,6 +123,8 @@ class AudioCapture:
         self._reader.start()
         # Keep the no-ASR condition visible rather than clobbering it with "running".
         self.status = "running" if self._asr else f"running (asr-unavailable: {self._asr_error})"
+        if self._emit:
+            self._emit("audio_status", status=self.status, mode=self.mode)
         log.info("audio capture started (mode=%s, asr=%s)", self.mode, self._asr.name if self._asr else "none")
 
     def _build_command(self) -> tuple[list[str] | None, str]:
@@ -169,6 +174,8 @@ class AudioCapture:
         # but a non-zero asr_errors count stays visible.
         if not any(k in self.status for k in ("failed", "unavailable", "no-audio-source")):
             self.status = f"stopped (asr-errors={self.asr_errors})" if self.asr_errors else "stopped"
+        if self._emit:
+            self._emit("audio_status", status=self.status, mode=self.mode)
 
     def _teardown_proc(self) -> None:
         self._kill_proc()
@@ -256,6 +263,8 @@ class AudioCapture:
                     "helper; -3805 means the grant is missing/stale — see README]"
                 )
             log.warning("audio source produced no data: %s", self.status)
+            if self._emit:
+                self._emit("audio_status", status=self.status, mode=self.mode)
 
     def _flush_chunk(self, final: bool = False) -> None:
         if final and len(self._buf) >= MIN_TAIL_BYTES:
@@ -299,3 +308,5 @@ class AudioCapture:
             if self._txt:
                 self._txt.write(f"[{rec['start']}] {seg.text}\n")
             self.segments += 1
+            if self._emit:
+                self._emit("transcript_segment", **rec, count=self.segments)

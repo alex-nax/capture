@@ -12,17 +12,17 @@ shared. `platform.current()` returns the backend for the running OS. Follow-up d
 on a Windows/NVIDIA box, which also enables the Whisper-vs-Nemotron benchmark (feature #23).
 
 ## Files
-- `src/capture_mcp/platform/base.py` — interfaces `WindowFinder`, `ScreenGrabber`,
+- `src/capture_mcp/core/platform/base.py` — interfaces `WindowFinder`, `ScreenGrabber`,
   `AudioSource`; the `WindowRef` dataclass; the `fit_box(sw,sh,bw,bh)` helper; and the
   `Platform` aggregate (holds one of each backend).
-- `src/capture_mcp/platform/__init__.py` — `current()` factory + re-exports. Selects a backend
+- `src/capture_mcp/core/platform/__init__.py` — `current()` factory + re-exports. Selects a backend
   by `sys.platform` (`darwin`→macos, `win32`→windows), overridable by env `CAPTURE_PLATFORM`,
   and caches one `Platform` per resolved name (`_cache`).
-- `src/capture_mcp/platform/macos.py` — `MacWindowFinder` (delegates to `capture_mcp.windows`,
+- `src/capture_mcp/core/platform/macos.py` — `MacWindowFinder` (delegates to `capture_mcp.core.windows`,
   the Quartz module), `MacScreenGrabber` (`screencapture` + `sips`), `MacAudioSource` (the
   ScreenCaptureKit `audiocap` helper, else `ffmpeg` `avfoundation`), `MacOSPlatform`. Also owns
   `helper_path()` and the screenshot helpers `_sc_format`/`_sips_format`/`_png_size`.
-- `src/capture_mcp/platform/windows.py` — `Win32WindowFinder` (`EnumWindows`), `Win32ScreenGrabber`
+- `src/capture_mcp/core/platform/windows.py` — `Win32WindowFinder` (`EnumWindows`), `Win32ScreenGrabber`
   (GDI `BitBlt`/`PrintWindow` → GDI+ scale + encode; sets per-monitor **DPI awareness** at import so
   captures aren't cropped on a scaled display), `Win32AudioSource` (WASAPI system loopback),
   `WindowsPlatform`.
@@ -89,6 +89,12 @@ for an unsupported platform. The MCP tools and the session output layout are unc
 | ASR | local Whisper (mlx/faster) | local Whisper (faster-whisper CUDA) **and** NVIDIA Nemotron via Riva |
 
 ## Invariants & constraints
+- **The macOS `audiocap` helper is found at `<repo_root>/helper/audiocap`**, resolved from
+  `core/platform/macos.py` as `Path(__file__).resolve().parents[4]` (`[0]`=platform, `[1]`=core,
+  `[2]`=capture_mcp, `[3]`=src, `[4]`=repo root). This depth is **pinned by a smoke regression
+  guard** (`test_helper_path`) because a too-short walk silently resolves to `src/helper/audiocap`,
+  `helper_path()` returns `None`, and per-app audio degrades to `no-audio-source` with no error —
+  the failure the M0a split (#25) introduced when it moved this module one level deeper.
 - Audio is **16 kHz mono s16le** end to end on every platform (`SAMPLE_RATE`/`BYTES_PER_SAMPLE`).
 - Session directory layout, `session.json`, and transcript formats are identical across platforms.
 - The MCP tool parameters/returns do not change.
@@ -151,7 +157,11 @@ final image directly (no temp file; the macOS `sips` path still uses a `.tmp.png
 ## Tests
 - `tests/smoke.py` is cross-platform and passes **20/20 on Windows** through the abstraction
   (launch-mode logging + GDI+ whole-screen capture at `640x480/jpg` + audio chunking with stub
-  ASR + `parse_resolution`), and remains the macOS hermetic suite.
+  ASR + `parse_resolution`), and remains the macOS hermetic suite (45/45 on macOS as of the V2
+  branch).
+- `test_helper_path` (darwin-only; skipped elsewhere) pins the helper-path resolution to
+  `<repo>/helper/audiocap` and, when the helper is built, asserts `helper_path()` surfaces it
+  (not `None`). It fails on the `parents[3]`/`[4]` off-by-one that silently disabled per-app audio.
 - Live (Session 6, Windows, service window station): factory returns `windows`;
   `CAPTURE_PLATFORM=macos` override returns the macOS backend object; the per-window GDI+ path
   captured the desktop HWND to a correctly sized 1024×768 PNG; whole-screen+scale+JPEG and

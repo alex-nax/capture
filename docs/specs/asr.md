@@ -11,10 +11,12 @@ rules, all ASR access goes through this interface and no other module imports a 
 directly.
 
 ## Files
-- `src/capture_mcp/asr/__init__.py` — registry / factory (`create`, `available_backends`); re-exports `ASRBackend`, `Segment`.
-- `src/capture_mcp/asr/base.py` — interface + `Segment` dataclass.
-- `src/capture_mcp/asr/whisper_local.py` — local Whisper backends (`MlxWhisper`, `FasterWhisper`) and their `load()`.
-- `src/capture_mcp/asr/nemotron.py` — remote Riva / Nemotron adapter (`NemotronRiva`) and its `load()`.
+- `src/capture_mcp/core/asr/__init__.py` — registry / factory (`create`, `available_backends`); re-exports `ASRBackend`, `Segment`.
+- `src/capture_mcp/core/asr/openai_compat.py` — stdlib-only remote backend: POSTs WAV-wrapped
+  chunks to any OpenAI-compatible `/v1/audio/transcriptions` endpoint (feature #28).
+- `src/capture_mcp/core/asr/base.py` — interface + `Segment` dataclass.
+- `src/capture_mcp/core/asr/whisper_local.py` — local Whisper backends (`MlxWhisper`, `FasterWhisper`) and their `load()`.
+- `src/capture_mcp/core/asr/nemotron.py` — remote Riva / Nemotron adapter (`NemotronRiva`) and its `load()`.
 
 ## Public contract
 
@@ -41,20 +43,40 @@ Methods:
 Factory. `name` is lowercased (None/empty coerced to `"auto"`). Mapping:
 - `"local"` or `"whisper"` → `whisper_local.load()`.
 - `"nemotron"` or `"riva"` → `nemotron.load()`.
-- `"auto"` (default) → try `whisper_local.load()`; on any `Exception`, log a warning and fall back to `nemotron.load()`.
+- `"openai"` / `"openai-compat"` / `"openai_compat"` → `openai_compat.load()` (requires `CAPTURE_OPENAI_ASR_URL`).
+- `"auto"` (default) → try `whisper_local.load()`; on any `Exception`, log a warning, then —
+  if `CAPTURE_OPENAI_ASR_URL` is set (non-blank) — try `openai_compat.load()`; finally fall back
+  to `nemotron.load()`. Local stays preferred even when the URL is set; force the remote with an
+  explicit `asr_backend="openai"`.
 - Anything else → raises `ValueError(f"unknown ASR backend {name!r}; choose from {available_backends}")`.
 
 Backends are imported lazily inside each branch so a missing optional dependency only fails the
 backend it belongs to.
 
 ### `available_backends` (`__init__.py`:19)
-Tuple `("auto", "local", "whisper", "nemotron", "riva")`. Note `"auto"` is the only name not also a
+Tuple `("auto", "local", "whisper", "openai", "openai-compat", "nemotron", "riva")`. Note `"auto"` is the only name not also a
 concrete backend selector.
 
 ### `whisper_local.load() -> ASRBackend` (whisper_local.py:91–105)
 Tries constructors in order `(MlxWhisper, FasterWhisper)`; returns the first that constructs
 successfully (logging `ASR backend loaded: <name>`). If both fail, raises `RuntimeError` with install
 hints and the accumulated per-constructor error strings.
+
+### `openai_compat.load() -> OpenAICompat`
+Reads env: `CAPTURE_OPENAI_ASR_URL` (required — full endpoint URL, e.g.
+`http://localhost:8000/v1/audio/transcriptions`; blank/missing → `RuntimeError`),
+`CAPTURE_OPENAI_ASR_MODEL` (optional `model` form field), `CAPTURE_OPENAI_ASR_KEY`
+(optional; sent as `Authorization: Bearer`), `CAPTURE_OPENAI_ASR_LANGUAGE` (optional),
+`CAPTURE_OPENAI_ASR_TIMEOUT` (seconds, default 120). `transcribe()` converts the float32
+chunk to an in-memory 16-bit WAV, POSTs multipart/form-data with
+`response_format=verbose_json`, and maps the response: a `segments` list → one `Segment`
+per non-blank entry (start clamped ≥0, end clamped to chunk duration); a plain `text`
+response → a single full-chunk `Segment` (empty text → no segments); anything else →
+`RuntimeError` (counted as an asr_error by AudioCapture, capture continues). HTTP errors
+raise with the response body's first 500 bytes for diagnosis. stdlib-only (urllib + wave):
+works from a `minimal` install with zero ASR deps — this is what turns a Nemotron
+WSL2/Docker lab (or whisper.cpp server / faster-whisper-server / api.openai.com) into a
+plain configured endpoint.
 
 ### `nemotron.load() -> ASRBackend` (nemotron.py:94–95)
 Returns `NemotronRiva()` (constructed from env vars). No internal try/fallback.
