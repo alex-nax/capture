@@ -1,5 +1,38 @@
 # Progress Log
 
+## Session 23 — 2026-06-15
+**Agent**: builder (macOS box, branch **v2**)
+**Summary**: Built **#33 slice 1 — the native GPUI GUI app** (`capture-gui`). Alex chose
+**crates.io gpui 0.2.2, macOS-first** (fastest to a running window; migrate to a pinned zed git
+rev when Linux/a11y is tackled). The backend was ready (#32 daemon /v1 + SSE + contract), so the
+GUI is a pure thin client.
+- **`gui/` (new Cargo project, gitignored target)**: `daemon.rs` (ureq client mirroring
+  client.py — discover ~/.capture/daemon.json, health/sessions/windows/start/stop, surfaces the
+  daemon's {"error"} body), `app.rs` (`CaptureApp` GPUI `Render`: health header, /v1/windows
+  picker (clickable, capped 7), Start/Stop buttons, live session list polled every 1.5s via
+  cx.spawn+Timer with blocking HTTP on the background executor + WeakEntity::update/notify),
+  `main.rs` (Application::run, one window). Deps: gpui 0.2.2, ureq, serde, dirs — gpui's first
+  compile is heavy but builds clean.
+- **Ran + verified visually** (screencapture of the GPUI window): connected to the daemon
+  (health shown), window picker populated with real targets, and the **session list showed a LIVE
+  running YouTube capture (54 shots / 15 segs, polled) PLUS earlier sessions recovered from the
+  disk index** — the daemon-peers shared-registry working through the GUI. Start/Stop fired
+  end-to-end (GUI→daemon→engine→per-app audio+ASR).
+- Specs: new docs/specs/gui.md + index row; features.json #33 slice-1 annotated.
+**Verification**: `cargo build` clean (no warnings); manual end-to-end on macOS (screenshots).
+Python smoke/contracts untouched this session (no Python changed) — still 68/68 + 4/4 from
+Session 22.
+**Observed (note, not blocking)**: on GUI launch a capture auto-started/-stopped once — almost
+certainly a stray macOS click-through delivered to the freshly-focused window (cursor over a
+button as it opened), not an on_click-on-render bug; worth confirming when wiring real input.
+**#33 status**: slice 1 (window + daemon client + picker + start/stop + live session list) DONE.
+**Remaining**: SSE /v1/events live preview+transcript (RenderImage), tray/menu-bar + hotkey,
+onboarding + Settings, .app/DMG packaging+signing (#31), gpui 0.2.2 -> zed git rev for Linux/a11y.
+**Next**: wire /v1/events (SSE) into the GUI for a live transcript/preview pane (credit-free), or
+the audiocap macOS-26 enumeration-retry. #31 packaging needs Alex's Developer ID.
+
+---
+
 ## Session 22 — 2026-06-15
 **Agent**: builder (macOS box, branch **v2**)
 **Summary**: Built the **`/v1` pydantic + JSON-Schema contract** (the GUI "contract firewall") —

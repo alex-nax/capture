@@ -410,9 +410,11 @@
       "priority": "high",
       "description": "M3 — GPUI app v1 on macOS: tray/menu-bar icon (tray-icon+muda), main window (session list from daemon registry, new-capture form with /v1/windows picker), session detail (live preview via RenderImage with cache eviction, transcript/log tails), onboarding (SMAppService daemon registration, Grant flow with permission.updated push, ends with a visible 5-second self-test capture), Settings (ASR model manager with resumable+SHA256 downloads). GPUI pinned to a frozen zed git rev + compatible gpui-component rev, cargo vendor, quarterly bump policy.",
       "acceptance_criteria": [
-        "Capture.dmg: drag-install, onboarding to first successful self-test capture without a terminal",
-        "An MCP-agent-started capture appears live in the GUI session list",
-        "Quitting the GUI does not stop a running capture"
+        "Capture.dmg: drag-install, onboarding to first successful self-test capture without a terminal (PENDING: packaging is M4-adjacent, needs Developer ID #31)",
+        "An MCP-agent-started capture appears live in the GUI session list (DONE slice 1: gui/ GPUI app polls /v1/sessions; verified — captures started via the CLI/GUI appear in the GUI list with live shots/segs counts, and history sessions recovered from the disk index show too)",
+        "Quitting the GUI does not stop a running capture (DONE: the GUI is a thin daemon client; the daemon owns the session — verified, captures outlive the GUI process)",
+        "[DONE slice 1, macOS, crates.io gpui 0.2.2] gui/ Cargo project: daemon client (daemon.rs) + GPUI window (app.rs) — health header, /v1/windows picker, Start/Stop buttons (start: per-app audio on the selected window), live-polled session list; built + ran + screenshotted on macOS. docs/specs/gui.md.",
+        "[REMAINING for passes:true] SSE /v1/events live preview+transcript (RenderImage); tray/menu-bar + global hotkey; onboarding + Settings/ASR-model manager; .app/DMG packaging + signing (#31); migrate gpui 0.2.2 -> pinned zed git rev for Linux/a11y"
       ],
       "passes": false,
       "dependencies": [32]

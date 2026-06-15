@@ -34,6 +34,7 @@ Workflow:
 | ScreenCaptureKit helper | [screencapturekit-helper.md](screencapturekit-helper.md) | `audiocap` CLI; stdout PCM + stderr status contract; `AVAudioConverter`; `-3805` auto-reconnect; shutdown guard; signals |
 | Permissions & signing | [permissions-and-signing.md](permissions-and-signing.md) | Screen Recording (TCC); stable self-signed identity; `build_helper` signing; `-3805` (transient) vs `-3801`/`-3803` (permission) |
 | Platform abstraction | [platform-abstraction.md](platform-abstraction.md) | `WindowFinder`/`ScreenGrabber`/`AudioSource` interfaces + `current()` factory; macOS (screencapture/Quartz/helper) and Windows (GDI+/`EnumWindows`/ctypes) backends; macOS+Windows support |
+| GUI app | [gui.md](gui.md) | `capture-gui` — native **GPUI (Rust)** daemon client (gui/, crates.io gpui 0.2.2, macOS slice 1): health + window picker + start/stop + live-polled sessions; thin client of `/v1`, no web UI |
 | Product architecture | [product-architecture.md](product-architecture.md) | Decision record + plan: daemon-peers architecture (`captured` + GPUI app + MCP + CLI as thin peers); native GPUI GUI (no web UI); packaging/signing/TCC strategy; roadmap M0–M5 (features #25–#35) |
 
 See [`../architecture.md`](../architecture.md) for the cross-cutting module map and hard constraints.
