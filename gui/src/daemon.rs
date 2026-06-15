@@ -92,6 +92,32 @@ pub fn discover() -> Option<Daemon> {
     })
 }
 
+/// Path to the daemon bundled inside the packaged app, if present:
+/// `Capture.app/Contents/Resources/captured/captured` (next to the GUI binary's
+/// `MacOS` dir). None in a dev build (run the daemon from the venv instead).
+pub fn bundled_daemon() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let cand = exe.parent()?.join("../Resources/captured/captured");
+    if cand.exists() {
+        Some(cand)
+    } else {
+        None
+    }
+}
+
+/// Spawn a daemon binary **detached** (own process group → outlives the GUI, so
+/// captures survive the app quitting). Returns true if it launched.
+pub fn spawn_detached(bin: &std::path::Path) -> bool {
+    use std::os::unix::process::CommandExt;
+    std::process::Command::new(bin)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0)
+        .spawn()
+        .is_ok()
+}
+
 impl Daemon {
     fn agent() -> ureq::Agent {
         ureq::AgentBuilder::new()
@@ -101,6 +127,11 @@ impl Daemon {
 
     fn auth(&self) -> String {
         format!("Bearer {}", self.token)
+    }
+
+    /// True iff the daemon answers /v1/health (cheap liveness probe).
+    pub fn available(&self) -> bool {
+        self.health().is_ok()
     }
 
     pub fn health(&self) -> Result<Health, String> {

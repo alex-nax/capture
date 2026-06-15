@@ -22,8 +22,11 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
   - `gui/Cargo.toml` — `gpui = "0.2.2"` (crates.io), `ureq` (blocking HTTP),
     `serde`/`serde_json`, `dirs`.
   - `gui/src/daemon.rs` — `Daemon` client (mirrors `daemon/client.py`): `discover()`
-    from `~/.capture/daemon.json`, `health/sessions/windows/start/stop/transcript`,
-    and `open_events()` (the `/v1/events` SSE line reader).
+    from `~/.capture/daemon.json`, `available()` (health probe),
+    `health/sessions/windows/start/stop/transcript`, and `open_events()` (the
+    `/v1/events` SSE line reader). Plus `bundled_daemon()` (resolves
+    `Contents/Resources/captured/captured` in the packaged app) and `spawn_detached()`
+    (launch it in its own process group so captures outlive the GUI).
   - `gui/src/app.rs` — `CaptureApp` GPUI view (`Render`) + the poll loop + handlers +
     the background SSE thread feeding a shared `LiveState` (tracked session's
     transcript + latest screenshot path) + the tray event loop.
@@ -34,8 +37,11 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
   - `gui/src/skill.rs` — install/update the bundled `capture` skill into a coding
     agent's home (`~/.claude/skills/capture`, `~/.codex/skills/capture`), with a
     content-hash status check (not installed / up to date / update available).
-- `packaging/build_macos_dmg.sh` — build `Capture.app` (ad-hoc signed; bundles the
-  skill in `Contents/Resources/skill`) + a `.dmg` for testing (not notarized).
+- `packaging/build_macos_dmg.sh` — build a **self-contained** `Capture.app` (ad-hoc
+  signed) + a `.dmg` for testing (not notarized). PyInstaller-freezes the daemon into
+  `Contents/Resources/captured/` (with the signed `audiocap` helper beside it), and
+  bundles the skill in `Contents/Resources/skill`. Signs inside-out so the helper keeps
+  its stable `com.local.audiocap` identity (TCC-grant persistence).
   - `gui/src/main.rs` — `Application::new().run(...)`, opens one window.
 
 ## Public contract
@@ -49,11 +55,15 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
 
 ## Behavior
 
-- **Startup:** `CaptureApp::new` discovers the daemon (`daemon::discover()`), does a
-  brief blocking initial load (health + sessions + windows), and starts a poll loop.
-- **Poll loop:** `cx.spawn` + `Timer::after(1.5s)`; each tick fetches health +
-  sessions on the **background executor** (blocking ureq off the main thread) and
-  updates the view via `WeakEntity::update` + `cx.notify()`. Ends when the view drops.
+- **Startup:** `CaptureApp::new` checks for a live daemon (`discover()` + `available()`);
+  if none answers and a **bundled daemon** is present (packaged app), it spawns it
+  detached (`bundled_daemon()` + `spawn_detached()`) so the app is self-contained — no
+  separate `capture daemon start`. It then does a brief blocking initial load (health +
+  sessions + windows) and starts a poll loop.
+- **Poll loop:** `cx.spawn` + `Timer::after(1.5s)`; each tick **re-discovers** the daemon
+  (so it attaches to the just-spawned bundled one) and fetches health + sessions on the
+  **background executor** (blocking ureq off the main thread), updating the view via
+  `WeakEntity::update` + `cx.notify()`. Ends when the view drops.
 - **Window picker:** the `/v1/windows` list; clicking a row selects it (`selected`).
   "Refresh windows" re-fetches.
 - **Start:** "Start capture" POSTs `/v1/sessions` for the selected window
@@ -63,8 +73,9 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
 - **Stop:** each running session row has a "Stop" button → `POST .../stop`.
 - **Live detail pane:** clicking a session (or auto-selecting the newest running one)
   tracks it: a backfill of its transcript via `GET .../transcript`, then a background
-  SSE thread on `/v1/events` appends new `transcript_segment` text and updates the
-  latest `screenshot_taken` path into a shared `LiveState`. The pane renders the
+  SSE thread on `/v1/events` (which re-discovers the daemon each reconnect, so it
+  attaches to the bundled daemon spawned after launch) appends new `transcript_segment`
+  text and updates the latest `screenshot_taken` path into a shared `LiveState`. The pane renders the
   latest screenshot via `img(PathBuf)` and the last ~12 transcript lines; the poll
   loop's `cx.notify()` repaints it ~1×/s.
 - **Menu-bar (tray):** a status item built on the main thread inside the GPUI run
@@ -93,8 +104,10 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
 ## Invariants & constraints
 
 - **GUI is a thin daemon client** — no capture/ASR logic in Rust; it never imports or
-  reimplements the engine. A daemon-less launch shows "no daemon — run: capture
-  daemon start" and stays usable (read-only/empty).
+  reimplements the engine. It only *launches* the daemon (the bundled frozen binary, as
+  an opaque subprocess); it never links it. In a dev build with no daemon running and no
+  bundled binary, it shows "no daemon — run: capture daemon start" and stays usable
+  (read-only/empty); the packaged app auto-spawns its bundled daemon instead.
 - **No web UI** — pure GPUI native rendering.
 - **macOS-first, gpui 0.2.2 from crates.io** for slice 1 (deliberate): 0.2.2 lacks
   the wgpu Linux renderer + AccessKit, which are M5 (Linux) / a11y concerns. Migrate
@@ -132,11 +145,15 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
   z-order (the daemon's window list is largest-first, not front-to-back).
 - A **proper menu-bar icon** (vs the text title) + `LSUIElement` (hide the Dock icon,
   needs the .app Info.plist) are still pending.
-- **Packaging is ad-hoc only.** `packaging/build_macos_dmg.sh` produces an ad-hoc
-  signed `Capture.app` + `.dmg` — runnable but **not Developer-ID signed / not
-  notarized**, so Gatekeeper blocks first launch (README documents the bypass). The
-  .app does **not** bundle the Python daemon/engine (the GUI is a client; the daemon
-  runs from the repo venv) — a self-contained bundle (PyInstaller sidecar) is #31.
+- **Packaging is ad-hoc signed (not notarized).** `packaging/build_macos_dmg.sh`
+  produces a **self-contained** `Capture.app` + `.dmg` that bundles a PyInstaller-frozen
+  daemon (`Contents/Resources/captured/`) + the signed `audiocap` helper + the skill —
+  but it is **not Developer-ID signed / not notarized**, so Gatekeeper blocks first
+  launch (README documents the bypass). Developer-ID signing + notarization is #31. The
+  frozen daemon does capture + raw audio; **ASR (mlx/torch/…) is excluded** from the
+  freeze (lazy-loaded, big), so transcription needs a configured backend
+  (`openai_compat` is included) or the repo daemon. The frozen onedir adds ~24 MB
+  (DMG ≈ 28 MB vs ≈ 5 MB GUI-only).
 - **No start-options UI** beyond per-app audio + 2 s interval; no ASR/model picker,
   no output-dir chooser.
 - **gpui 0.2.2 → zed git rev** migration owed before Linux (M5) / accessibility.
@@ -151,3 +168,10 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
   and "Stop" ends it. Verified on macOS (gpui 0.2.2) — see `claude-progress.md`.
 - The daemon `/v1` surface the GUI depends on is covered by the Python contract +
   smoke suites (daemon.md Tests); the GUI client mirrors those shapes.
+- Self-contained bundle (slice 7): after `packaging/build_macos_dmg.sh`, the frozen
+  daemon copied OUT of `Capture.app/Contents/Resources/captured/` boots, writes its
+  discovery file, answers `/v1/health` (`ok:true`, platform darwin), and `/v1/windows`
+  returns windows (Quartz works in the frozen binary); `codesign --verify --strict` of
+  the .app passes and the `audiocap` helper keeps its `com.local.audiocap` identity.
+  Verified on macOS 2026-06-15. The in-app auto-spawn path (GUI launches the bundled
+  daemon) is a manual launch check (no headless harness for the GPUI window).

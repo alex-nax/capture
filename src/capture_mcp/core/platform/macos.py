@@ -15,9 +15,11 @@ loop/scheduling/chunking logic lives platform-neutrally in ``screenshots.py`` /
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import struct
 import subprocess
+import sys
 from pathlib import Path
 
 from .. import windows as _quartz
@@ -33,7 +35,20 @@ _HELPER = Path(__file__).resolve().parents[4] / "helper" / "audiocap"
 
 
 def helper_path() -> Path | None:
-    """Path to the built ScreenCaptureKit helper, if present."""
+    """Path to the built ScreenCaptureKit helper, if present.
+
+    Resolution order so the same engine works from the repo AND from a packaged
+    app/frozen daemon: (1) ``CAPTURE_AUDIOCAP`` override; (2) next to the running
+    executable — for a PyInstaller-frozen daemon the helper is bundled beside it,
+    `sys.executable` being the frozen binary; (3) the repo layout (`_HELPER`).
+    """
+    override = os.environ.get("CAPTURE_AUDIOCAP")
+    if override:
+        p = Path(override).expanduser()
+        return p if p.exists() else None
+    beside_exe = Path(sys.executable).resolve().parent / "audiocap"
+    if beside_exe.exists():
+        return beside_exe
     return _HELPER if _HELPER.exists() else None
 
 

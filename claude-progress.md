@@ -1,5 +1,42 @@
 # Progress Log
 
+## Session 29 — 2026-06-15
+**Agent**: builder (macOS box, branch **main**)
+**Summary**: Made the macOS app **self-contained** — the `.app` now bundles a frozen daemon and the
+GUI auto-spawns it, so there's no venv to set up and nothing to start by hand (Alex: "We should make
+the daemon installable with this app"). #33 slice 7.
+- **`packaging/build_macos_dmg.sh`**: now **PyInstaller-freezes the daemon** (onedir) into
+  `Capture.app/Contents/Resources/captured/`, copies the **signed `audiocap` helper** beside the
+  frozen binary, and signs **inside-out** (nested dylibs/.so + frozen binary + GUI ad-hoc, then the
+  bundle last with NO `--deep`) so the helper KEEPS its stable `com.local.audiocap` identity (audio
+  TCC-grant persistence). Freeze excludes mlx/torch/faster_whisper/riva (lazy + huge). DMG → 28 MB.
+  `CAPTURE_SKIP_FREEZE=1` reuses an existing freeze for fast GUI-only iteration.
+- **`packaging/captured_main.py` (new)**: PyInstaller entry (`from capture_mcp.daemon.server import
+  main`).
+- **`gui/src/daemon.rs`**: `available()` (health probe), `bundled_daemon()` (resolves
+  `<exe>/../Resources/captured/captured`), `spawn_detached()` (own process group → outlives the GUI).
+- **`gui/src/app.rs`**: `new()` auto-spawns the bundled daemon if none is running; the **poll loop**
+  and **SSE thread** now **re-discover** each tick/reconnect (so they attach to the daemon spawned
+  after launch) and the poll loop sets `v.daemon`.
+- **`src/capture_mcp/core/platform/macos.py`**: `helper_path()` resolves `audiocap` beside
+  `sys.executable` (the frozen binary) so per-app audio works from the bundle (override → beside-exe
+  → repo `_HELPER`).
+**Verification**: GUI builds clean (release). Full DMG build runs end-to-end. The frozen `captured`
+copied OUT of the `.app` **boots**: writes `daemon.json`, `/v1/health` → `ok:true` (platform darwin),
+`/v1/windows` → 4 windows (Quartz works frozen). `codesign --verify --strict` of the `.app` passes;
+the bundled helper still shows `Identifier=com.local.audiocap`, `Authority=capture-mcp-codesign`.
+Python smoke 68/68 (arm64 venv). The in-app GUI→daemon auto-spawn is a manual launch check (no
+headless GPUI harness).
+**Caveat surfaced**: the frozen daemon does **capture + raw audio but not local ASR** (mlx excluded);
+transcription needs a remote backend (`openai_compat`) or the repo daemon → motivates an in-GUI ASR
+model manager (next).
+**#33 status**: window + daemon client + picker + start/stop + live SSE transcript/preview + tray +
+hotkey + skill install/update + **self-contained .app/.dmg (bundled daemon)** — done. **Remaining**:
+ASR model manager / Settings (in-GUI whisper download), onboarding, RenderImage eviction, Developer-ID
+signing + notarization (#31), gpui→zed-git for Linux/a11y.
+
+---
+
 ## Session 28 — 2026-06-15
 **Agent**: builder (macOS box 15.7.3, branch **v2**)
 **Summary**: Two distribution features for the GUI: a **macOS .app/.dmg packaging script** and an

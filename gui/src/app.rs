@@ -63,6 +63,14 @@ fn truncate(s: &str, n: usize) -> String {
 
 impl CaptureApp {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        // Packaged app: if no daemon is running and we ship one (bundled in the
+        // .app), start it detached — the poll loop picks it up within ~1-2s.
+        let running = daemon::discover().map_or(false, |d| d.available());
+        if !running {
+            if let Some(bin) = daemon::bundled_daemon() {
+                daemon::spawn_detached(&bin);
+            }
+        }
         let mut app = Self {
             daemon: daemon::discover(),
             health: None,
@@ -198,10 +206,12 @@ impl CaptureApp {
     /// Background thread: read /v1/events forever and accumulate the tracked
     /// session's transcript + latest screenshot into the shared LiveState.
     fn spawn_sse(&self) {
-        let Some(daemon) = self.daemon.clone() else { return };
         let live = self.live.clone();
         std::thread::spawn(move || loop {
-            if let Ok(reader) = daemon.open_events() {
+            // Re-discover each reconnect so it attaches to whatever daemon is
+            // running now (incl. the bundled one started after the GUI launched).
+            if let Some(daemon) = daemon::discover() {
+                if let Ok(reader) = daemon.open_events() {
                 for line in reader.lines() {
                     let Ok(line) = line else { break };
                     let Some(json) = line.strip_prefix("data: ") else { continue };
@@ -225,6 +235,7 @@ impl CaptureApp {
                         _ => {}
                     }
                 }
+                }
             }
             std::thread::sleep(Duration::from_secs(1)); // reconnect backoff
         });
@@ -235,18 +246,28 @@ impl CaptureApp {
             return;
         }
         self.polling = true;
-        let daemon = self.daemon.clone();
         cx.spawn(async move |this, cx| loop {
             Timer::after(Duration::from_millis(1000)).await;
-            let Some(d) = daemon.clone() else { continue };
+            // Re-discover each tick so a daemon that starts later (incl. the
+            // bundled one we spawned) is picked up, and a restarted daemon too.
             let result = cx
                 .background_executor()
-                .spawn(async move { (d.health().ok(), d.sessions().unwrap_or_default()) })
+                .spawn(async move {
+                    match daemon::discover() {
+                        Some(d) if d.available() => {
+                            let h = d.health().ok();
+                            let s = d.sessions().unwrap_or_default();
+                            (Some(d), h, s)
+                        }
+                        _ => (None, None, Vec::new()),
+                    }
+                })
                 .await;
             if this
                 .update(cx, |v, cx| {
-                    v.health = result.0;
-                    v.sessions = result.1;
+                    v.daemon = result.0;
+                    v.health = result.1;
+                    v.sessions = result.2;
                     // Default the live pane to the newest running capture.
                     if v.selected_session.is_none() {
                         if let Some(s) = v.sessions.iter().rev().find(|s| s.state == "running") {

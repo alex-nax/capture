@@ -170,9 +170,12 @@ captured                             # or: python -m capture_mcp.daemon
 ```bash
 # build once (needs Rust — https://rustup.rs ; gpui's first compile is heavy)
 cargo build --manifest-path gui/Cargo.toml          # add --release for an optimized build
-# run it (needs a daemon: `capture daemon start`)
+# run it (a dev binary has no bundled daemon, so start one: `capture daemon start`)
 ./gui/target/debug/capture-gui
 ```
+
+> The **packaged** `Capture.app` (below) bundles its own frozen daemon and auto-spawns it; this
+> dev binary doesn't, so it needs a daemon already running.
 
 A window with a daemon-health header, a window picker, Start/Stop, a live session list,
 and a live **transcript + screenshot preview** (streamed over `/v1/events`). It also adds
@@ -190,13 +193,16 @@ prints `displays=0` / `no display available`, the launching process simply isn't
 
 ## Installing the macOS app (unsigned test build)
 
-Package the GUI as a double-clickable `Capture.app` inside a `.dmg`:
+Package the GUI as a double-clickable, **self-contained** `Capture.app` inside a `.dmg` — it
+bundles a frozen copy of the daemon, so there's no venv to set up and nothing to start by hand:
 
 ```bash
-bash packaging/build_macos_dmg.sh        # -> dist/Capture-0.1.0.dmg  (needs Rust + Xcode CLT)
+bash packaging/build_macos_dmg.sh        # -> dist/Capture-0.1.0.dmg  (needs Rust + Xcode CLT + ./init.sh venv)
 ```
 
-Open the DMG and drag **Capture.app** to **Applications**.
+The build PyInstaller-freezes the daemon into the app (`Contents/Resources/captured/`, with the
+signed `audiocap` helper beside it) and ad-hoc signs everything. Open the DMG and drag
+**Capture.app** to **Applications**.
 
 > ⚠️ **This build is NOT notarized and NOT Developer-ID signed** — it is *ad-hoc* signed, for
 > testing. macOS **Gatekeeper will block it on first launch** ("Apple could not verify 'Capture'
@@ -217,11 +223,16 @@ Open the DMG and drag **Capture.app** to **Applications**.
 
 **What the app needs / does:**
 
-- It is a **daemon client** — start the engine first with `capture daemon start` (the app shows
-  "no daemon — run: capture daemon start" until one is running).
-- It does **not** bundle the Python engine; you still need the repo + venv for the daemon (and the
-  signed `audiocap` helper for per-app audio). A fully self-contained bundle is feature #31.
-- Per-app audio still needs **Screen Recording** for whichever process launches the daemon.
+- It is **self-contained** — on launch the GUI auto-spawns its **bundled** frozen daemon (detached,
+  so captures outlive the app) if one isn't already running. No repo, no venv, no
+  `capture daemon start`. (If you *do* have a daemon running — e.g. from the repo — the app attaches
+  to that one instead.)
+- The bundled daemon does **capture + raw audio**. **Transcription** needs an ASR backend: the
+  freeze excludes the local mlx-whisper models (too big), so configure a remote one
+  (`CAPTURE_ASR_BACKEND=openai_compat` + endpoint) or run the repo daemon for on-device ASR.
+- Per-app audio still needs **Screen Recording** granted to the app (the daemon it launches is the
+  TCC-responsible process); the bundled `audiocap` helper keeps its stable signing identity so that
+  grant persists across rebuilds.
 
 **Install the skill into your coding agent.** The app bundles the `capture` skill and can drop it
 into a coding agent's home so the agent can drive capture-mcp from any project. Each button shows

@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
-# Build Capture.app (the GPUI GUI) and wrap it in a .dmg for macOS testing.
+# Build Capture.app (the GPUI GUI + the bundled `captured` daemon) and wrap it in
+# a .dmg for macOS testing.
 #
 # IMPORTANT: this build is **ad-hoc signed — NOT Developer-ID signed and NOT
 # notarized**. macOS Gatekeeper will warn on first launch; testers must bypass it
-# (see README → "Installing the macOS app (unsigned test build)"). The GUI is a
-# thin daemon client: a running `captured` daemon is still required
-# (`capture daemon start`); the .app does not bundle the Python engine.
+# (see README → "Installing the macOS app (unsigned test build)").
+#
+# Self-contained: the .app bundles a PyInstaller-frozen daemon under
+# `Contents/Resources/captured/` (with the signed `audiocap` helper beside it), so
+# the GUI auto-spawns its own daemon — no separate venv/`capture daemon start`.
+# The frozen daemon does capture + raw audio; transcription still needs a
+# configured ASR backend (mlx is excluded to keep the bundle small).
 #
 # Output: dist/Capture-<version>.dmg  (dist/ is gitignored)
+#
+# Env knobs:
+#   CAPTURE_GUI_VERSION   bundle version (default 0.1.0)
+#   CAPTURE_SKIP_FREEZE=1 reuse an existing freeze (fast GUI-only iteration)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,11 +26,38 @@ VERSION="${CAPTURE_GUI_VERSION:-0.1.0}"
 DIST="$ROOT/dist"
 APP="$DIST/$APP_NAME.app"
 DMG="$DIST/$APP_NAME-$VERSION.dmg"
+VENV_PY="$ROOT/.venv/bin/python"
+FREEZE_DIR="$ROOT/packaging/build/dist/captured"
 
 echo "==> Building the GUI (release; gpui's first compile is heavy)…"
 cargo build --release --manifest-path "$ROOT/gui/Cargo.toml"
 BIN="$ROOT/gui/target/release/capture-gui"
 [ -x "$BIN" ] || { echo "build failed: $BIN missing" >&2; exit 1; }
+
+# --- Freeze the Python daemon (PyInstaller onedir) -------------------------------
+# Deps are only numpy + pydantic + pyobjc(Quartz); ASR (mlx/torch/…) is lazy so we
+# exclude it. The result is a self-contained `captured` binary + its dylibs.
+if [ "${CAPTURE_SKIP_FREEZE:-0}" = "1" ] && [ -x "$FREEZE_DIR/captured" ]; then
+  echo "==> CAPTURE_SKIP_FREEZE=1 — reusing existing freeze at $FREEZE_DIR"
+else
+  [ -x "$VENV_PY" ] || { echo "missing venv python: $VENV_PY (run ./init.sh)" >&2; exit 1; }
+  "$VENV_PY" -c "import PyInstaller" 2>/dev/null || {
+    echo "==> Installing PyInstaller into the venv…"
+    uv pip install --python "$VENV_PY" pyinstaller >/dev/null
+  }
+  echo "==> Freezing the daemon (PyInstaller onedir)…"
+  "$VENV_PY" -m PyInstaller --noconfirm --onedir --name captured \
+    --distpath "$ROOT/packaging/build/dist" \
+    --workpath "$ROOT/packaging/build/work" \
+    --specpath "$ROOT/packaging/build" \
+    --hidden-import capture_mcp.core.platform.macos \
+    --hidden-import capture_mcp.core.asr.openai_compat \
+    --collect-all Quartz \
+    --exclude-module mlx --exclude-module mlx_whisper --exclude-module torch \
+    --exclude-module faster_whisper --exclude-module riva \
+    "$ROOT/packaging/captured_main.py"
+fi
+[ -x "$FREEZE_DIR/captured" ] || { echo "freeze failed: $FREEZE_DIR/captured missing" >&2; exit 1; }
 
 echo "==> Assembling $APP …"
 mkdir -p "$DIST"
@@ -45,6 +81,21 @@ cat > "$APP/Contents/Info.plist" <<EOF
 </dict></plist>
 EOF
 
+# Bundle the frozen daemon under Resources/captured (the GUI's bundled_daemon()
+# looks for Contents/Resources/captured/captured relative to the GUI binary).
+echo "==> Bundling the frozen daemon into Resources/captured …"
+rsync -a "$FREEZE_DIR/" "$APP/Contents/Resources/captured/"
+
+# Place the signed ScreenCaptureKit helper beside the frozen daemon — the engine's
+# helper_path() resolves `audiocap` next to sys.executable (the frozen binary).
+# cp preserves its embedded `com.local.audiocap` signature (stable TCC identity).
+if [ -x "$ROOT/helper/audiocap" ]; then
+  echo "==> Placing the signed audiocap helper beside the daemon …"
+  cp "$ROOT/helper/audiocap" "$APP/Contents/Resources/captured/audiocap"
+else
+  echo "   (no helper/audiocap — per-app audio will fall back to ffmpeg/mic)"
+fi
+
 # Bundle the `capture` skill so the GUI's "Install skill →" buttons work from the
 # installed .app (it copies this into ~/.claude/skills/capture etc.).
 echo "==> Bundling the capture skill into Resources/skill …"
@@ -52,11 +103,20 @@ mkdir -p "$APP/Contents/Resources/skill"
 rsync -a --exclude '__pycache__' --exclude '*.pyc' \
   "$ROOT/skills/capture/" "$APP/Contents/Resources/skill/"
 
-# Ad-hoc signature (identity "-"): runnable on Apple Silicon, but Gatekeeper
-# still treats it as an unidentified developer. Developer ID + notarization is #31.
-echo "==> Ad-hoc signing (NOT Developer-ID / NOT notarized)…"
-codesign --force --deep --sign - "$APP"
-codesign --verify --deep --strict "$APP" && echo "   signature verifies (ad-hoc)"
+# --- Sign inside-out (ad-hoc), preserving the helper's stable identity -----------
+# Apple discourages `--deep`; we sign nested Mach-Os first, then the bundle. The
+# `audiocap` helper KEEPS its `com.local.audiocap` (capture-mcp-codesign) signature
+# from the cp above, so its Screen-Recording/audio TCC grant persists across builds.
+echo "==> Signing (ad-hoc; helper keeps its stable identity)…"
+# Every dylib/.so the frozen daemon loads + the frozen binary itself.
+find "$APP/Contents/Resources/captured" \
+  -type f \( -name '*.so' -o -name '*.dylib' \) \
+  -exec codesign --force --sign - --timestamp=none {} +
+codesign --force --sign - --timestamp=none "$APP/Contents/Resources/captured/captured"
+codesign --force --sign - --timestamp=none "$APP/Contents/MacOS/capture-gui"
+# Seal the bundle last (NO --deep → the helper's signature is left intact).
+codesign --force --sign - "$APP"
+codesign --verify --strict "$APP" && echo "   bundle signature verifies (ad-hoc)"
 
 echo "==> Building $DMG …"
 STAGE="$(mktemp -d)"
@@ -68,4 +128,4 @@ rm -rf "$STAGE"
 
 echo "==> Done: $DMG ($(du -h "$DMG" | cut -f1))"
 echo "   Testers must bypass Gatekeeper — README → 'Installing the macOS app (unsigned test build)'."
-echo "   The GUI needs a running daemon: \`capture daemon start\`."
+echo "   Self-contained: the GUI auto-spawns the bundled daemon (no \`capture daemon start\`)."
