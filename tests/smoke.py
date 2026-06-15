@@ -353,6 +353,36 @@ async def test_list_windows() -> None:
         check("windows: app_name filter", True, "skipped (no windows; headless?)")
 
 
+def test_helper_path() -> None:
+    """Regression guard: the audiocap helper path must resolve to <repo>/helper/audiocap.
+
+    The M0a split (#25) moved platform/macos.py one level deeper into core/, and the
+    parents[N] walk-up had to grow by one (parents[3]->[4]). A too-short walk silently
+    points at src/helper/audiocap, so per-app audio degrades to "no audio source" with
+    NO error and NO smoke failure (the audio test stubs ASR + uses the mic source).
+    This pins the path computation hermetically so the off-by-one can't come back.
+    Found in real use mid-meeting (capture produced screenshots but a silent transcript).
+    """
+    if sys.platform != "darwin":
+        check("helper-path: repo-relative (darwin-only)", True, "skipped (not darwin)")
+        return
+    from capture_mcp.core.platform import macos  # noqa: E402
+
+    repo_root = Path(__file__).resolve().parent.parent
+    expected = repo_root / "helper" / "audiocap"
+    ok = macos._HELPER == expected
+    check("helper-path: resolves to <repo>/helper/audiocap", ok,
+          "" if ok else f"{macos._HELPER} != {expected}")
+    # When the helper is actually built (this dev box), helper_path() must surface it,
+    # not None — the exact end-to-end signal whose absence broke per-app audio.
+    if expected.exists():
+        check("helper-path: helper_path() returns the built binary",
+              macos.helper_path() == expected, str(macos.helper_path()))
+    else:
+        check("helper-path: helper_path() returns the built binary", True,
+              "skipped (helper not built here)")
+
+
 def test_parse_resolution() -> None:
     check("parse: WxH/fmt", parse_resolution("1280x720/jpg") == (1280, 720, "jpg"))
     check("parse: WxH", parse_resolution("640x480") == (640, 480, None))
@@ -375,6 +405,7 @@ async def main() -> int:
         test_event_bus()
         test_registry_history()
         await test_list_windows()
+        test_helper_path()
         test_parse_resolution()
     finally:
         shutil.rmtree(BASE, ignore_errors=True)

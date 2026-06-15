@@ -1,5 +1,33 @@
 # Progress Log
 
+## Session 17 — 2026-06-15
+**Agent**: builder (macOS box, branch **v2**)
+**Summary**: Closed the loop on the **helper-path regression** found during a real meeting capture.
+Context: while capturing a live Google Meet on v2, per-app audio silently produced `no-audio-source`
+(screenshots worked, transcript was empty). Root cause: the M0a split (#25) moved
+`platform/macos.py` into `core/platform/`, one level deeper, but `_HELPER` kept `parents[3]` — which
+now resolves to `src/helper/audiocap` (nonexistent) instead of `<repo>/helper/audiocap`. The code
+fix (`parents[3]→[4]`) was committed mid-meeting (`e4f16e1`); this session adds the **owed test +
+spec** so it can't recur:
+- **`tests/smoke.py::test_helper_path`** (darwin-only, skips elsewhere): pins `macos._HELPER ==
+  <repo>/helper/audiocap`, and when the helper is built asserts `helper_path()` returns it (not
+  `None`). **Proven to fail** on the `parents[3]` off-by-one (verified by temporarily reverting:
+  43/45 with the bug, 45/45 fixed).
+- **`docs/specs/platform-abstraction.md`**: new Invariant documenting the `parents[4]` resolution +
+  why (the silent-audio failure mode), and a Tests note for the guard.
+- Why smoke missed it originally: the audio test stubs ASR and uses the **mic** source, so the
+  macOS per-app helper path was never exercised hermetically. Now it is (path-level).
+**Verification**: smoke **45/45** (2 new helper-path checks); contracts **3/3**.
+**Branch note**: meeting captures in the interim ran on `main` (where the path + the external
+`~/.capture/bin/transcribe_meeting.py` import were already correct); that external helper was made
+branch-resilient (try `core.session` except `session`).
+**Next (V2 roadmap):** the critical path #31 (packaged signed engine) → #32 (daemon) is gated on
+**#30 (TCC attribution spike)**, whose kit is ready (`spike/tcc-attribution/`) and awaits a run on
+Alex's spare Mac. The daemon **/v1 API + CLI** code itself does NOT depend on packaging/the spike
+and could start in parallel — decision pending.
+
+---
+
 ## Session 16 — 2026-06-10
 **Agent**: builder (macOS box, ultracode, branch **v2**)
 **Summary**: Prepared the **#30 TCC-attribution spike kit** for Alex's spare Mac (the feature
