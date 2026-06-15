@@ -16,6 +16,7 @@ use muda::MenuEvent;
 use crate::daemon::{self, Daemon, Health, Session, WindowInfo};
 use crate::tray::{self, Tray};
 use crate::hotkey;
+use crate::skill;
 
 /// Live data for the selected session, written by the SSE thread, read by render.
 #[derive(Default)]
@@ -36,6 +37,7 @@ pub struct CaptureApp {
     tray: Option<Tray>,
     _hotkey_mgr: Option<GlobalHotKeyManager>, // kept alive = stays registered
     hotkey_id: u32,
+    skill_status: Vec<skill::SkillStatus>, // per skill::AGENTS, cached
     message: SharedString,
     out_dir: String,
     polling: bool,
@@ -72,6 +74,7 @@ impl CaptureApp {
             tray: tray::build(),
             _hotkey_mgr: None,
             hotkey_id: 0,
+            skill_status: Vec::new(),
             message: "".into(),
             out_dir: default_out_dir(),
             polling: false,
@@ -80,6 +83,7 @@ impl CaptureApp {
             app._hotkey_mgr = Some(mgr);
             app.hotkey_id = id;
         }
+        app.refresh_skill_status();
         app.refresh_blocking();
         app.start_poll(cx);
         app.spawn_sse();
@@ -362,6 +366,20 @@ impl CaptureApp {
         })
         .detach();
     }
+
+    fn refresh_skill_status(&mut self) {
+        self.skill_status = skill::AGENTS.iter().map(skill::status).collect();
+    }
+
+    fn install_skill(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let Some(agent) = skill::AGENTS.get(ix) else { return };
+        self.message = match skill::install(agent) {
+            Ok(path) => format!("installed the capture skill → {}", path.display()).into(),
+            Err(e) => format!("skill install failed ({}): {e}", agent.label).into(),
+        };
+        self.refresh_skill_status();
+        cx.notify();
+    }
 }
 
 fn button(
@@ -531,6 +549,21 @@ impl Render for CaptureApp {
                         "Start capture",
                         cx.listener(|this, _, _, cx| this.start_capture(cx)),
                     )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .items_center()
+                    .child(div().text_color(rgb(0x9aa0a6)).child("Skill →"))
+                    .children(skill::AGENTS.iter().enumerate().map(|(ix, a)| {
+                        let label = match self.skill_status.get(ix) {
+                            Some(skill::SkillStatus::UpToDate) => format!("{} ✓", a.label),
+                            Some(skill::SkillStatus::UpdateAvailable) => format!("{} ↑ update", a.label),
+                            _ => format!("{} — install", a.label),
+                        };
+                        button(&label, cx.listener(move |this, _, _, cx| this.install_skill(ix, cx)))
+                    })),
             )
             .child(
                 div()

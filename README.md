@@ -177,7 +177,9 @@ cargo build --manifest-path gui/Cargo.toml          # add --release for an optim
 A window with a daemon-health header, a window picker, Start/Stop, a live session list,
 and a live **transcript + screenshot preview** (streamed over `/v1/events`). It also adds
 a **menu-bar item** (`● capture` idle, `⦿ N` while N capture) with an Open / Stop-all /
-Quit menu, and a global hotkey **⌃⌘R** to toggle capture from anywhere.
+Quit menu, a global hotkey **⌃⌘R** to toggle capture from anywhere, and an **Install skill →**
+row that drops the `capture` skill into a coding agent's home (see below). To ship it as a
+double-clickable app, see **[Installing the macOS app](#installing-the-macos-app-unsigned-test-build)**.
 
 ### Screen Recording note
 
@@ -185,6 +187,56 @@ Per-app audio + screenshots need the **Screen Recording** grant for whichever pr
 launches the capture — your Terminal, the daemon, or your MCP client. Run from a terminal
 you've granted (System Settings ▸ Privacy & Security ▸ Screen Recording). If the helper
 prints `displays=0` / `no display available`, the launching process simply isn't granted.
+
+## Installing the macOS app (unsigned test build)
+
+Package the GUI as a double-clickable `Capture.app` inside a `.dmg`:
+
+```bash
+bash packaging/build_macos_dmg.sh        # -> dist/Capture-0.1.0.dmg  (needs Rust + Xcode CLT)
+```
+
+Open the DMG and drag **Capture.app** to **Applications**.
+
+> ⚠️ **This build is NOT notarized and NOT Developer-ID signed** — it is *ad-hoc* signed, for
+> testing. macOS **Gatekeeper will block it on first launch** ("Apple could not verify 'Capture'
+> is free of malware", or "unidentified developer"). **Bypassing that means you are choosing to
+> run an app Apple has not checked — only do it for a build you trust** (one you built yourself,
+> or got directly from us). Official builds will be Developer-ID signed + notarized (feature #31).
+
+**Bypass Gatekeeper (first launch only):**
+
+- **Easiest:** **Control-click** (right-click) `Capture.app` → **Open** → **Open** in the dialog.
+- **macOS 15 (Sequoia):** double-click → it's blocked → **System Settings ▸ Privacy & Security** →
+  scroll to the "'Capture' was blocked" line → **Open Anyway** → confirm with Touch ID/password.
+- **Terminal:** strip the download-quarantine flag, then open:
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/Capture.app
+  open /Applications/Capture.app
+  ```
+
+**What the app needs / does:**
+
+- It is a **daemon client** — start the engine first with `capture daemon start` (the app shows
+  "no daemon — run: capture daemon start" until one is running).
+- It does **not** bundle the Python engine; you still need the repo + venv for the daemon (and the
+  signed `audiocap` helper for per-app audio). A fully self-contained bundle is feature #31.
+- Per-app audio still needs **Screen Recording** for whichever process launches the daemon.
+
+**Install the skill into your coding agent.** The app bundles the `capture` skill and can drop it
+into a coding agent's home so the agent can drive capture-mcp from any project. Each button shows
+its status and re-installs/updates on click (we ship skill updates this way):
+
+- **Claude Code** → `~/.claude/skills/capture/`
+- **Codex** → `~/.codex/skills/capture/`
+
+The button label reflects the state: `— install` (not present), `✓` (up to date), or `↑ update`
+(installed but the bundled skill is newer). Headless equivalents:
+
+```bash
+capture-gui --skill-status                 # report install/up-to-date/update for each agent
+capture-gui --install-skill "Claude Code"  # install/update for the named agent
+```
 
 ## How per-app audio works
 

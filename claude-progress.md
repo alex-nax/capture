@@ -1,5 +1,38 @@
 # Progress Log
 
+## Session 28 — 2026-06-15
+**Agent**: builder (macOS box 15.7.3, branch **v2**)
+**Summary**: Two distribution features for the GUI: a **macOS .app/.dmg packaging script** and an
+in-GUI **"install/update the capture skill into a coding agent's home"** option (with a status
+check), both at Alex's request.
+- **`packaging/build_macos_dmg.sh` (new)**: builds the GUI release binary → `Capture.app`
+  (Info.plist, `com.capturemcp.gui`) → **ad-hoc signs** it (NOT Developer-ID/notarized — that's
+  #31) → wraps it in `dist/Capture-0.1.0.dmg` (4.8 MB, with an `/Applications` symlink). Bundles
+  the `capture` skill into `Contents/Resources/skill`.
+- **`gui/src/skill.rs` (new)**: locate the skill source (bundled in the .app, else `<repo>/skills/
+  capture`), copy it into `~/.claude/skills/capture` / `~/.codex/skills/capture` (clean replace =
+  install OR update; excludes `__pycache__`/`.pyc`); **`status()`** content-hash-compares bundled
+  vs installed → NotInstalled / UpToDate / UpdateAvailable.
+- **`gui/src/app.rs`**: a "Skill →" row with a status-aware button per agent (`— install` / `✓` /
+  `↑ update`); clicking installs/updates and refreshes status. **`main.rs`** gained headless flags
+  `--skill-status` and `--install-skill <agent>`.
+- **README**: new **"Installing the macOS app (unsigned test build)"** section — build the DMG,
+  drag-install, and an explicit **Gatekeeper bypass** (right-click → Open / Sequoia "Open Anyway" /
+  `xattr -dr com.apple.quarantine`) with an honest "you're choosing to run an app Apple hasn't
+  checked" note; plus the skill-install/update docs. "Run it manually" GUI subsection links to it.
+- Specs: gui.md (skill + packaging files/behavior/limitations); features.json #33 slices 5–6.
+**Verification**: GUI builds clean (release); DMG built (4.8 MB), skill confirmed bundled in
+`Resources/skill` + ad-hoc signature verifies; **skill status verified headlessly**: fresh→not
+installed, install→up to date, tamper→update available, reinstall→up to date; skill installs to a
+temp HOME with `__pycache__`/`.pyc` excluded; GUI screenshot shows the "Skill → Claude Code / Codex"
+row. `dist/` is gitignored (DMG/app not committed). Python untouched (68/68).
+**#33 status**: window + daemon client + picker + start/stop + live session list + SSE live
+transcript/preview + tray + hotkey + **skill install/update** + **.app/.dmg packaging** — done.
+**Remaining**: Developer-ID signing + notarization + self-contained bundle (#31, needs Alex's
+Developer ID), onboarding/Settings, RenderImage eviction, gpui→zed-git for Linux/a11y.
+
+---
+
 ## Session 27 — 2026-06-15
 **Agent**: builder (macOS box 15.7.3, branch **v2**)
 **Summary**: Implemented the **audiocap macOS-26 enumeration-retry** (#30 follow-up) — AND in

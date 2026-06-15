@@ -31,6 +31,11 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
     a title that reflects the running-capture count + an Open/Stop-all/Quit menu.
   - `gui/src/hotkey.rs` — global hotkey ⌃⌘R (`global-hotkey` 0.8, Carbon
     RegisterEventHotKey, no accessibility permission) that toggles capture.
+  - `gui/src/skill.rs` — install/update the bundled `capture` skill into a coding
+    agent's home (`~/.claude/skills/capture`, `~/.codex/skills/capture`), with a
+    content-hash status check (not installed / up to date / update available).
+- `packaging/build_macos_dmg.sh` — build `Capture.app` (ad-hoc signed; bundles the
+  skill in `Contents/Resources/skill`) + a `.dmg` for testing (not notarized).
   - `gui/src/main.rs` — `Application::new().run(...)`, opens one window.
 
 ## Public contract
@@ -75,6 +80,13 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
   **toggles**: if any capture is running → Stop all; else → start on the selected
   window (or a "select a window first" hint). Works from anywhere (no main window
   focus needed). The manager is held in the view so it stays registered.
+- **Install skill:** the bundled `capture` skill (from `Contents/Resources/skill` in
+  the .app, or `<repo>/skills/capture` in a dev build) is copied into a coding agent's
+  home (`~/.claude/skills/capture`, `~/.codex/skills/capture`), excluding
+  `__pycache__`/`.pyc` (clean replace = install or update). A cached per-agent
+  `skill_status` (a content-hash compare of bundled vs installed, refreshed on start
+  and after install) drives the button label: `— install` / `✓` / `↑ update` — so
+  shipped skill updates are visible. Headless: `--skill-status`, `--install-skill <agent>`.
 - All daemon calls run off the main thread (background executor / a dedicated SSE
   thread); failures land in the status line, never crash the UI.
 
@@ -120,8 +132,11 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
   z-order (the daemon's window list is largest-first, not front-to-back).
 - A **proper menu-bar icon** (vs the text title) + `LSUIElement` (hide the Dock icon,
   needs the .app Info.plist) are still pending.
-- **No packaging** (.app bundle / DMG, signing) — that's M4-adjacent and needs the
-  Developer ID story (#31).
+- **Packaging is ad-hoc only.** `packaging/build_macos_dmg.sh` produces an ad-hoc
+  signed `Capture.app` + `.dmg` — runnable but **not Developer-ID signed / not
+  notarized**, so Gatekeeper blocks first launch (README documents the bypass). The
+  .app does **not** bundle the Python daemon/engine (the GUI is a client; the daemon
+  runs from the repo venv) — a self-contained bundle (PyInstaller sidecar) is #31.
 - **No start-options UI** beyond per-app audio + 2 s interval; no ASR/model picker,
   no output-dir chooser.
 - **gpui 0.2.2 → zed git rev** migration owed before Linux (M5) / accessibility.
