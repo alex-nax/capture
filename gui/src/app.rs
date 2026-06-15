@@ -10,8 +10,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gpui::{div, img, prelude::*, px, rgb, App, ClickEvent, Context, SharedString, Timer, Window};
+use muda::MenuEvent;
 
 use crate::daemon::{self, Daemon, Health, Session, WindowInfo};
+use crate::tray::{self, Tray};
 
 /// Live data for the selected session, written by the SSE thread, read by render.
 #[derive(Default)]
@@ -29,6 +31,7 @@ pub struct CaptureApp {
     selected: Option<usize>,           // window picker selection
     selected_session: Option<String>,  // session whose detail is shown
     live: Arc<Mutex<LiveState>>,
+    tray: Option<Tray>,
     message: SharedString,
     out_dir: String,
     polling: bool,
@@ -62,6 +65,7 @@ impl CaptureApp {
             selected: None,
             selected_session: None,
             live: Arc::new(Mutex::new(LiveState::default())),
+            tray: tray::build(),
             message: "".into(),
             out_dir: default_out_dir(),
             polling: false,
@@ -69,7 +73,77 @@ impl CaptureApp {
         app.refresh_blocking();
         app.start_poll(cx);
         app.spawn_sse();
+        app.start_tray_loop(cx);
         app
+    }
+
+    /// Drain menu-bar events (~4×/s) and keep the menu-bar title in sync with the
+    /// running-capture count. Runs on the GPUI main thread (tray UI is main-thread).
+    fn start_tray_loop(&mut self, cx: &mut Context<Self>) {
+        if self.tray.is_none() {
+            return;
+        }
+        cx.spawn(async move |this, cx| loop {
+            Timer::after(Duration::from_millis(250)).await;
+            while let Ok(ev) = MenuEvent::receiver().try_recv() {
+                let id = ev.id().as_ref().to_string();
+                if this.update(cx, |v, cx| v.on_menu(&id, cx)).is_err() {
+                    return;
+                }
+            }
+            if this
+                .update(cx, |v, _cx| {
+                    let n = v.sessions.iter().filter(|s| s.state == "running").count();
+                    if let Some(t) = v.tray.as_mut() {
+                        t.set_running(n);
+                    }
+                })
+                .is_err()
+            {
+                return;
+            }
+        })
+        .detach();
+    }
+
+    fn on_menu(&mut self, id: &str, cx: &mut Context<Self>) {
+        match id {
+            tray::ID_STOP_ALL => self.stop_all(cx),
+            tray::ID_OPEN => cx.activate(true),
+            tray::ID_QUIT => std::process::exit(0),
+            _ => {}
+        }
+    }
+
+    fn stop_all(&mut self, cx: &mut Context<Self>) {
+        let Some(d) = self.daemon.clone() else { return };
+        let ids: Vec<String> = self
+            .sessions
+            .iter()
+            .filter(|s| s.state == "running")
+            .map(|s| s.session_id.clone())
+            .collect();
+        if ids.is_empty() {
+            self.message = "no running captures".into();
+            cx.notify();
+            return;
+        }
+        self.message = format!("stopping {} capture(s)…", ids.len()).into();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .spawn(async move {
+                    for id in &ids {
+                        let _ = d.stop(id);
+                    }
+                })
+                .await;
+            let _ = this.update(cx, |v, cx| {
+                v.message = "stopped all captures".into();
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn refresh_blocking(&mut self) {

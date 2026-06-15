@@ -26,7 +26,9 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
     and `open_events()` (the `/v1/events` SSE line reader).
   - `gui/src/app.rs` — `CaptureApp` GPUI view (`Render`) + the poll loop + handlers +
     the background SSE thread feeding a shared `LiveState` (tracked session's
-    transcript + latest screenshot path).
+    transcript + latest screenshot path) + the tray event loop.
+  - `gui/src/tray.rs` — macOS menu-bar status item (`tray-icon` 0.24 + `muda` 0.19):
+    a title that reflects the running-capture count + an Open/Stop-all/Quit menu.
   - `gui/src/main.rs` — `Application::new().run(...)`, opens one window.
 
 ## Public contract
@@ -58,6 +60,14 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
   latest `screenshot_taken` path into a shared `LiveState`. The pane renders the
   latest screenshot via `img(PathBuf)` and the last ~12 transcript lines; the poll
   loop's `cx.notify()` repaints it ~1×/s.
+- **Menu-bar (tray):** a status item built on the main thread inside the GPUI run
+  loop (`tray.rs`). Its title tracks the running-capture count (`● capture` idle,
+  `⦿ N` while N run), updated from the GPUI tray loop (`cx.spawn` + 250 ms `Timer`)
+  so all tray UI mutation stays on the main thread. The same loop drains
+  `muda::MenuEvent::receiver()` and handles: **Open** (`cx.activate`), **Stop all
+  captures** (off-thread `/v1/.../stop` of every running session), **Quit**
+  (`std::process::exit`). Menu actions hit the daemon directly — independent of the
+  main window.
 - All daemon calls run off the main thread (background executor / a dedicated SSE
   thread); failures land in the status line, never crash the UI.
 
@@ -96,8 +106,10 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
   never repeat, so over a long capture the image cache grows — switch to
   `RenderImage` with eviction (product-architecture.md) before long-run use. The live
   transcript/preview itself is **done** (SSE).
-- **No tray / menu-bar presence or global hotkey yet** (`tray-icon` + `muda` +
-  `global-hotkey`, per the spec) — slice 2+.
+- **Tray menu latency** ~250 ms (the drain interval) — fine for menu clicks; lower it
+  or use `MenuEvent::set_event_handler` if it ever feels laggy. **Global hotkey**
+  (`global-hotkey`) and a **proper menu-bar icon** (vs the text title) + `LSUIElement`
+  (hide the Dock icon, needs the .app Info.plist) are still pending.
 - **No packaging** (.app bundle / DMG, signing) — that's M4-adjacent and needs the
   Developer ID story (#31).
 - **No start-options UI** beyond per-app audio + 2 s interval; no ASR/model picker,

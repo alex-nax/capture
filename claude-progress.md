@@ -1,5 +1,32 @@
 # Progress Log
 
+## Session 25 — 2026-06-15
+**Agent**: builder (macOS box, branch **v2**)
+**Summary**: Built **#33 slice 3 — menu-bar (tray) presence** for the GPUI app, via the spec's
+exact combo **tray-icon 0.24 + muda 0.19** (compiled clean on macOS in ~18s; GTK deps are
+Linux-gated).
+- **`gui/src/tray.rs` (new)**: a status-item with a title that reflects the running-capture count
+  (`● capture` idle, `⦿ N` running) + an Open/Stop-all/Quit menu (string ids).
+- **`gui/src/app.rs`**: tray built on the main thread in `CaptureApp::new`; a `cx.spawn`+250ms
+  `Timer` loop drains `muda::MenuEvent::receiver()` and keeps the title synced to the running count
+  — all tray UI mutation on the GPUI main thread. Menu handlers: Stop-all (off-thread
+  `/v1/.../stop` of every running session), Open (`cx.activate`), Quit (`process::exit`).
+- **Verified visually** (3 menu-bar screenshots): the title went **`● capture` → `⦿ 1` →
+  `● capture`** across a CLI start/stop — live bidirectional sync, and the tray operates the daemon
+  independent of the main window.
+- Specs: gui.md (tray files/contract/behavior; global-hotkey + real icon + LSUIElement remain);
+  features.json #33.
+**Verification**: `cargo build` clean (no warnings); manual end-to-end on macOS (screenshots).
+Python untouched (68/68 + 4/4 stand).
+**#33 status**: slices 1–3 DONE (window + daemon client + picker + start/stop + live session list +
+SSE live transcript/preview + **menu-bar presence**). **Remaining**: global hotkey, onboarding +
+Settings, RenderImage eviction for the preview, `.app`/DMG packaging+signing (#31), gpui 0.2.2 →
+zed git rev for Linux/a11y.
+**Next**: global hotkey (global-hotkey crate) for quick start/stop, or the audiocap macOS-26
+enumeration-retry (#30 follow-up). #31 packaging needs Alex's Developer ID.
+
+---
+
 ## Session 24 — 2026-06-15
 **Agent**: builder (macOS box, branch **v2**)
 **Summary**: Built **#33 slice 2 — the GUI live session-detail pane** (transcript streaming +

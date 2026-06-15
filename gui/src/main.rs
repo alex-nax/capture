@@ -2,6 +2,7 @@
 
 mod app;
 mod daemon;
+mod tray;
 
 use app::CaptureApp;
 use gpui::{px, size, App, AppContext, Application, Bounds, WindowBounds, WindowOptions};

@@ -483,7 +483,8 @@
         "An MCP-agent-started capture appears live in the GUI session list (DONE slice 1: gui/ GPUI app polls /v1/sessions; verified \u2014 captures started via the CLI/GUI appear in the GUI list with live shots/segs counts, and history sessions recovered from the disk index show too)",
         "Quitting the GUI does not stop a running capture (DONE: the GUI is a thin daemon client; the daemon owns the session \u2014 verified, captures outlive the GUI process)",
         "[DONE slices 1-2, macOS, gpui 0.2.2] gui/: daemon client (health/sessions/windows/start/stop/transcript + /v1/events SSE reader) + GPUI window \u2014 health header, /v1/windows picker, Start/Stop, live-polled session list, and a LIVE session-detail pane (screenshot preview via img() + transcript streamed over SSE; auto-opens the running capture). Built+ran+screenshotted: transcript grew live and the preview rendered the video frame. docs/specs/gui.md.",
-        "[REMAINING for passes:true] RenderImage with eviction for the preview (img() cache leak on long runs); tray/menu-bar + global hotkey; onboarding + Settings/ASR-model manager; .app/DMG packaging + signing (#31); migrate gpui 0.2.2 -> pinned zed git rev for Linux/a11y"
+        "[DONE slice 3] menu-bar (tray) presence via tray-icon 0.24 + muda 0.19 (gui/src/tray.rs): title reflects the running-capture count (\u25cf capture / \u29bf N, live-updated from the GPUI poll), Open/Stop-all/Quit menu drained on the main-thread tray loop. Verified: title went \u25cf capture -> \u29bf 1 -> \u25cf capture across a CLI start/stop.",
+        "[REMAINING for passes:true] RenderImage with eviction for the preview (img() cache leak on long runs); global hotkey + a menu-bar icon (vs text title) + LSUIElement; onboarding + Settings/ASR-model manager; .app/DMG packaging + signing (#31); migrate gpui 0.2.2 -> pinned zed git rev for Linux/a11y"
       ],
       "passes": false,
       "dependencies": [
