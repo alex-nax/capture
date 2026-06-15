@@ -30,6 +30,11 @@ bad/dup → 400/`started:false`). Full DMG rebuilt (**166 MB**, mlx bundled); in
 printed `mlx Metal OK` + `mlx_whisper OK` with **no hang** (freeze_support). Bundled daemon (out of
 the .app) reports `backend_available:true` and runs as a **single** process. App signs `--strict`;
 helper keeps `com.local.audiocap`. Contracts 4/4, smoke 68/68, GUI builds clean.
+**Post-test fixes (Alex, from the running app)**: (1) the **window now scrolls** (`#root` +
+`overflow_y_scroll`; the detail pane is `flex_shrink_0`, not `flex_1`, which would grab the scroll
+container's unbounded main axis) — content was clipped below the fold. (2) An **active-but-not-
+downloaded** model (the default `large-v3-turbo`) now shows `● active · needs download` in amber
+beside its Download button, instead of a bare `● active` that looked ready when it wasn't.
 **Known caveat**: mlx_whisper does an online HF revision-check on cached models (can be slow
 offline) — offline-on-cached polish deferred (noted in features #33 remaining).
 **#33 status**: window + client + picker + start/stop + live SSE + tray + hotkey + skill +

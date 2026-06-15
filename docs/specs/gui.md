@@ -106,8 +106,11 @@ a frozen daemon with on-device mlx ASR.
   shipped skill updates are visible. Headless: `--skill-status`, `--install-skill <agent>`.
 - **Whisper model manager:** a "Whisper models" panel lists the daemon's catalog
   (`GET /v1/asr/models`, polled). Each row shows the model + size and a status:
-  `● active`, `✓ downloaded`, a live `↓ NN%` while downloading, else a **Download**
-  button; a downloaded-but-inactive model shows a **Use** button. **Download** POSTs
+  `● active` (downloaded), `● active · needs download` in **amber** when the active
+  model (e.g. the default `large-v3-turbo`) isn't fetched yet, `✓ downloaded`, or a
+  live `↓ NN%` while downloading. The action is a **Download** button for any
+  not-yet-downloaded model (including an un-downloaded active one) and a **Use**
+  button for a downloaded-but-inactive model. **Download** POSTs
   `/v1/asr/models/download` (the daemon fetches in the background); progress arrives as
   `asr_download` events on the same SSE stream and is accumulated into
   `LiveState.asr_progress` (repo → fraction) — these events have **no `session_id`**, so
@@ -115,6 +118,11 @@ a frozen daemon with on-device mlx ASR.
   **Use** POSTs `/v1/asr/model` to set the active model. The runtime lives in the
   daemon (mlx); if a daemon lacks it, `backend_available:false` shows a "runtime
   unavailable" note instead of the list. Weights download on demand (never bundled).
+- **Layout:** the single window is one vertically-scrolling column
+  (`#root` + `overflow_y_scroll`) — the content (windows/sessions, model manager, live
+  detail pane) exceeds the viewport, so it scrolls rather than clipping. The detail
+  pane is content-sized (`flex_shrink_0`), not `flex_1` (which would grab the scroll
+  container's unbounded main axis).
 - All daemon calls run off the main thread (background executor / a dedicated SSE
   thread); failures land in the status line, never crash the UI.
 

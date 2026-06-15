@@ -605,7 +605,7 @@ impl Render for CaptureApp {
                 .flex_col()
                 .gap_1()
                 .p_2()
-                .flex_1()
+                .flex_shrink_0() // size to content; the root scrolls (no flex_1 grab)
                 .rounded_md()
                 .bg(rgb(0x0e1216))
                 .child(
@@ -640,16 +640,20 @@ impl Render for CaptureApp {
             .map(|m| {
                 let repo = m.repo.clone();
                 let prog = asr_progress.get(&repo).copied();
-                let status = if m.active {
-                    "● active".to_string()
-                } else if let Some(f) = prog {
-                    format!("↓ {:.0}%", (f * 100.0).clamp(0.0, 100.0))
+                // An active model that isn't downloaded yet still needs a Download —
+                // call that out (amber) so "active" doesn't look ready when it isn't.
+                let (status, status_color) = if let Some(f) = prog {
+                    (format!("↓ {:.0}%", (f * 100.0).clamp(0.0, 100.0)), 0x66d9a0)
                 } else if m.downloading {
-                    "↓ downloading…".to_string()
+                    ("↓ downloading…".to_string(), 0x66d9a0)
+                } else if m.active && m.downloaded {
+                    ("● active".to_string(), 0x66d9a0)
+                } else if m.active {
+                    ("● active · needs download".to_string(), 0xffcc66)
                 } else if m.downloaded {
-                    "✓ downloaded".to_string()
+                    ("✓ downloaded".to_string(), 0x66d9a0)
                 } else {
-                    String::new()
+                    (String::new(), 0x9aa0a6)
                 };
                 let mut row = div()
                     .flex()
@@ -661,7 +665,7 @@ impl Render for CaptureApp {
                             .flex_1()
                             .child(format!("{}  ·  {}", m.name, m.size_label)),
                     )
-                    .child(div().text_color(rgb(0x66d9a0)).child(status));
+                    .child(div().text_color(rgb(status_color)).child(status));
                 let busy = prog.is_some() || m.downloading;
                 if !m.downloaded && !busy {
                     let r = repo.clone();
@@ -712,11 +716,13 @@ impl Render for CaptureApp {
         }
 
         div()
+            .id("root")
             .flex()
             .flex_col()
             .gap_2()
             .p_4()
             .size_full()
+            .overflow_y_scroll() // window content can exceed the viewport — let it scroll
             .bg(rgb(0x141414))
             .text_color(rgb(0xe0e0e0))
             .text_sm()
