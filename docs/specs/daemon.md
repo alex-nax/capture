@@ -55,6 +55,9 @@ server's daemon-first mode are **[planned]** (see Known limitations).
 | GET  | `/v1/sessions/{id}` | — | session summary (404 if unknown) |
 | POST | `/v1/sessions/{id}/stop` | — | final summary; a recovered (finished) id returns its record |
 | GET  | `/v1/sessions/{id}/transcript` | `?tail=N` | `{session_id, segments:[...], count}` from `transcript.jsonl` |
+| GET  | `/v1/asr/models` | — | `{backend_available, active, models:[{repo,name,size_label,downloaded,active,downloading}]}` — Whisper model catalog |
+| POST | `/v1/asr/models/download` | `{repo}` | `{repo, started}` (202); downloads in background, progress over `/v1/events`; dup is `started:false` |
+| POST | `/v1/asr/model` | `{repo}` | `{active}` — set the active model (persisted to `~/.capture/config.json`); 400 if not in catalog |
 | GET  | `/v1/events` | — | **SSE** (`text/event-stream`): each `data:` line is one event `{t, type, session_id, …}`; `: ping` heartbeats |
 | GET  | `/v1/schema` | — | the `/v1` JSON Schema (`{api_version, models:{…}}`) from the pydantic models — for client/Rust-type generation |
 | POST | `/v1/admin/shutdown` | — | `{shutdown:true}` then the server stops |
@@ -105,6 +108,19 @@ detached (`start_new_session`) and waits for `/v1/health`.
   one-way (daemon→client), which SSE serves from the stdlib server with no dep;
   clients send commands via the REST routes. WebSocket stays **[planned]** only if
   a bidirectional channel is ever needed.
+- **ASR model manager (`/v1/asr/*`):** lists the curated `mlx-community/whisper-*`
+  catalog (`core.asr.manager`) with per-model `downloaded` (HF-cache check) and
+  `active` flags. `POST .../download` validates the repo against the catalog, then
+  fetches it into the shared HF cache on a background thread (a dup while in-flight
+  is a no-op). Progress is fanned out over `/v1/events` as `asr_download`
+  (`{repo, fraction, downloaded, total}`), then `asr_download_done` /
+  `asr_download_error` — these events carry **no `session_id`** (daemon-wide).
+  Progress is measured by polling the repo's on-disk cache size vs the Hub's
+  reported total (backend-agnostic — hf_hub's accelerated xet/hf_transfer paths
+  bypass the Python `tqdm` hook). `POST /v1/asr/model` persists the active model to
+  `~/.capture/config.json` (`core.config`), which the Whisper backend reads (arg →
+  `CAPTURE_WHISPER_MODEL` env → config → default) so a GUI choice applies to new
+  captures started anywhere. Weights are **downloaded on demand, never bundled**.
 - **stdout is NOT special** here (unlike `server.py`): the daemon is its own
   process; logs go to stderr.
 

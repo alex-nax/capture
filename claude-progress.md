@@ -1,5 +1,43 @@
 # Progress Log
 
+## Session 30 — 2026-06-15
+**Agent**: builder (macOS box, branch **main**)
+**Summary**: In-GUI **Whisper model manager** + **on-device ASR in the self-contained app**
+(Alex: "we should be able to download whisper model through our gui"). The installed app now
+transcribes locally; the GUI downloads model *weights* on demand. #33 slice 8.
+- **Decision (asked Alex)**: bundle the mlx runtime in the app (true on-device ASR; weights
+  downloaded via the GUI, not bundled) — chosen over keeping the bundle lean.
+- **De-risked first**: PyInstaller CAN freeze mlx — a frozen `--asr-selftest` confirmed the Metal
+  kernel compiles from the bundled 125 MB `mlx.metallib` AND whisper-tiny transcribes, *frozen*.
+- **`core/asr/manager.py` (new)**: curated catalog of **verified** mlx-community repos (naming is
+  inconsistent — `whisper-tiny` but `whisper-base-mlx`; `whisper-base`/`-small`/`-large-v3` 404).
+  `runtime_available`, `is_downloaded` (HF-cache), `active_model`/`set_active_model`, `download`
+  (backend-agnostic progress by polling cache-dir size vs Hub total — hf_hub's xet/hf_transfer
+  bypass the tqdm hook). **`core/config.py` (new)**: persisted `~/.capture/config.json`.
+  `whisper_local` now resolves model arg→env→config→default.
+- **Daemon `/v1/asr/*`**: `GET models`, `POST models/download` (background, dup-guard, SSE
+  `asr_download`/`_done`/`_error` — **no session_id**), `POST model` (persist active). Pydantic
+  contract models added + golden regenned. Python client + Rust client methods.
+- **GUI**: a Whisper-models panel (Download/Use buttons, live `↓NN%` from SSE `asr_progress`;
+  SSE thread handles the session-less asr events *before* the session filter). Polls the catalog.
+- **Packaging**: `build_macos_dmg.sh` now BUNDLES mlx (`--collect-all mlx mlx_whisper
+  huggingface_hub tiktoken numba`); **`captured_main.py` adds `multiprocessing.freeze_support()`**
+  — numba uses multiprocessing and a frozen child was re-running the entry → **rogue 2nd daemon**
+  (found + fixed). Best-effort `--asr-selftest` runs during the build.
+**Verification**: daemon routes live-tested (catalog flags; set-active persists to config.json;
+`whisper-base-mlx` download streamed progress 0→1 then `asr_download_done`, then `downloaded:true`;
+bad/dup → 400/`started:false`). Full DMG rebuilt (**166 MB**, mlx bundled); in-build self-test
+printed `mlx Metal OK` + `mlx_whisper OK` with **no hang** (freeze_support). Bundled daemon (out of
+the .app) reports `backend_available:true` and runs as a **single** process. App signs `--strict`;
+helper keeps `com.local.audiocap`. Contracts 4/4, smoke 68/68, GUI builds clean.
+**Known caveat**: mlx_whisper does an online HF revision-check on cached models (can be slow
+offline) — offline-on-cached polish deferred (noted in features #33 remaining).
+**#33 status**: window + client + picker + start/stop + live SSE + tray + hotkey + skill +
+self-contained bundle + **on-device ASR + model manager** — done. **Remaining**: onboarding,
+RenderImage eviction, offline-transcribe polish, Developer-ID signing/notarization (#31), gpui→zed.
+
+---
+
 ## Session 29 — 2026-06-15
 **Agent**: builder (macOS box, branch **main**)
 **Summary**: Made the macOS app **self-contained** — the `.app` now bundles a frozen daemon and the

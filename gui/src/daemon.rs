@@ -69,6 +69,28 @@ pub struct TranscriptSeg {
     pub text: String,
 }
 
+#[derive(Deserialize, Clone)]
+pub struct AsrModel {
+    pub repo: String,
+    pub name: String,
+    pub size_label: String,
+    pub downloaded: bool,
+    pub active: bool,
+    #[serde(default)]
+    pub downloading: bool,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct AsrModels {
+    #[serde(default)]
+    pub backend_available: bool,
+    #[serde(default)]
+    #[allow(dead_code)] // wire shape; UI reads the per-model `active` flag instead
+    pub active: String,
+    #[serde(default)]
+    pub models: Vec<AsrModel>,
+}
+
 #[derive(Deserialize)]
 struct Transcript {
     segments: Vec<TranscriptSeg>,
@@ -203,6 +225,43 @@ impl Daemon {
             .set("Authorization", &self.auth())
             .send_json(serde_json::json!({}));
         parse_session_or_error(resp)
+    }
+
+    /// The Whisper model catalog (+ downloaded/active/downloading flags).
+    pub fn asr_models(&self) -> Result<AsrModels, String> {
+        Self::agent()
+            .get(&format!("{}/v1/asr/models", self.endpoint))
+            .set("Authorization", &self.auth())
+            .call()
+            .map_err(|e| e.to_string())?
+            .into_json()
+            .map_err(|e| e.to_string())
+    }
+
+    /// Start a background download of `repo` (progress arrives over /v1/events).
+    pub fn asr_download(&self, repo: &str) -> Result<(), String> {
+        self.asr_post("/v1/asr/models/download", repo)
+    }
+
+    /// Set the active Whisper model (persisted; new captures use it).
+    pub fn asr_set_model(&self, repo: &str) -> Result<(), String> {
+        self.asr_post("/v1/asr/model", repo)
+    }
+
+    fn asr_post(&self, path: &str, repo: &str) -> Result<(), String> {
+        let resp = Self::agent()
+            .post(&format!("{}{}", self.endpoint, path))
+            .set("Authorization", &self.auth())
+            .send_json(serde_json::json!({ "repo": repo }));
+        match resp {
+            Ok(_) => Ok(()),
+            Err(ureq::Error::Status(_, r)) => Err(r
+                .into_json::<serde_json::Value>()
+                .ok()
+                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+                .unwrap_or_else(|| "request failed".into())),
+            Err(e) => Err(e.to_string()),
+        }
     }
 }
 

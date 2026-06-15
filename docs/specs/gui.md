@@ -11,9 +11,12 @@ ever**, and the MCP/agent path stays first-class. The GUI is a thin peer of the
 daemon (like the MCP server and CLI): all capture logic stays in the Python engine
 behind `/v1`; the Rust side is UI + a daemon client only.
 
-**Current (#33 slices 1–2, macOS):** a single-window dashboard — daemon health, a
-window picker, start/stop, a live-polled session list, and a **live session-detail
-pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
+**Current (#33 slices 1–8, macOS):** a single-window dashboard — daemon health, a
+window picker, start/stop, a live-polled session list, a **live session-detail pane**
+(screenshot preview + transcript streamed over `/v1/events` SSE), a menu-bar item +
+⌃⌘R hotkey, a skill installer, and a **Whisper model manager** (download/select ASR
+models). Packaged as a **self-contained** `Capture.app`/`.dmg` that bundles + auto-spawns
+a frozen daemon with on-device mlx ASR.
 
 ## Files
 
@@ -29,7 +32,8 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
     (launch it in its own process group so captures outlive the GUI).
   - `gui/src/app.rs` — `CaptureApp` GPUI view (`Render`) + the poll loop + handlers +
     the background SSE thread feeding a shared `LiveState` (tracked session's
-    transcript + latest screenshot path) + the tray event loop.
+    transcript + latest screenshot path + ASR download progress) + the tray event loop +
+    the Whisper **model manager** panel (`daemon.asr_models/asr_download/asr_set_model`).
   - `gui/src/tray.rs` — macOS menu-bar status item (`tray-icon` 0.24 + `muda` 0.19):
     a title that reflects the running-capture count + an Open/Stop-all/Quit menu.
   - `gui/src/hotkey.rs` — global hotkey ⌃⌘R (`global-hotkey` 0.8, Carbon
@@ -49,7 +53,9 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
 - The GUI consumes only the daemon `/v1` API ([daemon.md](daemon.md)) — it adds no
   new backend surface: `GET /v1/health`, `GET /v1/sessions`, `GET /v1/windows`,
   `POST /v1/sessions`, `POST /v1/sessions/{id}/stop`,
-  `GET /v1/sessions/{id}/transcript` (backfill), and `GET /v1/events` (SSE, live).
+  `GET /v1/sessions/{id}/transcript` (backfill), `GET /v1/events` (SSE, live), and the
+  ASR model manager (`GET /v1/asr/models`, `POST /v1/asr/models/download`,
+  `POST /v1/asr/model`).
 - No CLI/flags yet; the binary opens the window. Reads the same
   `CAPTURE_DAEMON_JSON` discovery file as the CLI.
 
@@ -98,6 +104,17 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
   `skill_status` (a content-hash compare of bundled vs installed, refreshed on start
   and after install) drives the button label: `— install` / `✓` / `↑ update` — so
   shipped skill updates are visible. Headless: `--skill-status`, `--install-skill <agent>`.
+- **Whisper model manager:** a "Whisper models" panel lists the daemon's catalog
+  (`GET /v1/asr/models`, polled). Each row shows the model + size and a status:
+  `● active`, `✓ downloaded`, a live `↓ NN%` while downloading, else a **Download**
+  button; a downloaded-but-inactive model shows a **Use** button. **Download** POSTs
+  `/v1/asr/models/download` (the daemon fetches in the background); progress arrives as
+  `asr_download` events on the same SSE stream and is accumulated into
+  `LiveState.asr_progress` (repo → fraction) — these events have **no `session_id`**, so
+  the SSE thread handles them *before* the session filter that would drop them.
+  **Use** POSTs `/v1/asr/model` to set the active model. The runtime lives in the
+  daemon (mlx); if a daemon lacks it, `backend_available:false` shows a "runtime
+  unavailable" note instead of the list. Weights download on demand (never bundled).
 - All daemon calls run off the main thread (background executor / a dedicated SSE
   thread); failures land in the status line, never crash the UI.
 
@@ -147,15 +164,18 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
   needs the .app Info.plist) are still pending.
 - **Packaging is ad-hoc signed (not notarized).** `packaging/build_macos_dmg.sh`
   produces a **self-contained** `Capture.app` + `.dmg` that bundles a PyInstaller-frozen
-  daemon (`Contents/Resources/captured/`) + the signed `audiocap` helper + the skill —
-  but it is **not Developer-ID signed / not notarized**, so Gatekeeper blocks first
-  launch (README documents the bypass). Developer-ID signing + notarization is #31. The
-  frozen daemon does capture + raw audio; **ASR (mlx/torch/…) is excluded** from the
-  freeze (lazy-loaded, big), so transcription needs a configured backend
-  (`openai_compat` is included) or the repo daemon. The frozen onedir adds ~24 MB
-  (DMG ≈ 28 MB vs ≈ 5 MB GUI-only).
-- **No start-options UI** beyond per-app audio + 2 s interval; no ASR/model picker,
-  no output-dir chooser.
+  daemon (`Contents/Resources/captured/`) + the **mlx on-device ASR runtime** + the
+  signed `audiocap` helper + the skill — but it is **not Developer-ID signed / not
+  notarized**, so Gatekeeper blocks first launch (README documents the bypass).
+  Developer-ID signing + notarization is #31. The freeze excludes torch/faster-whisper/
+  riva (CUDA/cross-platform); Whisper **weights** download on demand via the in-app model
+  manager (never bundled). The mlx runtime makes the bundle large: **DMG ≈ 166 MB**
+  (mlx's `.metallib` is ~125 MB and barely compresses), `.app` ≈ 400 MB. The frozen
+  entry calls `multiprocessing.freeze_support()` — numba (a mlx_whisper dep) uses
+  multiprocessing and a frozen child would otherwise re-run the entry and spawn a rogue
+  second daemon.
+- **No start-options UI** beyond per-app audio + 2 s interval (ASR **model** picking is
+  done — the model manager); no per-session ASR backend toggle, no output-dir chooser.
 - **gpui 0.2.2 → zed git rev** migration owed before Linux (M5) / accessibility.
 - **No automated UI tests** (GPUI has no public UI-test harness); the daemon client
   logic is the testable seam (kept thin).
@@ -175,3 +195,11 @@ pane** (screenshot preview + transcript streamed over `/v1/events` SSE).
   the .app passes and the `audiocap` helper keeps its `com.local.audiocap` identity.
   Verified on macOS 2026-06-15. The in-app auto-spawn path (GUI launches the bundled
   daemon) is a manual launch check (no headless harness for the GPUI window).
+- Model manager (slice 8): the daemon `/v1/asr/*` routes are verified live — `GET
+  /v1/asr/models` lists the catalog with `downloaded`/`active`/`downloading` flags;
+  `POST /v1/asr/model` persists the active model to `config.json`; `POST
+  /v1/asr/models/download` of `whisper-base-mlx` streamed `asr_download` progress
+  (fraction 0→1) then `asr_download_done`, after which the model reads `downloaded:true`;
+  bad/dup requests handled. The **bundled** daemon (with mlx) reports
+  `backend_available:true` and runs as a single process (no rogue daemon —
+  `freeze_support`). The GUI panel itself is a manual check (no GPUI test harness).

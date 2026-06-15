@@ -227,12 +227,17 @@ signed `audiocap` helper beside it) and ad-hoc signs everything. Open the DMG an
   so captures outlive the app) if one isn't already running. No repo, no venv, no
   `capture daemon start`. (If you *do* have a daemon running — e.g. from the repo — the app attaches
   to that one instead.)
-- The bundled daemon does **capture + raw audio**. **Transcription** needs an ASR backend: the
-  freeze excludes the local mlx-whisper models (too big), so configure a remote one
-  (`CAPTURE_ASR_BACKEND=openai_compat` + endpoint) or run the repo daemon for on-device ASR.
+- **On-device transcription works out of the box** — the app bundles the mlx Whisper runtime.
+  Whisper **model weights** are *not* bundled (they're large); download them from the app's
+  **Whisper models** panel (Download → pick a size; it shows live progress), then **Use** to make
+  one active. Weights cache in `~/.cache/huggingface` and are shared with the repo. The default
+  model is `whisper-large-v3-turbo`; `whisper-tiny`/`base` are great for quick tests. (You can still
+  point at a remote OpenAI-compatible ASR endpoint instead.)
 - Per-app audio still needs **Screen Recording** granted to the app (the daemon it launches is the
   TCC-responsible process); the bundled `audiocap` helper keeps its stable signing identity so that
   grant persists across rebuilds.
+- This makes the DMG large (~166 MB) — mlx's Metal kernel library is ~125 MB. That's the runtime,
+  not models; model weights are downloaded on demand.
 
 **Install the skill into your coding agent.** The app bundles the `capture` skill and can drop it
 into a coding agent's home so the agent can drive capture-mcp from any project. Each button shows

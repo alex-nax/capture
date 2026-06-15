@@ -1,6 +1,128 @@
 {
   "api_version": "1.0",
   "models": {
+    "AsrModelInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "active": {
+          "title": "Active",
+          "type": "boolean"
+        },
+        "downloaded": {
+          "title": "Downloaded",
+          "type": "boolean"
+        },
+        "downloading": {
+          "default": false,
+          "title": "Downloading",
+          "type": "boolean"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "repo": {
+          "title": "Repo",
+          "type": "string"
+        },
+        "size_label": {
+          "title": "Size Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repo",
+        "name",
+        "size_label",
+        "downloaded",
+        "active"
+      ],
+      "title": "AsrModelInfo",
+      "type": "object"
+    },
+    "AsrModelRequest": {
+      "additionalProperties": false,
+      "description": "Body of POST /v1/asr/model and POST /v1/asr/models/download.",
+      "properties": {
+        "repo": {
+          "title": "Repo",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repo"
+      ],
+      "title": "AsrModelRequest",
+      "type": "object"
+    },
+    "AsrModelsResponse": {
+      "$defs": {
+        "AsrModelInfo": {
+          "additionalProperties": false,
+          "properties": {
+            "active": {
+              "title": "Active",
+              "type": "boolean"
+            },
+            "downloaded": {
+              "title": "Downloaded",
+              "type": "boolean"
+            },
+            "downloading": {
+              "default": false,
+              "title": "Downloading",
+              "type": "boolean"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "repo": {
+              "title": "Repo",
+              "type": "string"
+            },
+            "size_label": {
+              "title": "Size Label",
+              "type": "string"
+            }
+          },
+          "required": [
+            "repo",
+            "name",
+            "size_label",
+            "downloaded",
+            "active"
+          ],
+          "title": "AsrModelInfo",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "active": {
+          "title": "Active",
+          "type": "string"
+        },
+        "backend_available": {
+          "title": "Backend Available",
+          "type": "boolean"
+        },
+        "models": {
+          "items": {
+            "$ref": "#/$defs/AsrModelInfo"
+          },
+          "title": "Models",
+          "type": "array"
+        }
+      },
+      "required": [
+        "backend_available",
+        "active",
+        "models"
+      ],
+      "title": "AsrModelsResponse",
+      "type": "object"
+    },
     "ErrorResponse": {
       "additionalProperties": false,
       "properties": {

@@ -94,6 +94,15 @@ class DaemonClient:
     def transcript(self, sid: str, tail: int | None = None) -> dict:
         return self._request("GET", f"/v1/sessions/{sid}/transcript", params={"tail": tail})
 
+    def asr_models(self) -> dict:
+        return self._request("GET", "/v1/asr/models")
+
+    def asr_download(self, repo: str) -> dict:
+        return self._request("POST", "/v1/asr/models/download", body={"repo": repo})
+
+    def asr_set_model(self, repo: str) -> dict:
+        return self._request("POST", "/v1/asr/model", body={"repo": repo})
+
     def shutdown(self) -> dict:
         return self._request("POST", "/v1/admin/shutdown", body={}, timeout=5.0)
 

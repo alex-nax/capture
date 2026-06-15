@@ -49,7 +49,16 @@ class MlxWhisper(ASRBackend):
     def __init__(self, model: str | None = None) -> None:
         import mlx_whisper  # noqa: F401  (validate availability early)
 
-        self._model = model or os.environ.get("CAPTURE_WHISPER_MODEL", _MLX_DEFAULT)
+        from .. import config as _config
+
+        # Resolution order: explicit arg → env override → GUI-persisted config →
+        # hardcoded default. The config key is what the model manager writes.
+        self._model = (
+            model
+            or os.environ.get("CAPTURE_WHISPER_MODEL")
+            or _config.get("whisper_model")
+            or _MLX_DEFAULT
+        )
 
     def transcribe(self, pcm: np.ndarray, sample_rate: int) -> list[Segment]:
         import mlx_whisper

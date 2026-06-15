@@ -128,6 +128,27 @@ class ErrorResponse(_Strict):
     error: str
 
 
+class AsrModelRequest(_Strict):
+    """Body of POST /v1/asr/model and POST /v1/asr/models/download."""
+
+    repo: str
+
+
+class AsrModelInfo(_Strict):
+    repo: str
+    name: str
+    size_label: str
+    downloaded: bool
+    active: bool
+    downloading: bool = False
+
+
+class AsrModelsResponse(_Strict):
+    backend_available: bool
+    active: str
+    models: list[AsrModelInfo]
+
+
 #: name -> model, the registry the schema + round-trip contract iterate over.
 V1_MODELS: dict[str, type[BaseModel]] = {
     "StartSessionRequest": StartSessionRequest,
@@ -139,6 +160,9 @@ V1_MODELS: dict[str, type[BaseModel]] = {
     "TranscriptResponse": TranscriptResponse,
     "HealthResponse": HealthResponse,
     "ErrorResponse": ErrorResponse,
+    "AsrModelRequest": AsrModelRequest,
+    "AsrModelInfo": AsrModelInfo,
+    "AsrModelsResponse": AsrModelsResponse,
 }
 
 

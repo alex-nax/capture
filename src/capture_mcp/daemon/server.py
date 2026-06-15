@@ -13,6 +13,9 @@ Routes:
   GET  /v1/sessions/{id}                 -> one session summary
   POST /v1/sessions/{id}/stop            -> stop a capture
   GET  /v1/sessions/{id}/transcript?tail=N -> last N transcript segments
+  GET  /v1/asr/models                    -> Whisper model catalog + downloaded/active
+  POST /v1/asr/models/download {repo}    -> download a model (progress via /v1/events)
+  POST /v1/asr/model {repo}              -> set the active Whisper model
   POST /v1/admin/shutdown                -> stop the daemon
 
 The engine runs blocking work in the handler thread (ThreadingHTTPServer);
@@ -36,9 +39,10 @@ from pydantic import ValidationError
 
 from .. import __version__
 from ..core import list_windows
+from ..core.asr import manager as asr_manager
 from ..core.registry import SessionRegistry
 from ..core.session import CaptureSession
-from .models import StartSessionRequest, v1_schema
+from .models import AsrModelRequest, StartSessionRequest, v1_schema
 
 log = logging.getLogger("capture_mcp.daemon")
 
@@ -74,6 +78,11 @@ class CaptureDaemon(ThreadingHTTPServer):
         # events.jsonl for history.
         self._sse_lock = threading.Lock()
         self._sse_queues: set[queue.Queue] = set()
+        # ASR model downloads in flight (repo -> True), so a duplicate request is a
+        # no-op and the model list can show "downloading". Progress is fanned out
+        # over /v1/events; the GUI watches those.
+        self._asr_lock = threading.Lock()
+        self._asr_downloading: set[str] = set()
 
     @property
     def endpoint(self) -> str:
@@ -125,6 +134,55 @@ class CaptureDaemon(ThreadingHTTPServer):
                 sub.close()
 
         threading.Thread(target=forward, name=f"sse-fwd-{session.id}", daemon=True).start()
+
+    # -- ASR model downloads ---------------------------------------------------
+
+    def start_asr_download(self, repo: str) -> dict:
+        """Download a Whisper model in the background, fanning progress to SSE.
+
+        Returns ``{repo, started}`` immediately; the GUI watches ``/v1/events`` for
+        ``asr_download`` (progress), ``asr_download_done`` / ``asr_download_error``.
+        A repo already downloading is a no-op (``started: False``).
+        """
+        with self._asr_lock:
+            if repo in self._asr_downloading:
+                return {"repo": repo, "started": False, "reason": "already downloading"}
+            self._asr_downloading.add(repo)
+
+        def run() -> None:
+            last = -1.0  # throttle: only emit when the percent advances by ≥1
+
+            def on_progress(done: int, total: int, fname: str) -> None:
+                nonlocal last
+                frac = done / total if total else 0.0
+                if frac - last < 0.01 and frac < 1.0:
+                    return
+                last = frac
+                self.sse_broadcast(
+                    {
+                        "type": "asr_download",
+                        "repo": repo,
+                        "file": fname,
+                        "downloaded": done,
+                        "total": total,
+                        "fraction": round(frac, 4),
+                    }
+                )
+
+            try:
+                asr_manager.download(repo, on_progress=on_progress)
+                self.sse_broadcast({"type": "asr_download_done", "repo": repo})
+            except Exception as e:
+                log.warning("asr model download failed (%s): %s", repo, e)
+                self.sse_broadcast(
+                    {"type": "asr_download_error", "repo": repo, "error": f"{type(e).__name__}: {e}"}
+                )
+            finally:
+                with self._asr_lock:
+                    self._asr_downloading.discard(repo)
+
+        threading.Thread(target=run, name=f"asr-dl-{repo}", daemon=True).start()
+        return {"repo": repo, "started": True}
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -213,10 +271,37 @@ class _Handler(BaseHTTPRequestHandler):
             if method == "GET" and rest[2:] == ["transcript"]:
                 tail = int(q["tail"][0]) if "tail" in q else None
                 return 200, self._transcript(sid, tail)
+        if rest[:1] == ["asr"]:
+            return self._route_asr(method, rest, q)
         if method == "POST" and rest == ["admin", "shutdown"]:
             threading.Thread(target=self.server.shutdown, daemon=True).start()
             return 200, {"shutdown": True}
         raise _ApiError(404, "not found")
+
+    def _route_asr(self, method: str, rest: list[str], q: dict) -> tuple[int, dict]:
+        """ASR model manager: list / download / select the active Whisper model."""
+        if method == "GET" and rest == ["asr", "models"]:
+            with self.server._asr_lock:
+                downloading = set(self.server._asr_downloading)
+            return 200, asr_manager.catalog_status(downloading)
+        if method == "POST" and rest == ["asr", "models", "download"]:
+            return 202, self.server.start_asr_download(self._asr_repo())
+        if method == "POST" and rest == ["asr", "model"]:
+            try:
+                repo = asr_manager.set_active_model(self._asr_repo())
+            except ValueError as e:
+                raise _ApiError(400, str(e))
+            return 200, {"active": repo}
+        raise _ApiError(404, "not found")
+
+    def _asr_repo(self) -> str:
+        """Validated ``repo`` from a JSON body (AsrModelRequest)."""
+        try:
+            req = AsrModelRequest.model_validate(self._read_json())
+        except ValidationError as e:
+            errs = e.errors()
+            raise _ApiError(400, errs[0].get("msg", "invalid request") if errs else "invalid request")
+        return req.repo
 
     def _serve_sse(self) -> None:
         """Stream daemon events as Server-Sent Events until the client disconnects.

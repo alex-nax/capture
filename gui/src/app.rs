@@ -4,6 +4,7 @@
 //! session's transcript + screenshot preview are fed LIVE by a background SSE
 //! reader on /v1/events into a shared `LiveState` that render() reads. #33 slice 2.
 
+use std::collections::HashMap;
 use std::io::BufRead;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -18,12 +19,15 @@ use crate::tray::{self, Tray};
 use crate::hotkey;
 use crate::skill;
 
-/// Live data for the selected session, written by the SSE thread, read by render.
+/// Live data written by the SSE thread, read by render: the selected session's
+/// transcript + screenshot, plus in-flight ASR model download progress (repo →
+/// fraction 0..1; entries are removed on done/error).
 #[derive(Default)]
 struct LiveState {
     tracked: Option<String>,
     transcript: Vec<String>,
     last_shot: Option<String>,
+    asr_progress: HashMap<String, f32>,
 }
 
 pub struct CaptureApp {
@@ -38,6 +42,7 @@ pub struct CaptureApp {
     _hotkey_mgr: Option<GlobalHotKeyManager>, // kept alive = stays registered
     hotkey_id: u32,
     skill_status: Vec<skill::SkillStatus>, // per skill::AGENTS, cached
+    asr: daemon::AsrModels,                // Whisper model catalog, polled
     message: SharedString,
     out_dir: String,
     polling: bool,
@@ -83,6 +88,7 @@ impl CaptureApp {
             _hotkey_mgr: None,
             hotkey_id: 0,
             skill_status: Vec::new(),
+            asr: daemon::AsrModels::default(),
             message: "".into(),
             out_dir: default_out_dir(),
             polling: false,
@@ -200,6 +206,7 @@ impl CaptureApp {
             if self.windows.is_empty() {
                 self.windows = d.windows().unwrap_or_default();
             }
+            self.asr = d.asr_models().unwrap_or_default();
         }
     }
 
@@ -216,12 +223,33 @@ impl CaptureApp {
                     let Ok(line) = line else { break };
                     let Some(json) = line.strip_prefix("data: ") else { continue };
                     let Ok(ev) = serde_json::from_str::<serde_json::Value>(json) else { continue };
-                    let sid = ev.get("session_id").and_then(|v| v.as_str());
+                    let ev_type = ev.get("type").and_then(|v| v.as_str());
                     let mut st = live.lock().unwrap();
+                    // ASR model downloads are daemon-wide (no session_id) — handle
+                    // them before the session filter, which would drop them.
+                    match ev_type {
+                        Some("asr_download") => {
+                            if let (Some(repo), Some(frac)) = (
+                                ev.get("repo").and_then(|v| v.as_str()),
+                                ev.get("fraction").and_then(|v| v.as_f64()),
+                            ) {
+                                st.asr_progress.insert(repo.to_string(), frac as f32);
+                            }
+                            continue;
+                        }
+                        Some("asr_download_done") | Some("asr_download_error") => {
+                            if let Some(repo) = ev.get("repo").and_then(|v| v.as_str()) {
+                                st.asr_progress.remove(repo);
+                            }
+                            continue;
+                        }
+                        _ => {}
+                    }
+                    let sid = ev.get("session_id").and_then(|v| v.as_str());
                     if st.tracked.is_none() || st.tracked.as_deref() != sid {
                         continue;
                     }
-                    match ev.get("type").and_then(|v| v.as_str()) {
+                    match ev_type {
                         Some("transcript_segment") => {
                             if let Some(t) = ev.get("text").and_then(|v| v.as_str()) {
                                 st.transcript.push(t.trim().to_string());
@@ -257,9 +285,10 @@ impl CaptureApp {
                         Some(d) if d.available() => {
                             let h = d.health().ok();
                             let s = d.sessions().unwrap_or_default();
-                            (Some(d), h, s)
+                            let a = d.asr_models().unwrap_or_default();
+                            (Some(d), h, s, a)
                         }
-                        _ => (None, None, Vec::new()),
+                        _ => (None, None, Vec::new(), daemon::AsrModels::default()),
                     }
                 })
                 .await;
@@ -268,6 +297,7 @@ impl CaptureApp {
                     v.daemon = result.0;
                     v.health = result.1;
                     v.sessions = result.2;
+                    v.asr = result.3;
                     // Default the live pane to the newest running capture.
                     if v.selected_session.is_none() {
                         if let Some(s) = v.sessions.iter().rev().find(|s| s.state == "running") {
@@ -400,6 +430,61 @@ impl CaptureApp {
         };
         self.refresh_skill_status();
         cx.notify();
+    }
+
+    /// Kick off a model download on the daemon (progress streams over SSE into
+    /// `live.asr_progress`; the poll loop refreshes the catalog's flags).
+    fn download_model(&mut self, repo: String, cx: &mut Context<Self>) {
+        let Some(d) = self.daemon.clone() else {
+            self.message = "no daemon".into();
+            cx.notify();
+            return;
+        };
+        // Optimistically show a 0% bar so the row reacts immediately.
+        self.live.lock().unwrap().asr_progress.insert(repo.clone(), 0.0);
+        self.message = format!("downloading {}…", repo.rsplit('/').next().unwrap_or(&repo)).into();
+        cx.notify();
+        let live = self.live.clone();
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn({
+                    let repo = repo.clone();
+                    async move { d.asr_download(&repo) }
+                })
+                .await;
+            let _ = this.update(cx, |v, cx| {
+                if let Err(e) = r {
+                    live.lock().unwrap().asr_progress.remove(&repo);
+                    v.message = format!("download failed: {e}").into();
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Set the active Whisper model (new captures transcribe with it).
+    fn set_active_model(&mut self, repo: String, cx: &mut Context<Self>) {
+        let Some(d) = self.daemon.clone() else { return };
+        let short = repo.rsplit('/').next().unwrap_or(&repo).to_string();
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn({
+                    let repo = repo.clone();
+                    async move { d.asr_set_model(&repo) }
+                })
+                .await;
+            let _ = this.update(cx, |v, cx| {
+                v.message = match r {
+                    Ok(()) => format!("active model: {short}").into(),
+                    Err(e) => format!("set model failed: {e}").into(),
+                };
+                cx.notify();
+            });
+        })
+        .detach();
     }
 }
 
@@ -545,6 +630,87 @@ impl Render for CaptureApp {
             pane
         });
 
+        // Whisper model manager: per-model status + Download / Use actions. Live
+        // download progress comes from the SSE-fed `asr_progress` map.
+        let asr_progress = self.live.lock().unwrap().asr_progress.clone();
+        let model_rows: Vec<_> = self
+            .asr
+            .models
+            .iter()
+            .map(|m| {
+                let repo = m.repo.clone();
+                let prog = asr_progress.get(&repo).copied();
+                let status = if m.active {
+                    "● active".to_string()
+                } else if let Some(f) = prog {
+                    format!("↓ {:.0}%", (f * 100.0).clamp(0.0, 100.0))
+                } else if m.downloading {
+                    "↓ downloading…".to_string()
+                } else if m.downloaded {
+                    "✓ downloaded".to_string()
+                } else {
+                    String::new()
+                };
+                let mut row = div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(format!("{}  ·  {}", m.name, m.size_label)),
+                    )
+                    .child(div().text_color(rgb(0x66d9a0)).child(status));
+                let busy = prog.is_some() || m.downloading;
+                if !m.downloaded && !busy {
+                    let r = repo.clone();
+                    row = row.child(
+                        div()
+                            .id(SharedString::from(format!("dl-{repo}")))
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .bg(rgb(0x2d4f67))
+                            .child("Download")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.download_model(r.clone(), cx)
+                            })),
+                    );
+                } else if m.downloaded && !m.active {
+                    let r = repo.clone();
+                    row = row.child(
+                        div()
+                            .id(SharedString::from(format!("use-{repo}")))
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .bg(rgb(0x2d4f67))
+                            .child("Use")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.set_active_model(r.clone(), cx)
+                            })),
+                    );
+                }
+                row
+            })
+            .collect();
+        let asr_label = if self.asr.backend_available {
+            "Whisper models  (downloaded on demand · ~/.cache/huggingface)".to_string()
+        } else {
+            "Whisper models  (runtime unavailable in this daemon — capture still works)".to_string()
+        };
+        let mut asr_panel = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(div().text_color(rgb(0x9aa0a6)).child(asr_label));
+        if self.asr.backend_available {
+            asr_panel = asr_panel.children(model_rows);
+        }
+
         div()
             .flex()
             .flex_col()
@@ -609,6 +775,7 @@ impl Render for CaptureApp {
                             .children(session_rows),
                     ),
             )
+            .child(asr_panel)
             .children(detail)
     }
 }

@@ -35,8 +35,12 @@ BIN="$ROOT/gui/target/release/capture-gui"
 [ -x "$BIN" ] || { echo "build failed: $BIN missing" >&2; exit 1; }
 
 # --- Freeze the Python daemon (PyInstaller onedir) -------------------------------
-# Deps are only numpy + pydantic + pyobjc(Quartz); ASR (mlx/torch/…) is lazy so we
-# exclude it. The result is a self-contained `captured` binary + its dylibs.
+# Bundles the on-device ASR runtime (mlx-whisper) so the installed app transcribes
+# locally — the GUI's model manager downloads the *weights* on demand (never
+# bundled). torch/faster-whisper/riva (CUDA/cross-platform) are excluded.
+# NOTE: captured_main.py calls multiprocessing.freeze_support() — numba (a
+# mlx_whisper dep) uses multiprocessing, and without it a frozen child re-runs the
+# entry and starts a rogue second daemon.
 if [ "${CAPTURE_SKIP_FREEZE:-0}" = "1" ] && [ -x "$FREEZE_DIR/captured" ]; then
   echo "==> CAPTURE_SKIP_FREEZE=1 — reusing existing freeze at $FREEZE_DIR"
 else
@@ -45,19 +49,33 @@ else
     echo "==> Installing PyInstaller into the venv…"
     uv pip install --python "$VENV_PY" pyinstaller >/dev/null
   }
-  echo "==> Freezing the daemon (PyInstaller onedir)…"
+  echo "==> Freezing the daemon + mlx ASR runtime (PyInstaller onedir; ~390 MB)…"
   "$VENV_PY" -m PyInstaller --noconfirm --onedir --name captured \
     --distpath "$ROOT/packaging/build/dist" \
     --workpath "$ROOT/packaging/build/work" \
     --specpath "$ROOT/packaging/build" \
     --hidden-import capture_mcp.core.platform.macos \
+    --hidden-import capture_mcp.core.asr.whisper_local \
     --hidden-import capture_mcp.core.asr.openai_compat \
     --collect-all Quartz \
-    --exclude-module mlx --exclude-module mlx_whisper --exclude-module torch \
-    --exclude-module faster_whisper --exclude-module riva \
+    --collect-all mlx --collect-all mlx_whisper --collect-all huggingface_hub \
+    --collect-all tiktoken --collect-all numba \
+    --exclude-module torch --exclude-module faster_whisper --exclude-module riva \
     "$ROOT/packaging/captured_main.py"
 fi
 [ -x "$FREEZE_DIR/captured" ] || { echo "freeze failed: $FREEZE_DIR/captured missing" >&2; exit 1; }
+
+# Best-effort: prove the frozen mlx runtime works (Metal kernel + a whisper-tiny
+# transcription). Non-fatal — a cold cache needs network for the tiny model.
+# CAPTURE_ASR_SELFTEST=0 skips it.
+if [ "${CAPTURE_ASR_SELFTEST:-1}" = "1" ]; then
+  echo "==> Verifying the frozen ASR runtime (Metal + whisper-tiny; best-effort)…"
+  if "$FREEZE_DIR/captured" --asr-selftest; then
+    echo "   ASR self-test passed."
+  else
+    echo "   ⚠ ASR self-test did not pass (offline / first-run download?) — bundle still built." >&2
+  fi
+fi
 
 echo "==> Assembling $APP …"
 mkdir -p "$DIST"
