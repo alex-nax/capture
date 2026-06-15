@@ -96,3 +96,17 @@ class DaemonClient:
 
     def shutdown(self) -> dict:
         return self._request("POST", "/v1/admin/shutdown", body={}, timeout=5.0)
+
+    def events(self, timeout: float | None = None):
+        """Yield daemon events from the `/v1/events` SSE stream (blocking generator).
+
+        Live-only: events from the moment of connection onward. Heartbeat
+        comments (`: ping`) are skipped. Raises on connection error.
+        """
+        req = urllib.request.Request(self.endpoint + "/v1/events")
+        req.add_header("Authorization", f"Bearer {self.token}")
+        resp = urllib.request.urlopen(req, timeout=timeout)
+        for raw in resp:
+            line = raw.decode(errors="replace").rstrip("\n")
+            if line.startswith("data: "):
+                yield json.loads(line[6:])

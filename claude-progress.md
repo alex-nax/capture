@@ -1,5 +1,37 @@
 # Progress Log
 
+## Session 21 — 2026-06-15
+**Agent**: builder (macOS box, branch **v2**)
+**Summary**: Built **#32 — live event stream `GET /v1/events`** (the daemon's EventBus fan-out),
+the next V2 task. Zero new deps; reuses the M0b `EventBus` (#26).
+- **Transport decision: SSE, not WebSocket.** The event channel is one-way (daemon→client), which
+  Server-Sent Events serve straight from the stdlib `ThreadingHTTPServer` with no dependency;
+  clients send commands via the REST routes. WS stays [planned] only if bidirectional is ever
+  needed. Documented in daemon.md + product-architecture.md.
+- **`daemon/server.py`**: `CaptureDaemon` gained an SSE fan-out (`sse_register/unregister/
+  broadcast`, bounded per-client queues, slow clients drop rather than block) and `attach_stream`
+  — a per-session forwarder thread that subscribes to `session.events` **before** `start()` (so
+  `starting`/`running` are carried), tags each event with `session_id`, and ends after the
+  terminal state. `_serve_sse` streams `text/event-stream` with `: ping` heartbeats
+  (`CAPTURE_SSE_HEARTBEAT_SECONDS`, default 15). `_start_session` now attaches the stream.
+- **Client + CLI**: `DaemonClient.events()` generator; `capture watch [SESSION_ID]` streams events
+  (optionally filtered), Ctrl-C to stop.
+- **Demo earlier this session**: ran the full daemon+CLI stack on the original UE5 motion-matching
+  YouTube video (`8iqK-mCcE0Y`) — 79s per-app audio, 11 transcript segments, 41 screenshots, 0
+  errors, all via `capture start/status/tail/stop` over `/v1`; matches the 2026-06-07 capture.
+- Specs: daemon.md (events route/behavior/heartbeat/tests), product-architecture.md /v1 [current]
+  + SSE note; features.json #32 annotated.
+**Verification**: smoke **65/65** (+3 `test_sse_events`: SSE client connected pre-start receives
+starting→running→stopping→stopped + log_line/screenshot_taken, all session-tagged); contracts
+**3/3** (MCP/contract surface unchanged); real `capture watch` on a live daemon captured
+{state:4, screenshot_taken:5, log_line:6} for a 6-line launch run.
+**#32 status**: daemon + CLI + MCP daemon-first + SSE events all DONE. **Remaining for passes:true**:
+pydantic models + JSON-Schema contract, UDS transport, daemon-lifecycle install, cross-terminal
+AUDIO (needs #31). **Next**: pydantic + JSON-Schema `/v1` contract (the GUI "contract firewall"),
+or the `audiocap` macOS-26 enumeration-retry (#30 follow-up). #31 still needs Alex's Developer ID.
+
+---
+
 ## Session 20 — 2026-06-15
 **Agent**: builder (macOS box, branch **v2**)
 **Summary**: Built **#32 MCP daemon-first mode** — the credential-free half that finishes the

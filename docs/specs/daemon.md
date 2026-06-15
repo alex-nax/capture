@@ -52,6 +52,7 @@ server's daemon-first mode are **[planned]** (see Known limitations).
 | GET  | `/v1/sessions/{id}` | — | session summary (404 if unknown) |
 | POST | `/v1/sessions/{id}/stop` | — | final summary; a recovered (finished) id returns its record |
 | GET  | `/v1/sessions/{id}/transcript` | `?tail=N` | `{session_id, segments:[...], count}` from `transcript.jsonl` |
+| GET  | `/v1/events` | — | **SSE** (`text/event-stream`): each `data:` line is one event `{t, type, session_id, …}`; `: ping` heartbeats |
 | POST | `/v1/admin/shutdown` | — | `{shutdown:true}` then the server stops |
 
 Errors are `{"error": <message>}` with the documented status (400 bad
@@ -61,9 +62,10 @@ request/validation, 401 auth, 404 unknown, 500 unexpected — never a stack trac
 `daemon start|stop|status` · `status [SESSION_ID]` · `windows [--app N] [--pid P]`
 · `start --out DIR (--command C | --pid P | --app N) [--interval --no-screenshots
 --no-audio --audio-source --asr]` · `stop [SESSION_ID]` (the unique running one if
-omitted) · `tail SESSION_ID [-n N]`. Prints JSON; non-zero exit + `{"error":…}` on
-failure. `daemon start` spawns `python -m capture_mcp.daemon` detached
-(`start_new_session`) and waits for `/v1/health`.
+omitted) · `tail SESSION_ID [-n N]` · `watch [SESSION_ID]` (stream `/v1/events`,
+optionally filtered to one session; Ctrl-C to stop). Prints JSON; non-zero exit +
+`{"error":…}` on failure. `daemon start` spawns `python -m capture_mcp.daemon`
+detached (`start_new_session`) and waits for `/v1/health`.
 
 ## Behavior
 
@@ -76,6 +78,18 @@ failure. `daemon start` spawns `python -m capture_mcp.daemon` detached
   the referenced endpoint answers `/v1/health` (`SystemExit(3)`).
 - **Exactly-one-target** and the `output_dir`-required rule mirror the MCP server;
   unknown body fields are rejected (400).
+- **Event stream (`/v1/events`, SSE):** each `CaptureSession`'s `EventBus`
+  (events.md) is forwarded into a daemon-wide fan-out by a per-session forwarder
+  thread (`attach_stream`, subscribed **before** `start()` so `starting`/`running`
+  are carried, ending after the terminal `stopped`/`error` event). Each event is
+  tagged with `session_id`. Connected SSE handlers each hold a bounded queue;
+  fan-out is **live-only** (no replay — late joiners read `events.jsonl`); a slow
+  client drops events rather than blocking a capture. Heartbeat (`: ping`) every
+  `CAPTURE_SSE_HEARTBEAT_SECONDS` (default 15) keeps the connection alive and lets
+  the writer notice a dead client. **SSE, not WebSocket:** the event channel is
+  one-way (daemon→client), which SSE serves from the stdlib server with no dep;
+  clients send commands via the REST routes. WebSocket stays **[planned]** only if
+  a bidirectional channel is ever needed.
 - **stdout is NOT special** here (unlike `server.py`): the daemon is its own
   process; logs go to stderr.
 
@@ -111,6 +125,7 @@ failure. `daemon start` spawns `python -m capture_mcp.daemon` detached
 ## Configuration
 
 - `CAPTURE_DAEMON_JSON` — discovery file path (default `~/.capture/daemon.json`).
+- `CAPTURE_SSE_HEARTBEAT_SECONDS` — `/v1/events` keep-alive interval (default 15).
 - Inherits `CAPTURE_SESSION_INDEX` (registry history) and all engine env
   (`CAPTURE_WHISPER_MODEL`, `CAPTURE_OPENAI_ASR_URL`, …).
 
@@ -119,8 +134,9 @@ failure. `daemon start` spawns `python -m capture_mcp.daemon` detached
 - **Transport:** 127.0.0.1 + token only. **[planned]** unix domain socket
   (macOS/Linux, peer-uid check) per product-architecture.md; 127.0.0.1 stays the
   Windows transport.
-- **No event stream yet.** **[planned]** `GET /v1/events` WebSocket fan-out of the
-  `EventBus` (clients currently poll `/v1/sessions/{id}` or read `events.jsonl`).
+- **Event stream: DONE via SSE** (`GET /v1/events`, see Behavior). **[planned]**
+  WebSocket only if bidirectional is ever needed; a small per-session ring buffer
+  for late-joiner replay (today: live-only, history via `events.jsonl`).
 - **MCP daemon-first mode: DONE.** The MCP server (`server.py`) proxies every tool
   to a running daemon and falls back to the embedded engine otherwise
   (`CAPTURE_MCP_EMBEDDED=1` forces embedded). See mcp-server.md. The *grant*-sharing
@@ -145,3 +161,7 @@ failure. `daemon start` spawns `python -m capture_mcp.daemon` detached
 - `test_cli_daemon`: the `capture` CLI **spawns a real daemon subprocess** and
   drives it — `daemon start` → `daemon status` (running) → `windows` → `status`
   → `daemon stop`.
+- `test_sse_events`: an SSE client connects to `/v1/events` **before** a capture
+  starts and receives the full state lifecycle (`starting`→`running`→`stopping`→
+  `stopped`) plus live `log_line`/`screenshot_taken`, all tagged with `session_id`.
+  (`CAPTURE_SSE_HEARTBEAT_SECONDS` is lowered in the suite.)

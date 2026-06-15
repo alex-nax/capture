@@ -41,6 +41,8 @@ BASE = Path(tempfile.mkdtemp(prefix="capmcp-smoke-"))
 os.environ["CAPTURE_SESSION_INDEX"] = str(BASE / "sessions.jsonl")
 # Daemon discovery file (used by the CLI test) — temp so it never touches ~/.capture.
 os.environ["CAPTURE_DAEMON_JSON"] = str(BASE / "daemon.json")
+# Fast SSE heartbeat so the events-stream test's reader wakes promptly.
+os.environ["CAPTURE_SSE_HEARTBEAT_SECONDS"] = "0.5"
 # Shrink the events.jsonl snapshot interval so short captures exercise the
 # periodic-snapshot path, not just the final snapshot.
 os.environ["CAPTURE_EVENTS_SNAPSHOT_SECONDS"] = "0.5"
@@ -427,6 +429,58 @@ def test_cli_daemon() -> None:
         check("cli: daemon stop", rc == 0 and stopped.get("stopped") is True, str(stopped)[:80])
 
 
+def test_sse_events() -> None:
+    """The daemon fans each session's EventBus out over /v1/events (SSE)."""
+    import threading as _threading
+    import urllib.request
+
+    d = CaptureDaemon()
+    _threading.Thread(target=d.serve_forever, daemon=True).start()
+    c = DaemonClient({"endpoint": d.endpoint, "token": d.token})
+
+    got: list[dict] = []
+    stop = _threading.Event()
+
+    def reader() -> None:
+        try:
+            req = urllib.request.Request(d.endpoint + "/v1/events")
+            req.add_header("Authorization", f"Bearer {d.token}")
+            with urllib.request.urlopen(req, timeout=10) as r:
+                for raw in r:
+                    if stop.is_set():
+                        break
+                    line = raw.decode(errors="replace").rstrip("\n")
+                    if line.startswith("data: "):
+                        got.append(json.loads(line[6:]))
+        except Exception:
+            pass
+
+    rt = _threading.Thread(target=reader, daemon=True)
+    rt.start()
+    try:
+        time.sleep(0.4)  # ensure the SSE client is connected before the capture starts
+        s = c.start(output_dir=str(BASE / "sse"),
+                    command=_cmdline([sys.executable, "-c", _LAUNCH_CODE]),
+                    capture_audio=False, screenshot_interval=0.4)
+        sid = s["session_id"]
+        time.sleep(1.6)
+        c.stop(sid)
+        time.sleep(0.6)
+        stop.set()
+
+        mine = [e for e in got if e.get("session_id") == sid]
+        states = [e["state"] for e in mine if e["type"] == "state"]
+        types = {e["type"] for e in mine}
+        check("sse: state stream has running + stopped",
+              "running" in states and "stopped" in states, f"states={states}")
+        check("sse: log_line + screenshot_taken pushed live",
+              {"log_line", "screenshot_taken"} <= types, f"types={sorted(types)}")
+        check("sse: every event tagged with session_id", all("session_id" in e for e in got))
+    finally:
+        stop.set()
+        d.shutdown(); d.server_close()
+
+
 async def test_mcp_daemon_first() -> None:
     """MCP tools proxy to a running daemon, and fall back to the embedded engine."""
     import threading as _threading
@@ -522,6 +576,7 @@ async def main() -> int:
         await test_list_windows()
         test_daemon()
         test_cli_daemon()
+        test_sse_events()
         await test_mcp_daemon_first()
         test_helper_path()
         test_parse_resolution()

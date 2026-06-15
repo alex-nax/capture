@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -81,11 +82,63 @@ class CaptureDaemon(ThreadingHTTPServer):
         self.registry = SessionRegistry()
         self.token = token or secrets.token_urlsafe(24)
         self.started = threading.Event()
+        # Connected /v1/events (SSE) clients: one bounded queue each. Session
+        # forwarder threads fan events in from each session's EventBus; the SSE
+        # handlers fan them back out. Live-only (no replay) — late joiners read
+        # events.jsonl for history.
+        self._sse_lock = threading.Lock()
+        self._sse_queues: set[queue.Queue] = set()
 
     @property
     def endpoint(self) -> str:
         host, port = self.server_address[:2]
         return f"http://{host}:{port}"
+
+    # -- SSE fan-out -----------------------------------------------------------
+
+    def sse_register(self) -> queue.Queue:
+        q: queue.Queue = queue.Queue(maxsize=1000)
+        with self._sse_lock:
+            self._sse_queues.add(q)
+        return q
+
+    def sse_unregister(self, q: queue.Queue) -> None:
+        with self._sse_lock:
+            self._sse_queues.discard(q)
+
+    def sse_broadcast(self, event: dict) -> None:
+        with self._sse_lock:
+            qs = list(self._sse_queues)
+        for q in qs:
+            try:
+                q.put_nowait(event)
+            except queue.Full:
+                pass  # slow client drops events; never block a capture
+
+    def attach_stream(self, session: CaptureSession) -> None:
+        """Forward one session's EventBus into the daemon-wide SSE fan-out.
+
+        Subscribe BEFORE the session starts so the starting/running events are
+        carried; tag every event with session_id; end after the terminal state.
+        """
+        sub = session.events.subscribe()
+
+        def forward() -> None:
+            try:
+                while True:
+                    try:
+                        ev = sub.get(timeout=2.0)
+                    except queue.Empty:
+                        if session.state in ("stopped", "error"):
+                            break
+                        continue
+                    self.sse_broadcast({**ev, "session_id": session.id})
+                    if ev.get("type") == "state" and ev.get("state") in ("stopped", "error"):
+                        break
+            finally:
+                sub.close()
+
+        threading.Thread(target=forward, name=f"sse-fwd-{session.id}", daemon=True).start()
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -139,6 +192,9 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(200, self._health())
             if not self._authed():
                 raise _ApiError(401, "missing or invalid bearer token")
+            # /v1/events is a long-lived SSE stream, not a one-shot JSON response.
+            if method == "GET" and rest == ["events"]:
+                return self._serve_sse()
             self._send(*self._route(method, rest, q))
         except _ApiError as e:
             self._send(e.status, {"error": e.message})
@@ -174,6 +230,35 @@ class _Handler(BaseHTTPRequestHandler):
             return 200, {"shutdown": True}
         raise _ApiError(404, "not found")
 
+    def _serve_sse(self) -> None:
+        """Stream daemon events as Server-Sent Events until the client disconnects.
+
+        Heartbeats (`: ping`) every CAPTURE_SSE_HEARTBEAT_SECONDS keep the
+        connection alive and let the writer notice a dead client.
+        """
+        hb = float(os.environ.get("CAPTURE_SSE_HEARTBEAT_SECONDS", "15"))
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        q = self.server.sse_register()
+        try:
+            self.wfile.write(b": connected\n\n")
+            self.wfile.flush()
+            while True:
+                try:
+                    ev = q.get(timeout=hb)
+                    payload = ("data: " + json.dumps(ev) + "\n\n").encode()
+                except queue.Empty:
+                    payload = b": ping\n\n"
+                self.wfile.write(payload)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError, ValueError):
+            pass  # client went away
+        finally:
+            self.server.sse_unregister(q)
+
     # -- handlers --------------------------------------------------------------
 
     def _health(self) -> dict:
@@ -202,9 +287,11 @@ class _Handler(BaseHTTPRequestHandler):
             raise _ApiError(400, "specify exactly one target: command, pid, or app_name")
         kwargs = {k: body[k] for k in _SESSION_ARGS if k in body}
         session = CaptureSession(output_dir, **kwargs)
-        # Register BEFORE start so a slow/failed start is still visible (state
-        # "starting"/"error"), same contract as the MCP server.
+        # Register + attach the event stream BEFORE start so a slow/failed start
+        # is visible (state "starting"/"error") and the starting/running events
+        # reach /v1/events subscribers.
         self.server.registry.add(session)
+        self.server.attach_stream(session)
         try:
             return session.start()
         except Exception as e:

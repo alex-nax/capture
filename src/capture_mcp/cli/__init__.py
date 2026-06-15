@@ -143,6 +143,20 @@ def _tail(args) -> int:
         return _err(str(e))
 
 
+def _watch(args) -> int:
+    c = _client_or_die()
+    try:
+        for ev in c.events():
+            if args.session_id and ev.get("session_id") != args.session_id:
+                continue
+            print(json.dumps(ev, ensure_ascii=False), flush=True)
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        return _err(str(e))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="capture", description="capture-mcp CLI (daemon client)")
     p.add_argument("--version", action="version", version=f"capture {__version__}")
@@ -180,6 +194,10 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("session_id")
     t.add_argument("-n", type=int, default=10, help="number of segments (default 10)")
     t.set_defaults(func=_tail)
+
+    wt = sub.add_parser("watch", help="stream live events (Ctrl-C to stop)")
+    wt.add_argument("session_id", nargs="?", help="only this session's events")
+    wt.set_defaults(func=_watch)
     return p
 
 

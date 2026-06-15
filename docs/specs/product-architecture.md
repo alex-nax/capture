@@ -49,13 +49,14 @@ These are frozen interfaces that every layer below builds on.
 
 **[partly current — see [daemon.md](daemon.md))**
 
-- `/v1` local API (versioned, additive-only within a major). **[current, #32 slice 1]**:
+- `/v1` local API (versioned, additive-only within a major). **[current, #32]**:
   `POST /v1/sessions`, `POST /v1/sessions/{id}/stop`, `GET /v1/sessions[/{id}]`,
   `GET /v1/sessions/{id}/transcript?tail=N`, `GET /v1/windows`, `GET /v1/health`,
+  `GET /v1/events` (**SSE** fan-out of the EventBus: state, `screenshot_taken`,
+  `transcript_segment`, `log_line`, `audio_status` — see [daemon.md](daemon.md)),
   `POST /v1/admin/shutdown`. **[planned]**: `/v1/sessions/{id}/preview` (latest frame),
-  `GET /v1/events` (WS fan-out: `screenshot_taken`, `transcript_segment`, `log_line`, state
-  transitions, `permission.updated`), `POST /v1/permissions/screen_recording/request`,
-  `POST /v1/asr/preload`, `POST /v1/sessions/{id}/retranscribe`.
+  `POST /v1/permissions/screen_recording/request`, `POST /v1/asr/preload`,
+  `POST /v1/sessions/{id}/retranscribe`. (Event transport is SSE, not WS — one-way fan-out.)
 - Endpoint discovery: `~/.capture/daemon.json` `{endpoint, token, pid, api_version}`,
   mode 0600, written by the daemon; bearer token required; UDS peer-uid checked.
 - Contract firewall: the daemon emits JSON Schema from its pydantic models; the Rust
