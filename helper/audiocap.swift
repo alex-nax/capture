@@ -238,9 +238,27 @@ func connect() {
     }
 }
 
+// Enumerate shareable content with a bounded retry. On macOS 26 the first
+// SCShareableContent call intermittently fails; a single attempt would exit(5)
+// and lean entirely on the parent's respawn (observed in the #30 TCC spike).
+// Retry a few times before giving up.
+func enumerateShareableContent() async -> SCShareableContent? {
+    for attempt in 1...5 {
+        do {
+            return try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        } catch {
+            logErr("shareable content enumeration failed (attempt \(attempt)/5): \(error.localizedDescription)")
+            if attempt < 5 { try? await Task.sleep(nanoseconds: 500_000_000) }
+        }
+    }
+    return nil
+}
+
 Task {
-    do {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        guard let content = await enumerateShareableContent() else {
+            logErr("startup failed: could not enumerate shareable content after 5 attempts")
+            exit(5)
+        }
         logErr("content: apps=\(content.applications.count) displays=\(content.displays.count) windows=\(content.windows.count)")
         guard let display = content.displays.first else {
             logErr("no display available")
@@ -292,10 +310,6 @@ Task {
 
         logErr("target=\(capLabel); starting capture...")
         connect()
-    } catch {
-        logErr("startup failed: \(error.localizedDescription)")
-        exit(5)
-    }
 }
 
 RunLoop.main.run()

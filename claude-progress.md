@@ -1,5 +1,37 @@
 # Progress Log
 
+## Session 27 — 2026-06-15
+**Agent**: builder (macOS box 15.7.3, branch **v2**)
+**Summary**: Implemented the **audiocap macOS-26 enumeration-retry** (#30 follow-up) — AND in
+verifying it, **broke this box's Screen Recording grant by rebuilding the helper** (a real,
+valuable finding; needs Alex to re-grant).
+- **`helper/audiocap.swift`**: `SCShareableContent` enumeration now uses `enumerateShareableContent()`
+  — a bounded retry (5 attempts, 0.5s backoff) instead of `exit(5)` on the first failure, so the
+  helper rides through macOS 26's intermittent enumeration flakiness rather than leaning on the
+  daemon's respawn. Compile-verified (`swiftc` rc=0).
+- **INCIDENT — grant broken on macOS 15**: I then rebuilt + re-signed the production
+  `helper/audiocap` with the stable identity (`capture-mcp-codesign`) to deploy/verify on this box.
+  On **macOS 15.7.3 the same-identity rebuild LOST the Screen Recording grant** (→ `displays=0` /
+  `app-audio-failed (rc=4): no display available`), **contradicting the macOS-26 spike** where the
+  same-identity rebuild kept it. So: with a self-signed (no-Team-ID) cert, **macOS 15 effectively
+  keys the grant to the cdhash** (every rebuild needs re-approval; maybe compounded by Sequoia's
+  periodic re-approval). I cannot restore a TCC grant programmatically — **Alex must re-approve**
+  (run `./helper/audiocap --system` from an interactive Terminal → approve in System Settings →
+  Screen Recording → quit & reopen Terminal). LESSON: do NOT rebuild the signed helper on a working
+  box to "verify"; commit the source and rebuild on the target (macOS 26) where the change is
+  testable. The earlier captures THIS session used the pre-rebuild binary (grant was fine then).
+- **Refined #30** in product-architecture.md (the identity-keying conclusion is **macOS-version-
+  dependent for self-signed certs**; #31 must re-verify Developer-ID grant persistence on macOS 15,
+  not assume the macOS-26 result generalizes) + screencapturekit-helper.md (retry + the grant-
+  fragility note).
+**Verification**: source compiles; Python smoke 68/68 (unaffected). The enumeration-retry itself
+could NOT be functionally verified here (the macOS-26 flakiness isn't reproducible on 15, and the
+rebuilt helper can't capture until the grant is restored).
+**Next**: Alex re-grants Screen Recording (above). Then any GUI/daemon capture works again. The
+audiocap retry deploys on the next rebuild (and is the real test on the macOS-26 box).
+
+---
+
 ## Session 26 — 2026-06-15
 **Agent**: builder (macOS box, branch **v2**; v2 was squashed to one commit + pushed to GitHub
 this session per Alex's request — origin/v2 = 162222a, current-dated; local tag v2-presquash keeps

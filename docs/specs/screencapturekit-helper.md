@@ -66,7 +66,12 @@ Human-readable status lines via `logErr` (lines 42-44), each newline-terminated.
 2. Ignore `SIGPIPE` (`signal(SIGPIPE, SIG_IGN)`, line 171) so a closed stdout surfaces as a throwing write instead of killing the process with a signal.
 3. Create the audio dispatch queue (`audiocap.audio`), the global `signalSources` array, and the global `captureStream` holder (lines 173-175).
 4. Construct the shutdown guard (`shutdownLock`, `didShutdown`, `shutdown(_:)`, lines 179-190) and the `AudioSink` with the requested output rate (line 192).
-5. In an async `Task` (lines 237-295): fetch `SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)`; log the content counts; take the first display (else log + `exit(4)`).
+5. In an async `Task`: fetch shareable content via `enumerateShareableContent()` — a **bounded
+   retry** (5 attempts, 0.5 s backoff) around `SCShareableContent.excludingDesktopWindows(false,
+   onScreenWindowsOnly: false)`, added after the #30 spike saw the first call fail intermittently
+   on macOS 26. If all attempts fail → log + `exit(5)`. Then log the content counts and take the
+   first display (else log + `exit(4)` — `displays=0` is the signature of a **missing/lapsed Screen
+   Recording grant** for the launching process).
 6. Build the `SCContentFilter` and `capLabel` (lines 246-257):
    - `--system`: `SCContentFilter(display:excludingWindows: [])`, label `"system"`.
    - app target: resolve the app via `findApp` (PID match first, then bundle id); if none, log + `exit(3)`. Build `SCContentFilter(display:including: [app], exceptingWindows: [])`, label `"<appName> pid=<pid>"`.
@@ -114,6 +119,14 @@ File persistence (session.json, transcripts, recordings) is the parent process's
 - **Hardcoded reconnect tuning:** backoff `0.25 * reconnects` capped at `2.0s`; give-up threshold `reconnects > 20` while `!everGotData`.
 
 ## Known limitations / open items
+- **Self-signed grant is fragile across rebuilds on macOS 15** (observed 2026-06-15, 15.7.3):
+  rebuilding the helper with the *same* self-signed identity (`capture-mcp-codesign`) LOST the
+  Screen Recording grant (→ `displays=0` / `exit(4)`) and needed re-approval — unlike macOS 26
+  where the same-identity rebuild kept it (#30). So on macOS 15 a self-signed helper rebuild
+  requires re-granting Screen Recording (run `./helper/audiocap --system` from an interactive
+  terminal → approve in System Settings → Screen Recording, then quit & reopen the terminal). The
+  Developer ID production path (Team ID) should be more robust but must be verified per-version in
+  #31. See product-architecture.md ([confirmed #30, with a version caveat]).
 - **Resampler tail loss:** the converter is retained across callbacks, so only the final buffer's tail at stream end can be lost (described as negligible, lines 67-72).
 - **READY is not literally the first stderr line:** the header comment says "first line is READY" but `content:` and `target=...` lines are emitted before it. Parents should scan for the READY token rather than read line 1. (Documentation/code discrepancy.)
 - **Output endianness** is native host order (little-endian on supported Apple hardware) rather than explicitly byte-swapped; correct in practice but implicit.
