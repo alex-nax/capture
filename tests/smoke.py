@@ -53,7 +53,7 @@ from capture_mcp.core.asr.base import Segment  # noqa: E402
 from capture_mcp.core.registry import SessionRegistry  # noqa: E402
 from capture_mcp.core.screenshots import parse_resolution  # noqa: E402
 from capture_mcp.core.session import CaptureSession  # noqa: E402
-from capture_mcp.daemon.client import DaemonClient  # noqa: E402
+from capture_mcp.daemon.client import DaemonClient, DaemonError  # noqa: E402
 from capture_mcp.daemon.server import CaptureDaemon, write_daemon_json  # noqa: E402
 from capture_mcp.server import capture_start, capture_status, capture_stop, list_windows  # noqa: E402
 
@@ -398,6 +398,26 @@ def test_daemon() -> None:
             c.session("nope"); check("daemon: unknown id 404", False)
         except Exception as e:
             check("daemon: unknown id 404", getattr(e, "status", None) == 404, str(e))
+
+        # /v1 contract: live responses round-trip through the pydantic models,
+        # the bad-request path is validated, and /v1/schema is served.
+        from capture_mcp.daemon import models as M
+        try:
+            M.HealthResponse.model_validate(c.health())
+            M.WindowsResponse.model_validate(c.windows())
+            M.SessionsResponse.model_validate(c.sessions())
+            M.SessionSummary.model_validate(fin)
+            check("daemon: live responses match /v1 contract", True)
+        except Exception as e:
+            check("daemon: live responses match /v1 contract", False, str(e)[:120])
+        try:
+            c.start(output_dir=out, command="ls", pid=1)  # two targets
+            check("daemon: contract rejects bad request (400)", False)
+        except DaemonError as e:
+            check("daemon: contract rejects bad request (400)", e.status == 400, str(e))
+        schema = c._request("GET", "/v1/schema")
+        check("daemon: /v1/schema served", schema.get("api_version") == "1.0"
+              and "SessionSummary" in schema.get("models", {}), str(schema)[:60])
     finally:
         d.shutdown(); d.server_close()
 

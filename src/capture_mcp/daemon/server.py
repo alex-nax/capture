@@ -32,36 +32,22 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from pydantic import ValidationError
+
 from .. import __version__
 from ..core import list_windows
 from ..core.registry import SessionRegistry
 from ..core.session import CaptureSession
+from .models import StartSessionRequest, v1_schema
 
 log = logging.getLogger("capture_mcp.daemon")
 
 API_VERSION = "1.0"
 
-# capture_start args forwarded verbatim to CaptureSession (mirrors server.py).
-_SESSION_ARGS = (
-    "command", "pid", "app_name", "bundle_id", "screenshot_interval",
-    "screenshot_format", "screenshot_resolution", "screenshot_jpeg_quality",
-    "capture_screenshots", "capture_audio", "audio_source", "audio_chunk_seconds",
-    "asr_backend", "cwd",
-)
-
 
 def daemon_json_path() -> Path:
     env = os.environ.get("CAPTURE_DAEMON_JSON")
     return Path(env).expanduser() if env else Path.home() / ".capture" / "daemon.json"
-
-
-def _present(v: object) -> bool:
-    """Exactly-one-target predicate, identical to the MCP server's."""
-    if v is None:
-        return False
-    if isinstance(v, str):
-        return bool(v.strip())
-    return True
 
 
 class _ApiError(Exception):
@@ -204,6 +190,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _route(self, method: str, rest: list[str], q: dict) -> tuple[int, dict]:
         reg = self.server.registry
+        if method == "GET" and rest == ["schema"]:
+            return 200, v1_schema(API_VERSION)
         if method == "GET" and rest == ["windows"]:
             pid = int(q["pid"][0]) if "pid" in q else None
             app = q.get("app_name", [None])[0]
@@ -276,17 +264,15 @@ class _Handler(BaseHTTPRequestHandler):
         }
 
     def _start_session(self, body: dict) -> dict:
-        unknown = set(body) - set(_SESSION_ARGS) - {"output_dir"}
-        if unknown:
-            raise _ApiError(400, f"unknown field(s): {', '.join(sorted(unknown))}")
-        output_dir = body.get("output_dir")
-        if not output_dir or not str(output_dir).strip():
-            raise _ApiError(400, "output_dir is required")
-        provided = [n for n in ("command", "pid", "app_name") if _present(body.get(n))]
-        if len(provided) != 1:
-            raise _ApiError(400, "specify exactly one target: command, pid, or app_name")
-        kwargs = {k: body[k] for k in _SESSION_ARGS if k in body}
-        session = CaptureSession(output_dir, **kwargs)
+        # The /v1 contract (pydantic) validates the body: unknown fields, types,
+        # exactly-one-target, and output_dir are all enforced here.
+        try:
+            req = StartSessionRequest.model_validate(body)
+        except ValidationError as e:
+            errs = e.errors()
+            msg = errs[0].get("msg", "invalid request") if errs else "invalid request"
+            raise _ApiError(400, msg.removeprefix("Value error, "))
+        session = CaptureSession(req.output_dir, **req.session_kwargs())
         # Register + attach the event stream BEFORE start so a slow/failed start
         # is visible (state "starting"/"error") and the starting/running events
         # reach /v1/events subscribers.

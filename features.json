@@ -396,10 +396,10 @@
       "acceptance_criteria": [
         "Agent-started capture is visible via CLI status; sessions survive client exits (DONE: captured /v1 API on 127.0.0.1+token over a shared SessionRegistry; `capture` CLI + the MCP server (daemon-first) are both clients; smoke test_daemon + test_cli_daemon + test_mcp_daemon_first, 62/62)",
         "One Screen Recording grant (to the daemon) gives working audio from two different terminals' MCP agents (MECHANISM DONE: both terminals' MCP agents proxy to the one daemon via daemon-first dispatch, so they share its registry+grant. The stable-grant BENEFIT still needs the packaged signed launchd daemon #31/#30 to be the TCC-responsible process)",
-        "JSON-Schema round-trip contract tests pass; pydantic schema checked in (PENDING: slice 1 returns engine dicts directly; pydantic models + schema emission are planned, see daemon.md)",
+        "JSON-Schema round-trip contract tests pass; pydantic schema checked in (DONE: daemon/models.py pydantic models = the /v1 contract; v1_schema() + GET /v1/schema; golden tests/contract/golden/v1_schema.json + smoke round-trips live responses through the models + 400 on bad request; registry now returns uniformly full-shaped records so SessionSummary holds. Rust typify generation still planned.)",
         "[DONE] daemon: stdlib /v1 (health/sessions/windows/transcript/admin-shutdown), bearer-token auth (401 without), single-instance guard, ~/.capture/daemon.json (0600); `captured`+`capture` scripts. MCP server: daemon-first dispatch with embedded fallback (CAPTURE_MCP_EMBEDDED=1). docs/specs/daemon.md + mcp-server.md.",
         "[DONE] live event stream GET /v1/events (SSE) fanning each session's EventBus out, tagged with session_id, + `capture watch` CLI; smoke test_sse_events (full lifecycle + log_line/screenshot pushed live); verified with `capture watch` on a real run.",
-        "[REMAINING for passes:true] pydantic models + JSON-Schema contract; UDS transport (SSE replaces the planned WS for events); daemon lifecycle install (launchd/systemd/logon-task); the cross-terminal-AUDIO benefit (needs #31)"
+        "[REMAINING for passes:true] UDS transport (SSE replaces the planned WS for events); daemon lifecycle install (launchd/systemd/logon-task); Rust type generation from /v1 schema; the cross-terminal-AUDIO benefit (needs #31)"
       ],
       "passes": false,
       "dependencies": [31]

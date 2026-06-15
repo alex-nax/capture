@@ -59,9 +59,10 @@ These are frozen interfaces that every layer below builds on.
   `POST /v1/sessions/{id}/retranscribe`. (Event transport is SSE, not WS — one-way fan-out.)
 - Endpoint discovery: `~/.capture/daemon.json` `{endpoint, token, pid, api_version}`,
   mode 0600, written by the daemon; bearer token required; UDS peer-uid checked.
-- Contract firewall: the daemon emits JSON Schema from its pydantic models; the Rust
-  client types are generated from that schema (typify); round-trip contract tests run in
-  CI from both sides. The MCP server consumes the same schema.
+- Contract firewall: **[current, #32]** the daemon's `/v1` shapes are pydantic models
+  (`daemon/models.py`) that emit JSON Schema (`v1_schema()` / `GET /v1/schema`), pinned by
+  a golden contract test that also round-trips live responses through the models.
+  **[planned]** generate the GPUI app's Rust types from that schema (typify).
 - **[current]** MCP tool `list_windows` (#29, 2026-06-10): agents share the engine's
   window picker (`core.list_windows()`), the same function `/v1/windows` will wrap.
 

@@ -1,0 +1,667 @@
+{
+  "api_version": "1.0",
+  "models": {
+    "ErrorResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "title": "Error",
+          "type": "string"
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "title": "ErrorResponse",
+      "type": "object"
+    },
+    "HealthResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "title": "Api Version",
+          "type": "string"
+        },
+        "ok": {
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "pid": {
+          "title": "Pid",
+          "type": "integer"
+        },
+        "platform": {
+          "title": "Platform",
+          "type": "string"
+        },
+        "sessions": {
+          "additionalProperties": true,
+          "title": "Sessions",
+          "type": "object"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ok",
+        "version",
+        "api_version",
+        "pid",
+        "platform",
+        "sessions"
+      ],
+      "title": "HealthResponse",
+      "type": "object"
+    },
+    "SessionSummary": {
+      "additionalProperties": false,
+      "description": "The session summary returned by start/stop/status (mirrors `session.py`).",
+      "properties": {
+        "asr_errors": {
+          "title": "Asr Errors",
+          "type": "integer"
+        },
+        "audio_mode": {
+          "title": "Audio Mode",
+          "type": "string"
+        },
+        "audio_status": {
+          "title": "Audio Status",
+          "type": "string"
+        },
+        "dir": {
+          "title": "Dir",
+          "type": "string"
+        },
+        "log_lines": {
+          "title": "Log Lines",
+          "type": "integer"
+        },
+        "notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Notes",
+          "type": "array"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pid"
+        },
+        "process_running": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Process Running"
+        },
+        "screenshot_errors": {
+          "title": "Screenshot Errors",
+          "type": "integer"
+        },
+        "screenshots": {
+          "title": "Screenshots",
+          "type": "integer"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started At"
+        },
+        "state": {
+          "title": "State",
+          "type": "string"
+        },
+        "stopped_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stopped At"
+        },
+        "transcript_segments": {
+          "title": "Transcript Segments",
+          "type": "integer"
+        },
+        "window_title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Window Title"
+        }
+      },
+      "required": [
+        "session_id",
+        "state",
+        "dir",
+        "screenshots",
+        "screenshot_errors",
+        "log_lines",
+        "audio_mode",
+        "audio_status",
+        "transcript_segments",
+        "asr_errors",
+        "notes"
+      ],
+      "title": "SessionSummary",
+      "type": "object"
+    },
+    "SessionsResponse": {
+      "$defs": {
+        "SessionSummary": {
+          "additionalProperties": false,
+          "description": "The session summary returned by start/stop/status (mirrors `session.py`).",
+          "properties": {
+            "asr_errors": {
+              "title": "Asr Errors",
+              "type": "integer"
+            },
+            "audio_mode": {
+              "title": "Audio Mode",
+              "type": "string"
+            },
+            "audio_status": {
+              "title": "Audio Status",
+              "type": "string"
+            },
+            "dir": {
+              "title": "Dir",
+              "type": "string"
+            },
+            "log_lines": {
+              "title": "Log Lines",
+              "type": "integer"
+            },
+            "notes": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Notes",
+              "type": "array"
+            },
+            "pid": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Pid"
+            },
+            "process_running": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Process Running"
+            },
+            "screenshot_errors": {
+              "title": "Screenshot Errors",
+              "type": "integer"
+            },
+            "screenshots": {
+              "title": "Screenshots",
+              "type": "integer"
+            },
+            "session_id": {
+              "title": "Session Id",
+              "type": "string"
+            },
+            "started_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Started At"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "stopped_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Stopped At"
+            },
+            "transcript_segments": {
+              "title": "Transcript Segments",
+              "type": "integer"
+            },
+            "window_title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Window Title"
+            }
+          },
+          "required": [
+            "session_id",
+            "state",
+            "dir",
+            "screenshots",
+            "screenshot_errors",
+            "log_lines",
+            "audio_mode",
+            "audio_status",
+            "transcript_segments",
+            "asr_errors",
+            "notes"
+          ],
+          "title": "SessionSummary",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "sessions": {
+          "items": {
+            "$ref": "#/$defs/SessionSummary"
+          },
+          "title": "Sessions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "sessions"
+      ],
+      "title": "SessionsResponse",
+      "type": "object"
+    },
+    "StartSessionRequest": {
+      "additionalProperties": false,
+      "description": "Body of POST /v1/sessions (mirrors the MCP `capture_start` args).",
+      "properties": {
+        "app_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "App Name"
+        },
+        "asr_backend": {
+          "default": "auto",
+          "title": "Asr Backend",
+          "type": "string"
+        },
+        "audio_chunk_seconds": {
+          "default": 8.0,
+          "title": "Audio Chunk Seconds",
+          "type": "number"
+        },
+        "audio_source": {
+          "default": "auto",
+          "title": "Audio Source",
+          "type": "string"
+        },
+        "bundle_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bundle Id"
+        },
+        "capture_audio": {
+          "default": true,
+          "title": "Capture Audio",
+          "type": "boolean"
+        },
+        "capture_screenshots": {
+          "default": true,
+          "title": "Capture Screenshots",
+          "type": "boolean"
+        },
+        "command": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Command"
+        },
+        "cwd": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cwd"
+        },
+        "output_dir": {
+          "title": "Output Dir",
+          "type": "string"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pid"
+        },
+        "screenshot_format": {
+          "default": "png",
+          "title": "Screenshot Format",
+          "type": "string"
+        },
+        "screenshot_interval": {
+          "default": 1.0,
+          "title": "Screenshot Interval",
+          "type": "number"
+        },
+        "screenshot_jpeg_quality": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Screenshot Jpeg Quality"
+        },
+        "screenshot_resolution": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Screenshot Resolution"
+        }
+      },
+      "required": [
+        "output_dir"
+      ],
+      "title": "StartSessionRequest",
+      "type": "object"
+    },
+    "TranscriptResponse": {
+      "$defs": {
+        "TranscriptSegment": {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "title": "End",
+              "type": "string"
+            },
+            "end_offset": {
+              "title": "End Offset",
+              "type": "number"
+            },
+            "start": {
+              "title": "Start",
+              "type": "string"
+            },
+            "start_offset": {
+              "title": "Start Offset",
+              "type": "number"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "start",
+            "end",
+            "start_offset",
+            "end_offset",
+            "text"
+          ],
+          "title": "TranscriptSegment",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "title": "Count",
+          "type": "integer"
+        },
+        "segments": {
+          "items": {
+            "$ref": "#/$defs/TranscriptSegment"
+          },
+          "title": "Segments",
+          "type": "array"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "segments",
+        "count"
+      ],
+      "title": "TranscriptResponse",
+      "type": "object"
+    },
+    "TranscriptSegment": {
+      "additionalProperties": false,
+      "properties": {
+        "end": {
+          "title": "End",
+          "type": "string"
+        },
+        "end_offset": {
+          "title": "End Offset",
+          "type": "number"
+        },
+        "start": {
+          "title": "Start",
+          "type": "string"
+        },
+        "start_offset": {
+          "title": "Start Offset",
+          "type": "number"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "start_offset",
+        "end_offset",
+        "text"
+      ],
+      "title": "TranscriptSegment",
+      "type": "object"
+    },
+    "WindowInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "app_name": {
+          "title": "App Name",
+          "type": "string"
+        },
+        "height": {
+          "title": "Height",
+          "type": "integer"
+        },
+        "pid": {
+          "title": "Pid",
+          "type": "integer"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "width": {
+          "title": "Width",
+          "type": "integer"
+        },
+        "window_id": {
+          "title": "Window Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "window_id",
+        "pid",
+        "app_name",
+        "title",
+        "width",
+        "height"
+      ],
+      "title": "WindowInfo",
+      "type": "object"
+    },
+    "WindowsResponse": {
+      "$defs": {
+        "WindowInfo": {
+          "additionalProperties": false,
+          "properties": {
+            "app_name": {
+              "title": "App Name",
+              "type": "string"
+            },
+            "height": {
+              "title": "Height",
+              "type": "integer"
+            },
+            "pid": {
+              "title": "Pid",
+              "type": "integer"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "width": {
+              "title": "Width",
+              "type": "integer"
+            },
+            "window_id": {
+              "title": "Window Id",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "window_id",
+            "pid",
+            "app_name",
+            "title",
+            "width",
+            "height"
+          ],
+          "title": "WindowInfo",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "title": "Count",
+          "type": "integer"
+        },
+        "windows": {
+          "items": {
+            "$ref": "#/$defs/WindowInfo"
+          },
+          "title": "Windows",
+          "type": "array"
+        }
+      },
+      "required": [
+        "windows",
+        "count"
+      ],
+      "title": "WindowsResponse",
+      "type": "object"
+    }
+  }
+}

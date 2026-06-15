@@ -151,10 +151,19 @@ def current_pcm_chunking() -> dict:
     }
 
 
+def current_v1_schema() -> dict:
+    """The daemon's /v1 JSON Schema (pydantic models) — the GUI contract firewall."""
+    from capture_mcp.daemon.models import v1_schema
+    from capture_mcp.daemon.server import API_VERSION
+
+    return v1_schema(API_VERSION)
+
+
 CONTRACTS = {
     "tools_list": current_tools_list,
     "session_dir": current_session_dir,
     "pcm_chunking": current_pcm_chunking,
+    "v1_schema": current_v1_schema,
 }
 
 

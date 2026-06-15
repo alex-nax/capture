@@ -22,6 +22,9 @@ server's daemon-first mode are **[planned]** (see Known limitations).
 - `src/capture_mcp/daemon/server.py` — `CaptureDaemon` (ThreadingHTTPServer +
   shared `SessionRegistry` + token), the `_Handler` routes, `daemon_json_path`,
   `write_daemon_json`, `run_daemon`, `main`.
+- `src/capture_mcp/daemon/models.py` — the **`/v1` contract**: pydantic models
+  (`StartSessionRequest` + response models) and `v1_schema()`. Pydantic is already a
+  transitive dep (via `mcp`), so this adds nothing to the install.
 - `src/capture_mcp/daemon/client.py` — `DaemonClient` (stdlib urllib),
   `from_discovery`, `available`, and one method per route. Reused by the CLI and
   intended for the MCP daemon-first mode.
@@ -53,6 +56,7 @@ server's daemon-first mode are **[planned]** (see Known limitations).
 | POST | `/v1/sessions/{id}/stop` | — | final summary; a recovered (finished) id returns its record |
 | GET  | `/v1/sessions/{id}/transcript` | `?tail=N` | `{session_id, segments:[...], count}` from `transcript.jsonl` |
 | GET  | `/v1/events` | — | **SSE** (`text/event-stream`): each `data:` line is one event `{t, type, session_id, …}`; `: ping` heartbeats |
+| GET  | `/v1/schema` | — | the `/v1` JSON Schema (`{api_version, models:{…}}`) from the pydantic models — for client/Rust-type generation |
 | POST | `/v1/admin/shutdown` | — | `{shutdown:true}` then the server stops |
 
 Errors are `{"error": <message>}` with the documented status (400 bad
@@ -69,11 +73,22 @@ detached (`start_new_session`) and waits for `/v1/health`.
 
 ## Behavior
 
-- **Engine reuse:** `POST /v1/sessions` builds a `CaptureSession`, calls
-  `registry.add(session)` **before** `session.start()` (so a slow/failed start is
-  visible as `starting`/`error` — same contract as the MCP server), then returns
-  the start summary. Blocking work runs in the handler thread; `SessionRegistry`
-  is thread-safe, so concurrent clients are safe.
+- **Engine reuse:** `POST /v1/sessions` validates the body with the
+  `StartSessionRequest` pydantic model (unknown fields, types, exactly-one-target,
+  `output_dir` all enforced → 400 on failure), builds a `CaptureSession`, calls
+  `registry.add(session)` + `attach_stream(session)` **before** `session.start()`
+  (so a slow/failed start is visible as `starting`/`error` and its events stream —
+  same contract as the MCP server), then returns the start summary. Blocking work
+  runs in the handler thread; `SessionRegistry` is thread-safe, so concurrent
+  clients are safe.
+- **The `/v1` contract (models.py):** the request model validates at runtime; the
+  **response** models are NOT enforced at runtime (the daemon serves engine dicts,
+  resilient to benign additions) but ARE pinned by the contract test, which
+  round-trips live responses through them and golden-compares `v1_schema()`. Models
+  use `extra="forbid"`, so an unexpected field is a contract breach caught in CI.
+  Because of this, the registry returns **uniformly full-shaped** session records
+  (see [session-registry.md](session-registry.md)) so every `/v1/sessions` entry
+  satisfies `SessionSummary`.
 - **Single instance:** `run_daemon` refuses to start if `daemon.json` exists and
   the referenced endpoint answers `/v1/health` (`SystemExit(3)`).
 - **Exactly-one-target** and the `output_dir`-required rule mirror the MCP server;
@@ -145,9 +160,10 @@ detached (`start_new_session`) and waits for `/v1/health`.
   routing mechanism itself is in place now.
 - **No daemon lifecycle install** (launchd agent / systemd user unit / Windows
   logon task) — `capture daemon start` is a foreground-detached spawn for now.
-- **No pydantic models / JSON-Schema contract** yet (the routes return engine
-  dicts directly). **[planned]** schema emission + Rust type generation for the
-  GUI (product-architecture.md "contract firewall").
+- **Contract: DONE.** pydantic models (`models.py`) validate requests and pin the
+  responses; `v1_schema()` + `GET /v1/schema` emit the JSON Schema; the contract
+  test golden-checks it (`tests/contract/golden/v1_schema.json`). **[planned]** Rust
+  type generation (typify) from the schema for the GUI; per-route schema refs.
 - `transcript` reads the whole `transcript.jsonl` then tails in memory (fine for
   meeting-scale files; a seek-based tail is a later refinement).
 
@@ -165,3 +181,7 @@ detached (`start_new_session`) and waits for `/v1/health`.
   starts and receives the full state lifecycle (`starting`→`running`→`stopping`→
   `stopped`) plus live `log_line`/`screenshot_taken`, all tagged with `session_id`.
   (`CAPTURE_SSE_HEARTBEAT_SECONDS` is lowered in the suite.)
+- `test_daemon` also round-trips live `health`/`windows`/`sessions`/summary responses
+  through the pydantic models, asserts a two-target request is rejected 400, and that
+  `GET /v1/schema` is served. `tests/contract/run_contracts.py` pins `v1_schema`
+  against a golden (`--regen` after an intentional model change).

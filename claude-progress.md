@@ -1,5 +1,36 @@
 # Progress Log
 
+## Session 22 — 2026-06-15
+**Agent**: builder (macOS box, branch **v2**)
+**Summary**: Built the **`/v1` pydantic + JSON-Schema contract** (the GUI "contract firewall") —
+the next V2 task. **No new dependency**: pydantic 2.13 is already transitive via `mcp`.
+- **`daemon/models.py`**: pydantic models = the `/v1` contract. `StartSessionRequest` (validates
+  the POST body — unknown fields/types/exactly-one-target/output_dir, all `extra="forbid"`) +
+  response models (`SessionSummary`, `SessionsResponse`, `WindowsResponse`, `TranscriptResponse`,
+  `HealthResponse`, `WindowInfo`, `TranscriptSegment`, `ErrorResponse`). `v1_schema()` emits the
+  combined JSON Schema.
+- **`daemon/server.py`**: `_start_session` now validates via `StartSessionRequest` (replacing the
+  hand-rolled field checks; dead `_SESSION_ARGS`/`_present` removed); new `GET /v1/schema` route.
+- **Contract test**: `tests/contract/run_contracts.py` gained a `v1_schema` golden
+  (`golden/v1_schema.json`, 4/4 contracts). Runtime serves engine dicts (resilient); the *test*
+  enforces the models — round-trips live `health`/`windows`/`sessions`/summary responses through
+  them, asserts a 2-target request → 400, and `/v1/schema` is served.
+- **Registry fix (required by the contract)**: `_recover` now merges recovered records onto a
+  full-shaped `_template`, so EVERY `/v1/sessions` entry (live, stopped, interrupted, unknown) has
+  one uniform shape and satisfies `SessionSummary` — even from a partial/old session.json.
+  session-registry.md updated.
+- Specs: daemon.md (models/route/validation/tests + uniform-record note), product-architecture.md
+  (contract firewall [current, #32]), session-registry.md.
+**Verification**: smoke **68/68** (+3: live responses match the contract, bad request 400,
+/v1/schema served); contracts **4/4** (new v1_schema golden). The contract caught the real
+recovered-record shape divergence before it could reach the GUI.
+**#32 status**: daemon + CLI + MCP daemon-first + SSE events + **/v1 pydantic+JSON-Schema contract**
+all DONE. **Remaining for passes:true**: UDS transport, daemon-lifecycle install, Rust typify from
+the schema, and cross-terminal AUDIO (needs #31). **Next**: `audiocap` macOS-26 enumeration-retry
+(#30 follow-up), UDS transport, or daemon-lifecycle install. #31 still needs Alex's Developer ID.
+
+---
+
 ## Session 21 — 2026-06-15
 **Agent**: builder (macOS box, branch **v2**)
 **Summary**: Built **#32 — live event stream `GET /v1/events`** (the daemon's EventBus fan-out),

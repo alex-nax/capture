@@ -148,23 +148,36 @@ class SessionRegistry:
             self._history[sid] = self._recover(sid, entries[sid].get("dir", ""))
 
     @staticmethod
+    def _template(session_id: str, session_dir: str) -> dict:
+        """A full-shaped summary (CaptureSession.summary() keys, defaults filled).
+
+        Every record the registry returns — live or recovered — is merged onto
+        this so clients get ONE uniform shape regardless of what an old/partial
+        session.json recorded (the /v1 contract pins it; see daemon/models.py).
+        """
+        return {
+            "session_id": session_id, "state": "unknown", "dir": session_dir,
+            "pid": None, "window_title": None, "started_at": None, "stopped_at": None,
+            "screenshots": 0, "screenshot_errors": 0, "log_lines": 0,
+            "process_running": None, "audio_mode": "unknown", "audio_status": "unknown",
+            "transcript_segments": 0, "asr_errors": 0, "notes": [],
+        }
+
+    @staticmethod
     def _recover(session_id: str, session_dir: str) -> dict:
-        """Build a read-only record for one indexed session from its session.json."""
+        """Build a read-only, full-shaped record for one indexed session."""
+        tmpl = SessionRegistry._template(session_id, session_dir)
         try:
-            meta = json.loads((Path(session_dir) / "session.json").read_text(encoding="utf-8"))
-            rec = dict(meta["summary"])
+            recorded = dict(json.loads((Path(session_dir) / "session.json").read_text(encoding="utf-8"))["summary"])
         except Exception:
             # Dir deleted, or the process died before/while writing session.json.
-            return {
-                "session_id": session_id,
-                "state": "unknown",
-                "dir": session_dir,
-                "notes": ["recovered from index; session.json missing or unreadable"],
-            }
+            tmpl["notes"] = ["recovered from index; session.json missing or unreadable"]
+            return tmpl
+        rec = {**tmpl, **recorded, "session_id": session_id, "dir": session_dir}
         if rec.get("state") in _LIVE_STATES:
             # Recorded as live by a process that is gone: it was interrupted.
             rec["state"] = "interrupted"
-            rec.setdefault("notes", []).append(
+            rec["notes"] = list(rec.get("notes", [])) + [
                 "recovered from disk; the capturing process exited while this session was live"
-            )
+            ]
         return rec

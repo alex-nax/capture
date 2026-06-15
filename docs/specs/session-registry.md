@@ -44,12 +44,15 @@ session history.
   Re-reading it, later lines win on duplicate ids; blank/corrupt lines are skipped
   (torn writes in an append-only log are expected, not an error).
 - **History load** (constructor): newest `max_sessions` index entries are recovered
-  via `_recover(id, dir)`, which reads `<dir>/session.json` and takes its `summary`:
+  via `_recover(id, dir)`, which **merges** the recorded `summary` onto a full-shaped
+  default `_template(id, dir)` (all `CaptureSession.summary()` keys, defaults filled)
+  so every record has ONE uniform shape regardless of what an old/partial session.json
+  recorded — clients (and the `/v1` `SessionSummary` contract) get a consistent shape:
   - recorded state in `("starting", "running", "stopping")` → the recording process
     died mid-capture: state is rewritten to `"interrupted"` and a note appended;
   - `session.json` missing/unreadable (dir deleted, crash before first write) →
-    minimal record with state `"unknown"`;
-  - otherwise the record is used as-is (`stopped` / `error`).
+    the bare template with state `"unknown"` and a note;
+  - otherwise the recorded values win over the template (`stopped` / `error`).
 - **Pruning** (`_prune_locked`, called from `add()`): when live + history exceeds
   `max_sessions`, evict oldest entries whose state is **not** live
   (`starting`/`running`/`stopping` are never evicted) — same bounded-finished-history
@@ -75,8 +78,8 @@ session history.
 - Missing index file → empty history (first run; not an error).
 - Unreadable index / unwritable index dir → logged, registry works memory-only.
 - Corrupt index lines → skipped silently (by design).
-- `session.json` unreadable for an indexed id → `"unknown"` record (kept, so the user
-  can still see the id and dir).
+- `session.json` unreadable for an indexed id → full-shaped `"unknown"` record (kept,
+  so the user can still see the id and dir).
 - Same id indexed twice → later line wins.
 
 ## Outputs / artifacts
