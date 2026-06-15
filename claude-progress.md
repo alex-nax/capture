@@ -1,5 +1,37 @@
 # Progress Log
 
+## Session 20 — 2026-06-15
+**Agent**: builder (macOS box, branch **v2**)
+**Summary**: Built **#32 MCP daemon-first mode** — the credential-free half that finishes the
+agent-sharing story. The MCP server now proxies its tools to a running `captured` daemon and
+falls back to the embedded engine otherwise.
+- **`server.py`**: `_daemon()` returns a live `DaemonClient` when `~/.capture/daemon.json` is
+  discoverable + `/v1/health` answers, unless `CAPTURE_MCP_EMBEDDED` is set (forces embedded;
+  for headless/CI). Per-call, cheap (~2s probe), so a daemon started/stopped mid-session is
+  picked up. All four tools (`capture_start/stop/status`, `list_windows`) gained a daemon branch
+  (blocking client call offloaded via `anyio.to_thread`; `DaemonError`→`ValueError` so messages
+  match the embedded path). Exactly-one-target validation stays in the tool *before* dispatch, so
+  validation errors are backend-independent; `capture_stop`'s "stop the unique running one"
+  resolution is replicated against `/v1/sessions` for the daemon path.
+- **Net effect**: two terminals' MCP agents both proxy to the one daemon → they share its live
+  registry (and, with the signed launchd daemon #31/#30, its TCC grant). An agent-started capture
+  is visible to `capture status` and vice-versa.
+- **Specs (mandatory)**: daemon.md (daemon-first now DONE), mcp-server.md (new "Daemon-first
+  dispatch" behavior + `CAPTURE_MCP_EMBEDDED`/`CAPTURE_DAEMON_JSON` config), product-architecture.md
+  (embedded-fallback + server.py marked [current, #32]).
+**Verification**: smoke **62/62** (+3: `test_mcp_daemon_first` — MCP `capture_status`/`list_windows`
+route to a running daemon and see a daemon-only session; `CAPTURE_MCP_EMBEDDED=1` makes that
+session absent again, proving the fallback). Contracts **3/3** (MCP tool schemas unchanged — the
+proxying is internal). Sanity: with no daemon, `capture_status()` returns embedded `{sessions:[]}`.
+**#32 status**: daemon API + CLI + MCP daemon-first are all DONE. **Remaining for passes:true**:
+pydantic models + JSON-Schema contract, UDS + WebSocket `/v1/events`, daemon-lifecycle install,
+and the cross-terminal-AUDIO benefit (needs #31's signed daemon). Kept `passes:false`, annotated.
+**Next**: pydantic/JSON-Schema contract for `/v1` (sets up the GUI "contract firewall"), the
+WebSocket event stream, or the `audiocap` enumeration-retry (#30 follow-up). #31 packaging still
+needs Alex's Developer ID cert.
+
+---
+
 ## Session 19 — 2026-06-15
 **Agent**: builder (macOS box, branch **v2**)
 **Summary**: Built **#32 slice 1 — the `captured` daemon + `capture` CLI**, the credential-free

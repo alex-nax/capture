@@ -120,6 +120,21 @@ code raises (see Failure modes).
 
 ## Behavior
 
+### Daemon-first dispatch (all four tools)
+
+`_daemon()` returns a live `DaemonClient` when a `captured` daemon is discoverable
+(`~/.capture/daemon.json`) and answers `/v1/health`, **unless** `CAPTURE_MCP_EMBEDDED`
+is set (forces embedded). The check is per-call and cheap (~2 s probe), so a daemon
+started/stopped mid-session is picked up. When a daemon is present, each tool proxies
+to it (the blocking client call is offloaded via `anyio.to_thread.run_sync`, and
+`DaemonError` is remapped to `ValueError` so the surfaced message matches the embedded
+path); otherwise the tool runs the embedded engine exactly as described below. Argument
+validation (exactly-one-target) happens in the tool **before** dispatch, so validation
+errors are identical regardless of backend. `capture_stop`'s "stop the unique running
+one" resolution is replicated against the daemon's `/v1/sessions` for the daemon path.
+This is what lets an MCP agent share one live registry — and, with the packaged signed
+daemon (#31/#30), one Screen Recording grant — with the CLI and GUI.
+
 ### `capture_start`
 
 1. Defines a local `_present(v)` predicate (`server.py:113-120`): `None` is absent; a
@@ -236,7 +251,9 @@ This scope writes **no files of its own**. All on-disk artifacts (screenshots,
 
 - **Module constants:** logging level `INFO`, stream `sys.stderr` (`server.py:26-30`).
   The registry bound (`MAX_SESSIONS = 100`) moved to `core/registry.py`.
-- **Environment:** `server.py` itself reads none, but constructing
+- **Environment:** `CAPTURE_MCP_EMBEDDED` (any non-empty value) forces the embedded
+  engine and disables daemon-first dispatch (use in headless/CI). `CAPTURE_DAEMON_JSON`
+  (read via the daemon client) locates the daemon discovery file. Constructing
   `SessionRegistry()` at import time resolves the session-index path from
   `CAPTURE_SESSION_INDEX` (default `~/.capture/sessions.jsonl`) — set it before
   importing the module (tests do). ASR backends / the Swift helper consult their own

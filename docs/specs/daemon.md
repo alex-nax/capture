@@ -121,10 +121,12 @@ failure. `daemon start` spawns `python -m capture_mcp.daemon` detached
   Windows transport.
 - **No event stream yet.** **[planned]** `GET /v1/events` WebSocket fan-out of the
   `EventBus` (clients currently poll `/v1/sessions/{id}` or read `events.jsonl`).
-- **No MCP daemon-first mode yet.** **[planned]** the MCP server tries the daemon
-  first and falls back to the embedded engine (`CAPTURE_MCP_EMBEDDED=1` to force
-  embedded) — this is what makes "one grant covers every terminal's agent" real;
-  it is the remaining half of feature #32.
+- **MCP daemon-first mode: DONE.** The MCP server (`server.py`) proxies every tool
+  to a running daemon and falls back to the embedded engine otherwise
+  (`CAPTURE_MCP_EMBEDDED=1` forces embedded). See mcp-server.md. The *grant*-sharing
+  benefit ("one grant covers every terminal's agent") additionally needs the
+  packaged signed daemon (#31) to be the stable TCC-responsible process; the
+  routing mechanism itself is in place now.
 - **No daemon lifecycle install** (launchd agent / systemd user unit / Windows
   logon task) — `capture daemon start` is a foreground-detached spawn for now.
 - **No pydantic models / JSON-Schema contract** yet (the routes return engine

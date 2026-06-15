@@ -36,7 +36,7 @@ frontend. `core/` imports no frontend code.
   per-session `events.jsonl`, M0b); **[planned]** `permissions.py` (preflight, M2).
 - `capture_mcp/daemon/` — **[current, #32 slice 1]** `captured`: stdlib HTTP `/v1` API on
   127.0.0.1 + bearer token (see [daemon.md](daemon.md)). **[planned]** UDS + WebSocket events.
-- `capture_mcp/server.py` — thin MCP server. **[planned]** daemon-first mode with embedded fallback (#32 remaining).
+- `capture_mcp/server.py` — thin MCP server, **[current, #32]** daemon-first with embedded fallback (`CAPTURE_MCP_EMBEDDED=1`).
 - `capture/cli/` — `capture` CLI (start/stop/status/tail/doctor/daemon install).
 - `gui/` — Rust GPUI app (separate cargo workspace in this repo).
 - `packaging/` — PyInstaller specs, signing/notarization, installer definitions.
@@ -86,8 +86,10 @@ behind the stable `/v1` API.
   the grant **survived a same-identity update** (rebuild + re-sign, `respawns=0`, no re-prompt)
   and was **lost on identity rotation** (negative control), confirming it keys to the signing
   identity. Evidence: `spike/tcc-attribution/results/FINDINGS.md`.
-- **Embedded fallback [planned]:** with no daemon present (headless/CI, or
-  `CAPTURE_MCP_EMBEDDED=1`), the MCP server runs the engine in-process exactly as today.
+- **Embedded fallback [current, #32]:** the MCP server proxies its tools to a running
+  daemon and, with no daemon present (headless/CI, or `CAPTURE_MCP_EMBEDDED=1`), runs the
+  engine in-process exactly as before. See [mcp-server.md](mcp-server.md) (daemon-first
+  dispatch) + [daemon.md](daemon.md).
 - **Live preview [planned]:** screenshot events carry `{path, seq, ts}` (daemon and GUI
   share a filesystem); the GUI decodes off-thread and renders via `RenderImage` — not
   URI-cached `img()`, which would leak the image cache over an hours-long 1 fps run.

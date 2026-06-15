@@ -427,6 +427,47 @@ def test_cli_daemon() -> None:
         check("cli: daemon stop", rc == 0 and stopped.get("stopped") is True, str(stopped)[:80])
 
 
+async def test_mcp_daemon_first() -> None:
+    """MCP tools proxy to a running daemon, and fall back to the embedded engine."""
+    import threading as _threading
+
+    d = CaptureDaemon()
+    _threading.Thread(target=d.serve_forever, daemon=True).start()
+    write_daemon_json(d)  # publish discovery at CAPTURE_DAEMON_JSON (temp)
+    dc = DaemonClient.from_discovery()
+    sid = None
+    try:
+        # Start a capture directly on the daemon → it lives ONLY in the daemon's
+        # registry, never in the MCP module-level embedded registry.
+        s = dc.start(output_dir=str(BASE / "mcpfirst"),
+                     command=_cmdline([sys.executable, "-c", "print('x')"]),
+                     capture_audio=False, capture_screenshots=False)
+        sid = s["session_id"]
+
+        os.environ.pop("CAPTURE_MCP_EMBEDDED", None)
+        st = await capture_status()  # MCP tool → should route to the daemon
+        routed = sid in [x["session_id"] for x in st["sessions"]]
+        check("mcp-daemon-first: status routes to daemon", routed,
+              "" if routed else f"{sid} absent from daemon-routed status")
+        w = await list_windows()  # MCP tool → daemon
+        check("mcp-daemon-first: list_windows via daemon", "count" in w)
+
+        # Forced embedded: the daemon-only session must NOT appear.
+        os.environ["CAPTURE_MCP_EMBEDDED"] = "1"
+        st2 = await capture_status()
+        check("mcp-embedded-fallback: daemon session absent",
+              sid not in [x["session_id"] for x in st2["sessions"]])
+    finally:
+        os.environ.pop("CAPTURE_MCP_EMBEDDED", None)
+        try:
+            if sid:
+                dc.stop(sid)
+        except Exception:
+            pass
+        d.shutdown(); d.server_close()
+        (BASE / "daemon.json").unlink(missing_ok=True)
+
+
 def test_helper_path() -> None:
     """Regression guard: the audiocap helper path must resolve to <repo>/helper/audiocap.
 
@@ -481,6 +522,7 @@ async def main() -> int:
         await test_list_windows()
         test_daemon()
         test_cli_daemon()
+        await test_mcp_daemon_first()
         test_helper_path()
         test_parse_resolution()
     finally:

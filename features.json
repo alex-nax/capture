@@ -394,10 +394,11 @@
       "priority": "high",
       "description": "M2 — captured daemon + /v1 API + CLI: aiohttp HTTP+WS over UDS+bearer token (127.0.0.1 on Windows), endpoint discovery via ~/.capture/daemon.json (0600), /v1 surface per docs/specs/product-architecture.md, daemon-level ASR model pool, capture CLI (start/stop/status/tail/doctor/daemon install|uninstall) writing launchd agent / logon task / systemd user unit; MCP server gains daemon-first mode with embedded fallback (CAPTURE_MCP_EMBEDDED=1).",
       "acceptance_criteria": [
-        "Agent-started capture is visible via CLI status; sessions survive client exits (SLICE 1 DONE: captured /v1 API on 127.0.0.1+token over a shared SessionRegistry; `capture` CLI drives it; smoke test_daemon + test_cli_daemon, 59/59. A daemon-started capture is visible to the CLI and outlives the client.)",
-        "One Screen Recording grant (to the daemon) gives working audio from two different terminals' MCP agents (PENDING: needs the MCP server's daemon-first mode — the remaining half of #32 — plus the packaged signed daemon #31 to be the TCC-responsible process; the spike #30 already proved the grant model works)",
+        "Agent-started capture is visible via CLI status; sessions survive client exits (DONE: captured /v1 API on 127.0.0.1+token over a shared SessionRegistry; `capture` CLI + the MCP server (daemon-first) are both clients; smoke test_daemon + test_cli_daemon + test_mcp_daemon_first, 62/62)",
+        "One Screen Recording grant (to the daemon) gives working audio from two different terminals' MCP agents (MECHANISM DONE: both terminals' MCP agents proxy to the one daemon via daemon-first dispatch, so they share its registry+grant. The stable-grant BENEFIT still needs the packaged signed launchd daemon #31/#30 to be the TCC-responsible process)",
         "JSON-Schema round-trip contract tests pass; pydantic schema checked in (PENDING: slice 1 returns engine dicts directly; pydantic models + schema emission are planned, see daemon.md)",
-        "[slice 1 scope, DONE] stdlib daemon (health/sessions/windows/transcript/admin-shutdown), bearer-token auth (401 without), single-instance guard, ~/.capture/daemon.json (0600); `captured` + `capture` console scripts; docs/specs/daemon.md"
+        "[DONE] daemon: stdlib /v1 (health/sessions/windows/transcript/admin-shutdown), bearer-token auth (401 without), single-instance guard, ~/.capture/daemon.json (0600); `captured`+`capture` scripts. MCP server: daemon-first dispatch with embedded fallback (CAPTURE_MCP_EMBEDDED=1). docs/specs/daemon.md + mcp-server.md.",
+        "[REMAINING for passes:true] pydantic models + JSON-Schema contract; UDS + WebSocket /v1/events transport; daemon lifecycle install (launchd/systemd/logon-task); the cross-terminal-AUDIO benefit (needs #31)"
       ],
       "passes": false,
       "dependencies": [31]

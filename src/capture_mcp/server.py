@@ -15,6 +15,7 @@ Run over stdio (the default MCP transport)::
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
 import anyio
@@ -23,6 +24,7 @@ from mcp.server.fastmcp import FastMCP
 from .core import list_windows as _list_windows
 from .core.registry import SessionRegistry
 from .core.session import CaptureSession
+from .daemon.client import DaemonClient, DaemonError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,8 +41,31 @@ mcp = FastMCP("capture-mcp")
 
 # Live tracking + disk-backed history (rebuilt from CAPTURE_SESSION_INDEX /
 # ~/.capture/sessions.jsonl at startup) lives in core.registry; this layer
-# only orchestrates.
+# only orchestrates. This is the EMBEDDED engine, used when no daemon is present.
 registry = SessionRegistry()
+
+
+# -- daemon-first dispatch ----------------------------------------------------
+# When a `captured` daemon is running, the tools proxy to it so an MCP agent
+# shares one live registry (and, once packaged+signed, one TCC grant) with the
+# GUI/CLI. With no daemon — or CAPTURE_MCP_EMBEDDED=1 (headless/CI) — the tools
+# run the engine in-process exactly as before. The check is per-call and cheap
+# (a ~2s /v1/health probe), so a daemon started/stopped mid-session is picked up.
+
+def _daemon() -> DaemonClient | None:
+    if os.environ.get("CAPTURE_MCP_EMBEDDED"):
+        return None
+    client = DaemonClient.from_discovery()
+    return client if (client is not None and client.available()) else None
+
+
+def _as_value_error(fn):
+    """Run a blocking daemon call, mapping DaemonError to ValueError so FastMCP
+    surfaces the daemon's message the same way the embedded path's ValueErrors do."""
+    try:
+        return fn()
+    except DaemonError as e:
+        raise ValueError(e.message) from e
 
 
 @mcp.tool()
@@ -112,23 +137,22 @@ async def capture_start(
     if len(provided) > 1:
         raise ValueError(f"specify exactly one target, but got: {', '.join(provided)}")
 
-    session = CaptureSession(
-        output_dir,
-        command=command,
-        pid=pid,
-        app_name=app_name,
-        bundle_id=bundle_id,
-        screenshot_interval=screenshot_interval,
-        screenshot_format=screenshot_format,
-        screenshot_resolution=screenshot_resolution,
-        screenshot_jpeg_quality=screenshot_jpeg_quality,
-        capture_screenshots=capture_screenshots,
-        capture_audio=capture_audio,
-        audio_source=audio_source,
-        audio_chunk_seconds=audio_chunk_seconds,
-        asr_backend=asr_backend,
-        cwd=cwd,
+    kwargs = dict(
+        command=command, pid=pid, app_name=app_name, bundle_id=bundle_id,
+        screenshot_interval=screenshot_interval, screenshot_format=screenshot_format,
+        screenshot_resolution=screenshot_resolution, screenshot_jpeg_quality=screenshot_jpeg_quality,
+        capture_screenshots=capture_screenshots, capture_audio=capture_audio,
+        audio_source=audio_source, audio_chunk_seconds=audio_chunk_seconds,
+        asr_backend=asr_backend, cwd=cwd,
     )
+
+    d = _daemon()
+    if d is not None:
+        return await anyio.to_thread.run_sync(
+            lambda: _as_value_error(lambda: d.start(output_dir=output_dir, **kwargs))
+        )
+
+    session = CaptureSession(output_dir, **kwargs)
     # Register BEFORE the (possibly slow) start so capture_status can already
     # see the session in state "starting"; a failed start stays visible as
     # state "error" instead of vanishing.
@@ -147,6 +171,23 @@ async def capture_stop(session_id: str | None = None) -> dict:
 
     Returns the final session summary.
     """
+    d = _daemon()
+    if d is not None:
+        def _stop_via_daemon() -> dict:
+            sid = session_id
+            if sid is None:
+                running = [s for s in d.sessions()["sessions"] if s.get("state") == "running"]
+                if not running:
+                    return {"stopped": [], "note": "no running captures"}
+                if len(running) > 1:
+                    raise ValueError(
+                        "multiple captures running; pass session_id. Running: "
+                        + ", ".join(s["session_id"] for s in running)
+                    )
+                sid = running[0]["session_id"]
+            return _as_value_error(lambda: d.stop(sid))
+        return await anyio.to_thread.run_sync(_stop_via_daemon)
+
     if session_id is None:
         running = registry.running()
         if not running:
@@ -178,6 +219,12 @@ async def capture_status(session_id: str | None = None) -> dict:
             list of all sessions this server knows about — those it created
             plus finished ones recovered from the on-disk index at startup.
     """
+    d = _daemon()
+    if d is not None:
+        if session_id is not None:
+            return await anyio.to_thread.run_sync(lambda: _as_value_error(lambda: d.session(session_id)))
+        return await anyio.to_thread.run_sync(d.sessions)
+
     if session_id is not None:
         summary = registry.summary(session_id)
         if summary is None:
@@ -198,6 +245,9 @@ async def list_windows(app_name: str | None = None, pid: int | None = None) -> d
         app_name: Optional case-insensitive substring filter (e.g. "Safari").
         pid: Optional process id filter.
     """
+    d = _daemon()
+    if d is not None:
+        return await anyio.to_thread.run_sync(lambda: _as_value_error(lambda: d.windows(app_name=app_name, pid=pid)))
     windows = await anyio.to_thread.run_sync(lambda: _list_windows(pid=pid, app_name=app_name))
     return {"windows": windows, "count": len(windows)}
 
