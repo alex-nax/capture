@@ -39,15 +39,20 @@ BASE = Path(tempfile.mkdtemp(prefix="capmcp-smoke-"))
 # session index into the temp dir BEFORE importing it so the suite stays
 # hermetic (never touches ~/.capture).
 os.environ["CAPTURE_SESSION_INDEX"] = str(BASE / "sessions.jsonl")
+# Daemon discovery file (used by the CLI test) — temp so it never touches ~/.capture.
+os.environ["CAPTURE_DAEMON_JSON"] = str(BASE / "daemon.json")
 # Shrink the events.jsonl snapshot interval so short captures exercise the
 # periodic-snapshot path, not just the final snapshot.
 os.environ["CAPTURE_EVENTS_SNAPSHOT_SECONDS"] = "0.5"
 
+import capture_mcp.cli as cli  # noqa: E402
 from capture_mcp.core.audio import SAMPLE_RATE, AudioCapture  # noqa: E402
 from capture_mcp.core.asr.base import Segment  # noqa: E402
 from capture_mcp.core.registry import SessionRegistry  # noqa: E402
 from capture_mcp.core.screenshots import parse_resolution  # noqa: E402
 from capture_mcp.core.session import CaptureSession  # noqa: E402
+from capture_mcp.daemon.client import DaemonClient  # noqa: E402
+from capture_mcp.daemon.server import CaptureDaemon, write_daemon_json  # noqa: E402
 from capture_mcp.server import capture_start, capture_status, capture_stop, list_windows  # noqa: E402
 
 
@@ -353,6 +358,75 @@ async def test_list_windows() -> None:
         check("windows: app_name filter", True, "skipped (no windows; headless?)")
 
 
+def test_daemon() -> None:
+    """In-process /v1 API: auth, capture round-trip, windows, transcript, shutdown."""
+    import threading as _threading
+    import urllib.error
+    import urllib.request
+
+    d = CaptureDaemon()
+    _threading.Thread(target=d.serve_forever, daemon=True).start()
+    # Talk to it directly (no discovery file) so this test can't collide with the CLI test.
+    c = DaemonClient({"endpoint": d.endpoint, "token": d.token})
+    try:
+        check("daemon: health ok", c.health().get("ok") is True and c.health()["api_version"] == "1.0")
+
+        # Auth: a request without the bearer token is rejected 401.
+        try:
+            urllib.request.urlopen(d.endpoint + "/v1/sessions", timeout=2)
+            check("daemon: rejects missing token", False)
+        except urllib.error.HTTPError as e:
+            check("daemon: rejects missing token", e.code == 401, f"code={e.code}")
+
+        # Launch-mode capture entirely through the API.
+        out = str(BASE / "daemon")
+        s = c.start(output_dir=out, command=_cmdline([sys.executable, "-c", _LAUNCH_CODE]),
+                    capture_audio=False, screenshot_interval=0.4)
+        sid = s["session_id"]
+        check("daemon: start -> running", s["state"] == "running", s["state"])
+        check("daemon: session visible in list", any(x["session_id"] == sid for x in c.sessions()["sessions"]))
+        time.sleep(1.4)
+        fin = c.stop(sid)
+        check("daemon: stop -> stopped", fin["state"] == "stopped", fin["state"])
+        check("daemon: logs captured via API", fin["log_lines"] == 6, f"log_lines={fin['log_lines']}")
+        check("daemon: windows endpoint", isinstance(c.windows()["windows"], list))
+        check("daemon: transcript tail shape", c.transcript(sid, tail=5)["count"] == 0)
+        # Unknown session -> 404 surfaced as DaemonError.
+        try:
+            c.session("nope"); check("daemon: unknown id 404", False)
+        except Exception as e:
+            check("daemon: unknown id 404", getattr(e, "status", None) == 404, str(e))
+    finally:
+        d.shutdown(); d.server_close()
+
+
+def test_cli_daemon() -> None:
+    """The `capture` CLI spawns + drives a real daemon subprocess (discovery file)."""
+    import contextlib
+    import io
+
+    def run(argv):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = cli.main(argv)
+        out = buf.getvalue().strip()
+        return rc, (json.loads(out) if out else {})
+
+    try:
+        rc, started = run(["daemon", "start"])
+        check("cli: daemon start", rc == 0 and (started.get("started") or started.get("already_running")),
+              str(started)[:80])
+        rc, status = run(["daemon", "status"])
+        check("cli: daemon status running", rc == 0 and status.get("running") is True, str(status)[:80])
+        rc, win = run(["windows"])
+        check("cli: windows via daemon", rc == 0 and "count" in win, str(win)[:80])
+        rc, sess = run(["status"])
+        check("cli: status lists sessions", rc == 0 and "sessions" in sess)
+    finally:
+        rc, stopped = run(["daemon", "stop"])
+        check("cli: daemon stop", rc == 0 and stopped.get("stopped") is True, str(stopped)[:80])
+
+
 def test_helper_path() -> None:
     """Regression guard: the audiocap helper path must resolve to <repo>/helper/audiocap.
 
@@ -405,6 +479,8 @@ async def main() -> int:
         test_event_bus()
         test_registry_history()
         await test_list_windows()
+        test_daemon()
+        test_cli_daemon()
         test_helper_path()
         test_parse_resolution()
     finally:

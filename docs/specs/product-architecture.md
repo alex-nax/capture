@@ -34,9 +34,9 @@ frontend. `core/` imports no frontend code.
 
 - `capture_mcp/core/` — **[current]** engine + `registry.py` + `events.py` (EventBus +
   per-session `events.jsonl`, M0b); **[planned]** `permissions.py` (preflight, M2).
-- `capture/daemon/` — `captured`: aiohttp HTTP+WebSocket `/v1` API over a unix domain
-  socket (macOS/Linux) or 127.0.0.1 (Windows).
-- `capture/mcp/` — thin MCP server: daemon-first, embedded-engine fallback.
+- `capture_mcp/daemon/` — **[current, #32 slice 1]** `captured`: stdlib HTTP `/v1` API on
+  127.0.0.1 + bearer token (see [daemon.md](daemon.md)). **[planned]** UDS + WebSocket events.
+- `capture_mcp/server.py` — thin MCP server. **[planned]** daemon-first mode with embedded fallback (#32 remaining).
 - `capture/cli/` — `capture` CLI (start/stop/status/tail/doctor/daemon install).
 - `gui/` — Rust GPUI app (separate cargo workspace in this repo).
 - `packaging/` — PyInstaller specs, signing/notarization, installer definitions.
@@ -47,15 +47,15 @@ frontend. `core/` imports no frontend code.
 PCM contract (see `screencapturekit-helper.md`); `session.json` layout (see `session.md`).
 These are frozen interfaces that every layer below builds on.
 
-**[planned]**
+**[partly current — see [daemon.md](daemon.md))**
 
-- `/v1` local API (versioned, additive-only within a major): `POST /v1/sessions` (mirrors
-  `capture_start` args), `POST /v1/sessions/{id}/stop`, `GET /v1/sessions[/{id}]`
-  (`summary()` as-is), `GET /v1/sessions/{id}/transcript?tail=N`, `/preview` (latest frame),
+- `/v1` local API (versioned, additive-only within a major). **[current, #32 slice 1]**:
+  `POST /v1/sessions`, `POST /v1/sessions/{id}/stop`, `GET /v1/sessions[/{id}]`,
+  `GET /v1/sessions/{id}/transcript?tail=N`, `GET /v1/windows`, `GET /v1/health`,
+  `POST /v1/admin/shutdown`. **[planned]**: `/v1/sessions/{id}/preview` (latest frame),
   `GET /v1/events` (WS fan-out: `screenshot_taken`, `transcript_segment`, `log_line`, state
-  transitions, `permission.updated`), `GET /v1/windows` (picker), `GET /v1/health`
-  (version, api_version, permission + ASR status), `POST /v1/permissions/screen_recording/request`,
-  `POST /v1/asr/preload`, `POST /v1/sessions/{id}/retranscribe`, `POST /v1/admin/shutdown`.
+  transitions, `permission.updated`), `POST /v1/permissions/screen_recording/request`,
+  `POST /v1/asr/preload`, `POST /v1/sessions/{id}/retranscribe`.
 - Endpoint discovery: `~/.capture/daemon.json` `{endpoint, token, pid, api_version}`,
   mode 0600, written by the daemon; bearer token required; UDS peer-uid checked.
 - Contract firewall: the daemon emits JSON Schema from its pydantic models; the Rust

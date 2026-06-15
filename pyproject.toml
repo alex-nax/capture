@@ -38,6 +38,8 @@ riva = ["nvidia-riva-client>=2.15.0"]
 
 [project.scripts]
 capture-mcp = "capture_mcp.server:main"
+captured = "capture_mcp.daemon.server:main"
+capture = "capture_mcp.cli:main"
 
 [build-system]
 requires = ["hatchling"]

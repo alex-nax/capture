@@ -1,5 +1,36 @@
 # Progress Log
 
+## Session 19 — 2026-06-15
+**Agent**: builder (macOS box, branch **v2**)
+**Summary**: Built **#32 slice 1 — the `captured` daemon + `capture` CLI**, the credential-free
+core of V2 (the daemon-peers architecture validated by spike #30).
+- **`capture_mcp/daemon/`** (stdlib-only, no new deps): `CaptureDaemon` = `ThreadingHTTPServer` +
+  a shared `SessionRegistry`, bound to `127.0.0.1:<ephemeral>` with a **bearer token**.
+  `/v1` routes: `health` (no auth), `windows`, `sessions` (POST start / GET list / GET one /
+  POST stop), `sessions/{id}/transcript?tail=N`, `admin/shutdown`. Discovery via
+  `~/.capture/daemon.json` (0600, `CAPTURE_DAEMON_JSON` override); single-instance guard.
+  `client.py` = stdlib `DaemonClient` (urllib) reused by the CLI and (later) MCP daemon-first.
+- **`capture_mcp/cli/`**: `capture` CLI — `daemon start|stop|status`, `status [id]`, `windows`,
+  `start`, `stop [id]`, `tail`. `daemon start` spawns `python -m capture_mcp.daemon` detached.
+  Console scripts added: `captured`, `capture`.
+- Same engine contract as MCP: register-before-start (failed start visible as `error`),
+  exactly-one-target, identical session-dir output. No capture logic in the frontends.
+- **Specs (mandatory)**: new `docs/specs/daemon.md`; index row; architecture.md module map
+  (daemon/ + cli/ as peer frontends); product-architecture.md `/v1` block + layout marked
+  `[current, #32 slice 1]`.
+**Verification**: smoke **59/59** (+14: in-process API round-trip incl. 401-without-token, a
+launch capture through the API with `log_lines==6`, windows/transcript/404; and the CLI spawning
++ driving a real daemon subprocess start→status→windows→status→stop); contracts **3/3** (MCP tool
+surface + session layout unchanged).
+**#32 status**: slice 1 (daemon API + CLI) done; **remaining for passes:true** — the MCP server's
+daemon-first mode + embedded fallback (`CAPTURE_MCP_EMBEDDED=1`), the cross-terminal-audio
+criterion (needs #31's packaged signed daemon), pydantic models + JSON-Schema contract, and the
+UDS/WebSocket transport. Kept `passes:false` with criteria annotated.
+**Next**: MCP daemon-first mode (finishes #32's agent-sharing story, credential-free) and/or the
+`audiocap` enumeration-retry (#30 follow-up). #31 packaging still needs Alex's Developer ID cert.
+
+---
+
 ## Session 18 — 2026-06-15
 **Agent**: builder (macOS box, branch **v2**)
 **Summary**: **Feature #30 (TCC attribution spike) PASSED** — the load-bearing gate for the

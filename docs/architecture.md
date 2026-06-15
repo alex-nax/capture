@@ -9,7 +9,9 @@
 ## Module map
 
 ```
-server.py            MCP entrypoint (thin frontend). Async tools: capture_start/stop/status.
+server.py            MCP frontend (thin). Async tools: capture_start/stop/status/list_windows.
+daemon/              `captured`: local HTTP /v1 API over core (peer frontend; see specs/daemon.md)
+cli/                 `capture`: CLI client of the daemon (peer frontend)
 core/                THE ENGINE — frontend-independent (MCP today; daemon/CLI/GUI per specs/product-architecture.md)
   ├─ registry.py     SessionRegistry: bounded live tracking + disk-backed history (sessions.jsonl index)
   ├─ events.py       EventBus (push alongside poll) + EventsFileWriter (per-session events.jsonl)

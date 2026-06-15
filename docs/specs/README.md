@@ -23,6 +23,7 @@ Workflow:
 | MCP server | [mcp-server.md](mcp-server.md) | FastMCP stdio entrypoint; async `capture_start`/`capture_stop`/`capture_status`/`list_windows`; exactly-one-target validation; bounded session registry |
 | Session | [session.md](session.md) | `CaptureSession` lifecycle (created→starting→running→stopping→stopped/error); start/stop rollback; session dir layout; `summary()` + `session.json` |
 | Events | [events.md](events.md) | `EventBus` (publish never raises/blocks; bounded per-subscriber queues) + `EventsFileWriter` (`events.jsonl`: state transitions + counter snapshots, `CAPTURE_EVENTS_SNAPSHOT_SECONDS`); component `emit` hooks |
+| Daemon + CLI | [daemon.md](daemon.md) | `captured` local HTTP `/v1` API (127.0.0.1 + bearer token, `~/.capture/daemon.json`) over the shared engine; `capture` CLI client; stdlib-only. UDS/WebSocket/MCP-daemon-first are planned |
 | Session registry | [session-registry.md](session-registry.md) | `SessionRegistry` (core/registry.py): bounded live tracking; append-only `sessions.jsonl` index (`CAPTURE_SESSION_INDEX`); history rebuild on restart (stopped/error/interrupted/unknown) |
 | Screenshots | [screenshots.md](screenshots.md) | Grid-scheduled `screencapture`; window targeting + `_last_wid` cross-Space cache; whole-screen fallback; `parse_resolution`; sips resize/convert; jpeg quality; rc=0-but-no-file quirk |
 | Process logs | [process-logs.md](process-logs.md) | Launch-mode `stdout.log`/`stderr.log`/merged `output.log`; pump threads; teardown ordering; attach-mode stdio limitation |
