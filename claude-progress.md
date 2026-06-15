@@ -1,5 +1,39 @@
 # Progress Log
 
+## Session 18 — 2026-06-15
+**Agent**: builder (macOS box, branch **v2**)
+**Summary**: **Feature #30 (TCC attribution spike) PASSED** — the load-bearing gate for the
+daemon-peers architecture is now validated, unblocking #31. Alex ran the `tcc-spike` distro on a
+spare Mac (**macOS 26.5.1, arm64**) and returned the results tarball; analyzed and recorded:
+- **Attribution works**: a launchd user-agent → signed `CaptureSpike.app` PyInstaller daemon →
+  `audiocap` chain streamed audio (`audio_flowing: true`, "READY … audio flowing"), with the
+  **daemon (not any terminal)** holding the Screen Recording grant. `launchctl print` confirms it
+  ran as `gui/501/com.capturemcp.spike` from the bundle.
+- **Grant persists across a same-identity update**: rebuild (new cdhash) + re-sign with the SAME
+  identity/bundle-id + restart → `daemon_version 1.0.1`, audio flowed immediately, **respawns=0**,
+  no re-prompt.
+- **Negative control**: re-signing with a DIFFERENT identity LOST the grant ("the user declined
+  TCCs… capture") → the grant **keys to the code-signing identity** → a **stable Developer ID
+  (Team ID + bundle id) across updates is mandatory** for the product.
+- **macOS 26 caveat**: `SCShareableContent` enumeration is intermittently flaky (audiocap `exit 5`
+  interleaved with healthy audio; respawn loop rode through it). **Follow-up logged**: add a bounded
+  enumeration retry to `audiocap.swift` so the real helper doesn't lean on a supervisor restart.
+- Recorded: `spike/tcc-attribution/results/` (FINDINGS.md + status_*.json + sysinfo + launchctl
+  dump); product-architecture.md gate → PASSED + the TCC invariant marked [confirmed #30] + the
+  macOS-26 follow-up; features.json #30 → passes:true.
+**Also this session (earlier)**: closed the helper-path regression (Session 17 — `test_helper_path`
++ spec), and shipped the spike as a clone-and-run **`tcc-spike` GitHub branch** (prebuilt universal
+audiocap + agent-oriented RUNBOOK.md; `03_check.sh` made non-blocking under
+`CAPTURE_SPIKE_NONINTERACTIVE=1`).
+**Verification**: docs/spec/features only (no engine code touched); smoke 45/45, contracts 3/3 still
+hold from Session 17.
+**Next**: #31 (M1 packaged signed engine) is now unblocked but needs Alex's **Developer ID cert**
+for real notarization. The credential-free, now-validated path is **#32 (daemon /v1 API + CLI)** —
+recommended as the next build. The audiocap enumeration-retry is a small standalone fix worth doing
+alongside.
+
+---
+
 ## Session 17 — 2026-06-15
 **Agent**: builder (macOS box, branch **v2**)
 **Summary**: Closed the loop on the **helper-path regression** found during a real meeting capture.

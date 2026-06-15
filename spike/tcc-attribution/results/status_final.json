@@ -1,0 +1,17 @@
+{
+  "updated": "2026-06-15T13:07:47Z",
+  "daemon_started": "2026-06-15T13:07:18Z",
+  "daemon_pid": 15253,
+  "daemon_version": "1.0.2-rotated",
+  "helper_pid": 15272,
+  "helper_rc": 5,
+  "ready": false,
+  "ready_line": "",
+  "audio_bytes": 0,
+  "audio_flowing": false,
+  "permission_error": false,
+  "transient_3805_count": 0,
+  "last_stderr": "startup failed: The user declined TCCs for application, window, display capture",
+  "respawns": 14,
+  "verdict": "waiting for helper / grant"
+}

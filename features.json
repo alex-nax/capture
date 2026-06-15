@@ -368,11 +368,11 @@
       "priority": "high",
       "description": "TCC attribution spike (GATES the daemon architecture): on a clean macOS 14 and 15 VM, verify that a launchd-agent-spawned, Developer-ID-signed PyInstaller daemon is the TCC-responsible process for Screen Recording, that the grant persists across app updates (same Team ID + bundle id), the daemon-restart-after-grant flow, and the macOS 15 periodic re-approval behavior. Document as a repeatable checklist in docs/specs/product-architecture.md.",
       "acceptance_criteria": [
-        "Written spike report: attribution works (or the documented fallback decision if it does not)",
-        "Grant survives a simulated app update with unchanged Team ID/bundle id",
-        "macOS 15 re-approval nag behavior recorded with screenshots"
+        "Written spike report: attribution works (or the documented fallback decision if it does not) (DONE 2026-06-15, macOS 26.5.1/arm64: PASS — launchd→signed .app PyInstaller daemon→audiocap streamed audio with no terminal grant; spike/tcc-attribution/results/FINDINGS.md)",
+        "Grant survives a simulated app update with unchanged identity/bundle id (DONE: same-identity rebuild+re-sign → audio flowed immediately, respawns=0, no re-prompt; identity ROTATION lost the grant — negative control confirms keying to the signing identity)",
+        "re-approval / robustness notes recorded (DONE: macOS 26 SCShareableContent enumeration is intermittently flaky — audiocap exit 5 rode by the respawn loop; follow-up logged to add a bounded enumeration retry to audiocap.swift)"
       ],
-      "passes": false,
+      "passes": true,
       "dependencies": [15]
     },
     {

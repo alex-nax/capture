@@ -1,0 +1,71 @@
+$ launchctl print gui/501/com.capturemcp.spike
+gui/501/com.capturemcp.spike = {
+	active count = 1
+	path = /Users/sube.delikatesse/Library/LaunchAgents/com.capturemcp.spike.plist
+	type = LaunchAgent
+	state = xpcproxy
+
+	program = /Users/sube.delikatesse/Applications/CaptureSpike.app/Contents/MacOS/CaptureSpike
+	arguments = {
+		/Users/sube.delikatesse/Applications/CaptureSpike.app/Contents/MacOS/CaptureSpike
+	}
+
+	stdout path = /Users/sube.delikatesse/CaptureSpike/daemon.out.log
+	stderr path = /Users/sube.delikatesse/CaptureSpike/daemon.err.log
+	inherited environment = {
+		SSH_AUTH_SOCK => /var/run/com.apple.launchd.AQaUizbznF/Listeners
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		OSLogRateLimit => 64
+		XPC_SERVICE_NAME => com.capturemcp.spike
+	}
+
+	domain = gui/501 [100015]
+	asid = 100015
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 1
+	pid = 15225
+	immediate reason = speculative
+	forks = 0
+	execs = 0
+	initialized = 1
+	trampolined = 0
+	started suspended = 0
+	proxy started suspended = 0
+	checked allocations = 0 (queried = 0)
+	checked allocations reason = no host
+	checked allocations flags = 0x0
+	last exit code = (never exited)
+
+	resource coalition = {
+		ID = 11178
+		type = resource
+		state = active
+		active count = 1
+		name = com.capturemcp.spike
+	}
+
+	jetsam coalition = {
+		ID = 11179
+		type = jetsam
+		state = active
+		active count = 1
+		name = com.capturemcp.spike
+	}
+
+	spawn type = daemon (3)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	jetsam thread limit = 32
+	cpumon = default
+
+	properties = runatload | inferred program
+}

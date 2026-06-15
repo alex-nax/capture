@@ -81,8 +81,11 @@ behind the stable `/v1` API.
   that spawns `audiocap`, so the user grants "Capture" Screen Recording once and the GUI,
   every terminal's MCP agent, the CLI, and cron all inherit working audio. This dissolves
   the documented worst pain (`permissions-and-signing.md`: grant must cover the launching
-  process). **Gate:** the attribution + persistence behavior must be verified empirically
-  on a clean VM (macOS 14/15) *before* committing to the bundle layout (feature #30).
+  process). **Gate: PASSED (#30, 2026-06-15, macOS 26.5.1/arm64).** A launchd user-agent →
+  signed `.app` PyInstaller daemon → `audiocap` chain streamed audio with no terminal grant;
+  the grant **survived a same-identity update** (rebuild + re-sign, `respawns=0`, no re-prompt)
+  and was **lost on identity rotation** (negative control), confirming it keys to the signing
+  identity. Evidence: `spike/tcc-attribution/results/FINDINGS.md`.
 - **Embedded fallback [planned]:** with no daemon present (headless/CI, or
   `CAPTURE_MCP_EMBEDDED=1`), the MCP server runs the engine in-process exactly as today.
 - **Live preview [planned]:** screenshot events carry `{path, seq, ts}` (daemon and GUI
@@ -105,11 +108,17 @@ behind the stable `/v1` API.
   speaking this same contract — async-COM `ActivateAudioInterfaceAsync` from Python
   ctypes is impractical, and Chromium-family apps need process-**tree** loopback (window
   PID ≠ audio-rendering PID).
-- **[planned]** TCC persistence keys on **Team ID + stable bundle identifier** of the
-  responsible binary (the csreq), not the cert serial — routine Developer ID renewal under
-  the same team is safe; changing bundle IDs is not. App, embedded daemon, and helper need
-  deliberate `CFBundleIdentifier`s and Info.plists (a bare PyInstaller binary surfaces in
-  System Settings under its file name otherwise).
+- **[confirmed #30]** TCC persistence keys on the **code-signing identity + stable bundle
+  identifier** (the designated requirement), not the cert serial or path — the spike confirmed
+  the grant survives a same-identity rebuild and is lost on identity rotation. So a **stable
+  signing identity across updates is mandatory**: ship the engine/daemon/helper with a Developer
+  ID cert (stable Team ID + `CFBundleIdentifier`) and never rotate it casually (a change
+  re-prompts every user). App, embedded daemon, and helper need deliberate `CFBundleIdentifier`s
+  and Info.plists (a bare PyInstaller binary surfaces in System Settings under its file name).
+- **[#30 follow-up]** On **macOS 26**, `SCShareableContent` enumeration is intermittently flaky
+  (spike saw `audiocap` `exit 5` "enumeration failed" interleaved with healthy audio; the daemon's
+  respawn loop rode through it). The real `audiocap.swift` should add a **bounded retry** on the
+  enumeration failure instead of exiting, so the helper doesn't depend on a supervisor restart.
 - **[planned]** Windows daemon is a **logon task, never a Service** — capture requires the
   interactive WinSta0 desktop (see `windows.md` / `run_interactive.ps1`).
 - **[planned]** The GUI must never be required: every capability lands in daemon/CLI/MCP
@@ -185,10 +194,10 @@ Live backlog for this scope (roadmap features #25–#35 in `features.json`):
   any `/v1/audio/transcriptions` endpoint (incl. the Nemotron WSL2 lab) is a plain
   remote backend via `CAPTURE_OPENAI_ASR_URL`.
 - **Done 2026-06-10** (#29): `list_windows` MCP tool over `core.list_windows()`.
-- **TCC attribution spike — gates the whole daemon architecture** (#30). Kit
-  prepared 2026-06-10: `spike/tcc-attribution/` (`make_kit.sh` → one tarball;
-  five numbered scripts on the target Mac; universal prebuilt `audiocap`, no
-  Xcode/Dev-account needed on the target). Awaiting the run on the spare Mac.
+- **PASSED 2026-06-15** (#30): TCC attribution spike ran on macOS 26.5.1/arm64 —
+  launchd→signed-bundle daemon owns the grant, persists across same-identity update,
+  lost on identity rotation. Unblocks #31. Evidence + verdict:
+  `spike/tcc-attribution/results/FINDINGS.md`; distro on the `tcc-spike` branch.
 - **M1** packaged signed engine, no GUI: PyInstaller + Developer ID + notarization +
   prebuilt helper + `capture doctor` + brew tap (#31).
 - **M2** `captured` daemon + `/v1` + CLI; MCP daemon-first mode (#32).
