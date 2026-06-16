@@ -96,13 +96,21 @@ class AudioSource(abc.ABC):
         bundle_id: str | None,
         source: str,
         rate: int,
+        mic_device: str | None = None,
     ) -> tuple[list[str], str] | None:
         """``(argv, mode)`` for a process whose **stdout is 16 kHz mono signed-16-bit
         little-endian PCM**, or ``None`` if no source can satisfy this request.
 
         ``source`` is ``"auto"`` | ``"app"`` | ``"mic"``; ``mode`` in the return is
-        the kind actually selected (``"app"`` | ``"mic"``).
+        the kind actually selected (``"app"`` | ``"mic"``). ``mic_device`` is an
+        optional input-device id (from :meth:`list_input_devices`) used when
+        ``source == "mic"``; ``None`` means the system default input.
         """
+
+    def list_input_devices(self) -> list[dict]:
+        """Available microphone/input devices as ``[{id, name, default}]`` (possibly
+        empty). Default impl returns ``[]``; backends with a mic source override it."""
+        return []
 
 
 class Platform:

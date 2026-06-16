@@ -56,17 +56,21 @@ def runtime_available() -> bool:
     return importlib.util.find_spec("mlx_whisper") is not None
 
 
+#: mlx-community whisper repos store weights under one of these names — most ship
+#: ``weights.npz`` but the full ``whisper-large-v3-turbo`` ships ``weights.safetensors``.
+#: A repo is "downloaded" once config.json + ANY of these is cached.
+_WEIGHT_FILES = ("weights.npz", "weights.safetensors")
+
+
 def is_downloaded(repo: str) -> bool:
     """True iff ``repo``'s weights are already in the HF cache (no network)."""
     try:
         from huggingface_hub import try_to_load_from_cache
     except Exception:
         return False
-    # mlx-community whisper repos ship config.json + weights.npz; both cached ⇒ usable.
-    for fname in ("config.json", "weights.npz"):
-        if not isinstance(try_to_load_from_cache(repo, fname), str):
-            return False
-    return True
+    if not isinstance(try_to_load_from_cache(repo, "config.json"), str):
+        return False
+    return any(isinstance(try_to_load_from_cache(repo, w), str) for w in _WEIGHT_FILES)
 
 
 def active_model() -> str:
@@ -152,7 +156,16 @@ def download(repo: str, on_progress=None) -> str:
     """
     if repo not in _KNOWN_REPOS:
         raise ValueError(f"unknown model {repo!r}; choose from {sorted(_KNOWN_REPOS)}")
-    from huggingface_hub import snapshot_download
+    from huggingface_hub import constants, snapshot_download
+
+    # Force the plain HTTP backend. The xet backend streams content-addressed
+    # chunks into a *separate* cache and only materializes the final blob at the
+    # very end, so the on-disk byte poll below would read ~0 % until it suddenly
+    # jumps to 100 % — i.e. no visible progress. The plain backend instead grows a
+    # `<blob>.incomplete` file inside the repo dir that the poll can measure. The
+    # constant is read live at download time (file_download.py), so setting it here
+    # takes effect for this call regardless of import order.
+    constants.HF_HUB_DISABLE_XET = True
 
     total = _repo_total_bytes(repo) if on_progress is not None else 0
     stop = threading.Event()
@@ -172,3 +185,22 @@ def download(repo: str, on_progress=None) -> str:
         on_progress(total, total, "")  # final 100%
     log.info("downloaded whisper model: %s", repo)
     return repo
+
+
+def delete(repo: str) -> dict:
+    """Remove ``repo``'s weights from the HF cache. Returns ``{repo, freed_bytes}``.
+
+    Validates against the catalog (no arbitrary path deletes). Deleting the *active*
+    model is allowed — its status simply reverts to "active · needs download" until
+    it is re-fetched, which the catalog reports on the next poll.
+    """
+    if repo not in _KNOWN_REPOS:
+        raise ValueError(f"unknown model {repo!r}; choose from {sorted(_KNOWN_REPOS)}")
+    import shutil
+
+    freed = _repo_cache_bytes(repo)
+    d = _repo_cache_dir(repo)
+    if d.exists():
+        shutil.rmtree(d, ignore_errors=True)
+    log.info("deleted whisper model: %s (%d bytes freed)", repo, freed)
+    return {"repo": repo, "deleted": True, "freed_bytes": freed}

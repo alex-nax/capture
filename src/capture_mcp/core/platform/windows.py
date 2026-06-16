@@ -437,6 +437,7 @@ class Win32AudioSource(AudioSource):
         bundle_id: str | None,
         source: str,
         rate: int,
+        mic_device: str | None = None,  # accepted for ABC parity; not yet used on Windows
     ) -> tuple[list[str], str] | None:
         # System-audio capture via WASAPI loopback (captures the full output mix,
         # which includes the target app's audio). True per-app WASAPI *process*

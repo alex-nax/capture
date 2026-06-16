@@ -5,8 +5,8 @@ _Status: current as of 2026-06-10. Source of truth = the code; update this spec 
 ## Purpose
 
 The MCP server is the entrypoint and orchestration layer for capture-mcp. It exposes
-on-demand process capture to an MCP client over stdio as four tools
-(`capture_start`, `capture_stop`, `capture_status`, `list_windows`). It validates arguments,
+on-demand process capture to an MCP client over stdio as five tools
+(`capture_start`, `capture_stop`, `capture_status`, `list_windows`, `list_audio_devices`). It validates arguments,
 constructs `CaptureSession` objects and tracks them via the shared
 `core.registry.SessionRegistry` (bounded live tracking + disk-backed history — see
 [session-registry.md](session-registry.md)), and offloads all blocking work to worker
@@ -47,6 +47,9 @@ Async handler returning a `dict` (the session summary produced by
 - `command: str | None = None` — shell command to launch and capture (the only mode
   that captures logs).
 - `pid: int | None = None` — PID of a running process to attach to.
+- `window_id: int | None = None` — pin screenshots to this exact window (a `window_id`
+  from `list_windows`); refines a `pid`/`app_name` target when one process owns several
+  windows (audio stays per-process).
 - `app_name: str | None = None` — case-insensitive substring of an app name to attach to.
 - `bundle_id: str | None = None` — bundle id for per-app audio (e.g. `"com.apple.Safari"`).
 - `screenshot_interval: float = 1.0` — seconds between screenshots.
@@ -57,6 +60,9 @@ Async handler returning a `dict` (the session summary produced by
 - `capture_screenshots: bool = True`.
 - `capture_audio: bool = True`.
 - `audio_source: str = "auto"` — `"auto"`, `"app"`, or `"mic"`.
+- `mic_device: str | None = None` — also record this input device as a SEPARATE mic track
+  (`mic.s16le`/`mic_transcript.jsonl`) in addition to the app audio; id from
+  `list_audio_devices`, or `"default"`. The helper applies acoustic echo cancellation.
 - `audio_chunk_seconds: float = 8.0`.
 - `asr_backend: str = "auto"` — `"auto"`, `"local"`/`"whisper"`, or `"nemotron"`/`"riva"`.
 - `cwd: str | None = None` — working directory for a launched command.
@@ -111,6 +117,14 @@ target). Backed by `core.list_windows()` -> `platform.current().window_finder
 offloaded via `anyio.to_thread.run_sync`. May be empty (no error). Note: on
 macOS without the Screen Recording grant, window titles can be empty
 strings — fields are stable, contents permission-dependent.
+
+### Tool: `list_audio_devices` (`server.py`)
+
+Async handler, no parameters. Returns `{"devices": [{id, name, default}]}` — the
+microphone/input devices for `capture_start`'s `mic_device`. Daemon-first
+(`GET /v1/audio/mics`); embedded fallback calls
+`platform.current().audio_source.list_input_devices()` (macOS: the bundled
+`audiocap --list-mics`; other platforms: empty list).
 
 ### Errors
 

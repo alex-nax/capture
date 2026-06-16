@@ -53,6 +53,7 @@ Screenshotter(
     out_dir: Path,
     *,
     pid: int | None = None,
+    window_id: int | None = None,   # pin to this exact window (else primary of pid/app)
     app_name: str | None = None,
     interval: float = 1.0,
     fmt: str = "png",
@@ -75,9 +76,9 @@ Public attributes / methods:
   `interval + 2.0` seconds.
 - `count: int` — number of screenshots successfully written so far.
 - `errors: int` — number of failed/timed-out captures or conversions so far.
-- Other attributes (`out_dir`, `pid`, `app_name`, `interval`, `fmt`, `resolution`,
-  `jpeg_quality`, `whole_screen_fallback`) are stored as given (after the coercions
-  above).
+- Other attributes (`out_dir`, `pid`, `window_id`, `app_name`, `interval`, `fmt`,
+  `resolution`, `jpeg_quality`, `whole_screen_fallback`) are stored as given (after the
+  coercions above).
 
 There is no return value from the capture loop; results are observed via `count` /
 `errors` (read by `session.py` for status, e.g. `screenshots` and `screenshot_errors`).
@@ -101,9 +102,20 @@ Per tick (`_capture_once`):
 1. Record the timestamp `ts = now()` (used for the filename, so the filename reflects
    tick start, not completion).
 2. Resolve the target window id via `_resolve_window_id`:
-   - If both `pid` and `app_name` are `None`, return `None` (no specific target).
+   - If `window_id` was given explicitly (the picker chose a specific window), return it
+     verbatim every tick — a `CGWindowID`/HWND is stable for the window's lifetime. This
+     pins capture to the **exact** chosen window; `primary()` is never consulted. Needed
+     because one process can own several windows (e.g. two Chrome windows share a pid), so
+     pid alone can't disambiguate — without this the shots silently target the primary one.
+   - Else if both `pid` and `app_name` are `None`, return `None` (no specific target).
    - Otherwise call `self._finder.primary(pid, app_name)` (the platform `WindowFinder`). If a
      window is found, cache its `window_id` in `self._last_wid` and return it.
+   - **Descendant fallback** (`_descendant_primary`): if the target `pid` owns no window
+     itself, it may be a launcher whose real window belongs to a CHILD process (shell→wine→
+     game, electron, java). Walk the process tree (`util.descendant_pids`, POSIX `ps`) and
+     return the largest window owned by any descendant. This is GitHub #2 — without it a Wine
+     game's window (owned by a wine child, not the launched shell) is never found and capture
+     silently falls back to the whole desktop.
    - If no window is found right now, return the cached `self._last_wid` (which may be
      `None` on the first tick). This keeps targeting a window that has temporarily
      left the on-screen list (e.g. went fullscreen onto its own Space); the grabber

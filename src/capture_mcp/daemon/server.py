@@ -12,10 +12,15 @@ Routes:
   GET  /v1/sessions                      -> all sessions (live + recovered)
   GET  /v1/sessions/{id}                 -> one session summary
   POST /v1/sessions/{id}/stop            -> stop a capture
+  POST /v1/sessions/{id}/delete          -> delete a finished capture (dir + record)
   GET  /v1/sessions/{id}/transcript?tail=N -> last N transcript segments
   GET  /v1/asr/models                    -> Whisper model catalog + downloaded/active
   POST /v1/asr/models/download {repo}    -> download a model (progress via /v1/events)
+  POST /v1/asr/models/delete {repo}      -> remove a downloaded model's weights
+  GET  /v1/audio/mics                    -> input devices [{id,name,default}] for the mic selector
   POST /v1/asr/model {repo}              -> set the active Whisper model
+  GET  /v1/permissions                   -> macOS TCC status (screen_recording)
+  POST /v1/permissions/request {kind}    -> trigger the Screen Recording prompt
   POST /v1/admin/shutdown                -> stop the daemon
 
 The engine runs blocking work in the handler thread (ThreadingHTTPServer);
@@ -30,6 +35,7 @@ import logging
 import os
 import queue
 import secrets
+import shutil
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -39,6 +45,7 @@ from pydantic import ValidationError
 
 from .. import __version__
 from ..core import list_windows
+from ..core import permissions as perms
 from ..core.asr import manager as asr_manager
 from ..core.registry import SessionRegistry
 from ..core.session import CaptureSession
@@ -268,11 +275,25 @@ class _Handler(BaseHTTPRequestHandler):
                 return 200, s
             if method == "POST" and rest[2:] == ["stop"]:
                 return 200, self._stop_session(sid)
+            if method == "POST" and rest[2:] == ["delete"]:
+                return 200, self._delete_session(sid)
             if method == "GET" and rest[2:] == ["transcript"]:
                 tail = int(q["tail"][0]) if "tail" in q else None
                 return 200, self._transcript(sid, tail)
         if rest[:1] == ["asr"]:
             return self._route_asr(method, rest, q)
+        if method == "GET" and rest == ["audio", "mics"]:
+            from ..core import platform as _platform
+
+            return 200, {"devices": _platform.current().audio_source.list_input_devices()}
+        if method == "GET" and rest == ["permissions"]:
+            return 200, perms.status()
+        if method == "POST" and rest == ["permissions", "request"]:
+            kind = self._read_json().get("kind") or "screen_recording"
+            try:
+                return 200, perms.request(kind)
+            except ValueError as e:
+                raise _ApiError(400, str(e))
         if method == "POST" and rest == ["admin", "shutdown"]:
             threading.Thread(target=self.server.shutdown, daemon=True).start()
             return 200, {"shutdown": True}
@@ -286,6 +307,15 @@ class _Handler(BaseHTTPRequestHandler):
             return 200, asr_manager.catalog_status(downloading)
         if method == "POST" and rest == ["asr", "models", "download"]:
             return 202, self.server.start_asr_download(self._asr_repo())
+        if method == "POST" and rest == ["asr", "models", "delete"]:
+            repo = self._asr_repo()
+            with self.server._asr_lock:
+                if repo in self.server._asr_downloading:
+                    raise _ApiError(409, "model is downloading; cannot delete")
+            try:
+                return 200, asr_manager.delete(repo)
+            except ValueError as e:
+                raise _ApiError(400, str(e))
         if method == "POST" and rest == ["asr", "model"]:
             try:
                 repo = asr_manager.set_active_model(self._asr_repo())
@@ -358,6 +388,30 @@ class _Handler(BaseHTTPRequestHandler):
             msg = errs[0].get("msg", "invalid request") if errs else "invalid request"
             raise _ApiError(400, msg.removeprefix("Value error, "))
         session = CaptureSession(req.output_dir, **req.session_kwargs())
+        # macOS captures audio per-APPLICATION (ScreenCaptureKit's SCContentFilter is
+        # app-scoped, never window-scoped — there is no per-window audio API). If
+        # another live session already captures this same process's audio, BOTH
+        # transcripts record the identical app-wide stream — e.g. two windows of one
+        # browser. Surface that as a note rather than let the duplication look like a
+        # bug; screenshots are per-window, but audio can't be split this way.
+        if req.capture_audio and req.audio_source in ("auto", "app") and req.pid is not None:
+            clash = next(
+                (
+                    s
+                    for s in self.server.registry.running()
+                    if s is not session
+                    and s.capture_audio
+                    and s.audio_source != "mic"
+                    and getattr(s, "pid", None) == req.pid
+                ),
+                None,
+            )
+            if clash is not None:
+                session.notes.append(
+                    f"audio: app pid {req.pid} is already captured by session {clash.id}; "
+                    "macOS captures audio per-app (not per-window), so both sessions record "
+                    "the same audio. Capture from separate processes for distinct audio."
+                )
         # Register + attach the event stream BEFORE start so a slow/failed start
         # is visible (state "starting"/"error") and the starting/running events
         # reach /v1/events subscribers.
@@ -377,6 +431,28 @@ class _Handler(BaseHTTPRequestHandler):
         if rec is not None:
             return rec  # already finished (recovered)
         raise _ApiError(404, f"unknown session_id {sid!r}")
+
+    def _delete_session(self, sid: str) -> dict:
+        """Delete a finished capture: remove its dir from disk + forget it. 404 if
+        unknown, 400 if still live (stop it first)."""
+        reg = self.server.registry
+        summary = reg.summary(sid)
+        if summary is None:
+            raise _ApiError(404, f"unknown session_id {sid!r}")
+        if summary.get("state") in ("starting", "running", "stopping"):
+            raise _ApiError(400, "stop the capture before deleting it")
+        # Remove the on-disk dir — but only if it really is a capture dir (has a
+        # session.json), never some arbitrary path from a malformed record.
+        d = summary.get("dir")
+        if d:
+            path = Path(d)
+            if path.is_dir() and (path / "session.json").exists():
+                shutil.rmtree(path, ignore_errors=True)
+        try:
+            reg.delete(sid)
+        except ValueError as e:
+            raise _ApiError(400, str(e))
+        return {"deleted": True, "session_id": sid}
 
     def _transcript(self, sid: str, tail: int | None) -> dict:
         reg = self.server.registry

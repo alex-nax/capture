@@ -97,9 +97,20 @@ behind the stable `/v1` API.
   URI-cached `img()`, which would leak the image cache over an hours-long 1 fps run.
 - **GPUI pinning [planned]:** pin a frozen zed git rev (crates.io 0.2.2 predates the wgpu
   Linux renderer and AccessKit) + a compatible `gpui-component` rev; `cargo vendor`;
-  scheduled quarterly bump. Tray/menu-bar + global hotkey via `tray-icon` + `muda` +
-  `global-hotkey` (the proven standalone-GPUI combo). GUI stays thin: all logic lives in
-  the daemon so pre-1.0 churn is contained to the UI layer.
+  scheduled quarterly bump. GUI stays thin: all logic lives in the daemon so pre-1.0
+  churn is contained to the UI layer.
+- **Decision (2026-06-16): the persistent menu-bar presence + daemon lifecycle live in a
+  separate, native per-OS agent — NOT in the GPUI app.** macOS: `CaptureBar`, a Swift
+  `NSStatusItem`/`LSUIElement` app, is the bundle's entry point ([agent.md](agent.md));
+  it spawns the daemon, owns the tray, and launches the GPUI window on demand. The window
+  process (`capture-gui`, `CAPTURE_AGENT=1`) builds no tray and exits on window-close.
+  Rationale: gpui 0.2.2 forces `ActivationPolicy::Regular` (a Dock app, no menu-bar-only
+  mode), and a resident GPUI process is too heavy for an always-on tray; the agent is
+  ~110 KB. A **Windows** sibling agent is the planned counterpart (#36) — same role, same
+  `/v1` contract, no shared code (each agent is native to its OS). This supersedes the
+  earlier plan to host the tray inside the GPUI app via `tray-icon`/`muda`/`global-hotkey`
+  (those still serve the standalone/dev `capture-gui`). Trade-off accepted: per-OS native
+  code over one cross-platform Rust tray, per the owner's call.
 
 ## Invariants & constraints
 
@@ -213,6 +224,9 @@ Live backlog for this scope (roadmap features #25–#35 in `features.json`):
   prebuilt helper + `capture doctor` + brew tap (#31).
 - **M2** `captured` daemon + `/v1` + CLI; MCP daemon-first mode (#32).
 - **M3** GPUI app v1 on macOS, onboarding ends with a visible 5-second self-test capture (#33).
+  Includes the native macOS menu-bar agent (`CaptureBar`, [agent.md](agent.md)).
+- **#36** Windows menu-bar/tray agent — the native sibling of `CaptureBar` (system-tray
+  icon + daemon lifecycle + launches the window), part of the M4 Windows release.
 - **M4** Windows release; per-process loopback native helper closes the #21 refinement (#34).
 - **M5** Linux: engine backends (X11 → Wayland portal, PipeWire per-app audio with a
   reconnect-tracking helper), then GUI (#35).

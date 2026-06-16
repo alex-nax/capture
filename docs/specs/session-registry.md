@@ -53,6 +53,13 @@ session history.
   - `session.json` missing/unreadable (dir deleted, crash before first write) →
     the bare template with state `"unknown"` and a note;
   - otherwise the recorded values win over the template (`stopped` / `error`).
+- **Runs-dir scan** (`_scan_runs_dir`, after the index load): the index can be
+  lost/reset while the `capture-*` folders remain, leaving sessions orphaned (on disk
+  but invisible). So history load ALSO scans `$CAPTURE_RUNS_DIR` (else `~/.capture/runs`)
+  for `capture-*/session.json` and recovers any session id not already covered — index
+  entries win, derived sid = the folder name minus the `capture-` prefix. Idempotent
+  (not re-written to the index); re-bounds history to `max_sessions` (newest) after. So
+  the GUI/CLI/MCP show every on-disk capture, not just the indexed ones.
 - **Pruning** (`_prune_locked`, called from `add()`): when live + history exceeds
   `max_sessions`, evict oldest entries whose state is **not** live
   (`starting`/`running`/`stopping` are never evicted) — same bounded-finished-history

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import subprocess
 import time
 from datetime import datetime, timezone
 
@@ -11,6 +12,48 @@ from datetime import datetime, timezone
 def now() -> float:
     """Monotonic-ish wall clock as a unix epoch float (seconds)."""
     return time.time()
+
+
+def descendant_pids(pid: int) -> set[int]:
+    """All transitive child pids of ``pid`` (excluding ``pid`` itself).
+
+    Used to find a target process's *real* window when it was launched through a
+    wrapper — shell → wine → game, electron, java launchers — where the visible
+    window belongs to a CHILD process with a different pid than the one we attached
+    to (GitHub #2: a Wine game's window is owned by a wine child, not the launcher,
+    so a pid-only lookup finds nothing and falls back to full-screen).
+
+    Best-effort and never raises: returns an empty set if the process table can't be
+    read (e.g. a platform without ``ps``). POSIX only for now — Windows returns empty
+    (its native windows are owned by their own pid; Wine-style chains are the macOS case).
+    """
+    if os.name == "nt":
+        return set()
+    try:
+        out = subprocess.run(
+            ["ps", "-axo", "pid=,ppid="], capture_output=True, text=True, timeout=4
+        ).stdout
+    except Exception:
+        return set()
+    children: dict[int, list[int]] = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        try:
+            child, parent = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        children.setdefault(parent, []).append(child)
+    seen: set[int] = set()
+    stack = [pid]
+    while stack:
+        p = stack.pop()
+        for c in children.get(p, ()):
+            if c not in seen:
+                seen.add(c)
+                stack.append(c)
+    return seen
 
 
 def split_command(command: str) -> list[str]:

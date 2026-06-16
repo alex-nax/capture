@@ -40,6 +40,7 @@ class CaptureSession:
         *,
         command: str | None = None,
         pid: int | None = None,
+        window_id: int | None = None,
         app_name: str | None = None,
         bundle_id: str | None = None,
         screenshot_interval: float = 1.0,
@@ -49,6 +50,7 @@ class CaptureSession:
         capture_screenshots: bool = True,
         capture_audio: bool = True,
         audio_source: str = "auto",
+        mic_device: str | None = None,
         audio_chunk_seconds: float = 8.0,
         asr_backend: str = "auto",
         cwd: str | None = None,
@@ -59,6 +61,7 @@ class CaptureSession:
 
         self.command = command
         self.req_pid = pid
+        self.window_id = window_id  # exact picker window for screenshots (None = primary)
         self.app_name = app_name
         self.bundle_id = bundle_id
         self.screenshot_interval = screenshot_interval
@@ -71,6 +74,7 @@ class CaptureSession:
         self.capture_screenshots = capture_screenshots
         self.capture_audio = capture_audio
         self.audio_source = audio_source
+        self.mic_device = mic_device  # if set, also record this input device as a separate mic track
         self.audio_chunk_seconds = audio_chunk_seconds
         self.asr_backend = asr_backend
         self.cwd = cwd
@@ -85,6 +89,7 @@ class CaptureSession:
         self._proc: ProcessCapture | None = None
         self._shots: Screenshotter | None = None
         self._audio: AudioCapture | None = None
+        self._mic: AudioCapture | None = None  # optional separate mic track
         self._lock = threading.Lock()
 
         # Event surface (M0b): components publish to the bus; the writer tails
@@ -183,6 +188,11 @@ class CaptureSession:
                 self._audio.stop()
             except Exception:
                 log.exception("audio stop failed")
+        if self._mic:
+            try:
+                self._mic.stop()
+            except Exception:
+                log.exception("mic stop failed")
         if self._proc:
             try:
                 return self._proc.stop()
@@ -213,12 +223,27 @@ class CaptureSession:
             else:
                 self.notes.append(f"no on-screen window found for app {self.app_name!r}")
 
+        # If a specific window was picked, label the session with ITS title (not the
+        # process's primary window) so the summary matches what's being screenshotted.
+        if self.window_id is not None:
+            match = next(
+                (
+                    w
+                    for w in _platform.current().window_finder.find(pid=self.pid, app_name=self.app_name)
+                    if w.window_id == self.window_id
+                ),
+                None,
+            )
+            if match:
+                self.window_title = match.title or match.app_name
+
     def _start_screenshots(self) -> None:
         # In attach-by-app mode, pass app_name so the window is re-resolved each
         # tick even before/after the pid is known.
         self._shots = Screenshotter(
             self.dir / "screenshots",
             pid=self.pid,
+            window_id=self.window_id,
             app_name=None if self.pid else self.app_name,
             interval=self.screenshot_interval,
             fmt=self.screenshot_format,
@@ -243,6 +268,24 @@ class CaptureSession:
         if self._audio.status.startswith("asr-unavailable") or self._audio.status == "no-audio-source":
             self.notes.append(f"audio: {self._audio.status}")
 
+        # Optional SEPARATE microphone track: a second AudioCapture that writes
+        # mic.s16le / mic_transcript.* alongside the app audio (never mixed). Only
+        # the session the GUI assigns the mic to gets this.
+        if self.mic_device is not None:
+            self._mic = AudioCapture(
+                self.dir,
+                source="mic",
+                mic_device=self.mic_device,
+                track="mic",
+                chunk_seconds=self.audio_chunk_seconds,
+                asr_backend=self.asr_backend,
+                t0=self.t0,
+                emit=self.events.publish,
+            )
+            self._mic.start()
+            if self._mic.status.startswith("asr-unavailable") or self._mic.status == "no-audio-source":
+                self.notes.append(f"mic: {self._mic.status}")
+
     # -- reporting ------------------------------------------------------------
 
     def summary(self) -> dict:
@@ -262,6 +305,8 @@ class CaptureSession:
             "audio_status": self._audio.status if self._audio else "off",
             "transcript_segments": self._audio.segments if self._audio else 0,
             "asr_errors": self._audio.asr_errors if self._audio else 0,
+            "mic_status": self._mic.status if self._mic else ("off" if self.mic_device is None else "init"),
+            "mic_segments": self._mic.segments if self._mic else 0,
             "notes": list(self.notes),  # snapshot; notes may be appended concurrently
         }
 
@@ -279,6 +324,7 @@ class CaptureSession:
                 "capture_screenshots": self.capture_screenshots,
                 "capture_audio": self.capture_audio,
                 "audio_source": self.audio_source,
+                "mic_device": self.mic_device,
                 "audio_chunk_seconds": self.audio_chunk_seconds,
                 "asr_backend": self.asr_backend,
                 "cwd": self.cwd,

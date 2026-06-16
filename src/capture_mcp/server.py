@@ -73,6 +73,7 @@ async def capture_start(
     output_dir: str,
     command: str | None = None,
     pid: int | None = None,
+    window_id: int | None = None,
     app_name: str | None = None,
     bundle_id: str | None = None,
     screenshot_interval: float = 1.0,
@@ -82,6 +83,7 @@ async def capture_start(
     capture_screenshots: bool = True,
     capture_audio: bool = True,
     audio_source: str = "auto",
+    mic_device: str | None = None,
     audio_chunk_seconds: float = 8.0,
     asr_backend: str = "auto",
     cwd: str | None = None,
@@ -107,6 +109,10 @@ async def capture_start(
         command: Command line to launch and capture (mutually exclusive with pid/app_name).
         pid: PID of a running process to attach to.
         app_name: App name substring to attach to.
+        window_id: Pin screenshots to this exact window (a window_id from
+            list_windows). Refines a pid/app_name target — needed when one
+            process owns several windows (e.g. two Chrome windows), which pid alone
+            can't disambiguate. Audio stays per-process.
         bundle_id: Bundle id for per-app audio (e.g. "com.apple.Safari"); optional.
         screenshot_interval: Seconds between screenshots (default 1.0).
         screenshot_format: Image format: png (default), jpg/jpeg, tiff, gif, bmp.
@@ -118,6 +124,10 @@ async def capture_start(
         capture_screenshots: Capture window screenshots (default True).
         capture_audio: Capture + transcribe audio (default True).
         audio_source: "auto" (per-app helper, else mic), "app", or "mic".
+        mic_device: Also record a microphone as a SEPARATE track (mic.s16le /
+            mic_transcript.jsonl), in addition to the app audio. A device id from
+            list_audio_devices, or "default" for the system default input.
+            Acoustic echo cancellation is applied so laptop-speaker bleed is removed.
         audio_chunk_seconds: Audio window size sent to ASR per pass (default 8.0).
         asr_backend: "auto", "local"/"whisper", or "nemotron"/"riva".
         cwd: Working directory for a launched command.
@@ -138,11 +148,11 @@ async def capture_start(
         raise ValueError(f"specify exactly one target, but got: {', '.join(provided)}")
 
     kwargs = dict(
-        command=command, pid=pid, app_name=app_name, bundle_id=bundle_id,
+        command=command, pid=pid, window_id=window_id, app_name=app_name, bundle_id=bundle_id,
         screenshot_interval=screenshot_interval, screenshot_format=screenshot_format,
         screenshot_resolution=screenshot_resolution, screenshot_jpeg_quality=screenshot_jpeg_quality,
         capture_screenshots=capture_screenshots, capture_audio=capture_audio,
-        audio_source=audio_source, audio_chunk_seconds=audio_chunk_seconds,
+        audio_source=audio_source, mic_device=mic_device, audio_chunk_seconds=audio_chunk_seconds,
         asr_backend=asr_backend, cwd=cwd,
     )
 
@@ -250,6 +260,22 @@ async def list_windows(app_name: str | None = None, pid: int | None = None) -> d
         return await anyio.to_thread.run_sync(lambda: _as_value_error(lambda: d.windows(app_name=app_name, pid=pid)))
     windows = await anyio.to_thread.run_sync(lambda: _list_windows(pid=pid, app_name=app_name))
     return {"windows": windows, "count": len(windows)}
+
+
+@mcp.tool()
+async def list_audio_devices() -> dict:
+    """List microphone/input devices for `capture_start`'s `mic_device`.
+
+    Returns `{devices: [{id, name, default}]}`. Pass a device `id` (or "default")
+    as `mic_device` to record that microphone as a separate track. macOS-only for
+    now (other platforms return an empty list).
+    """
+    d = _daemon()
+    if d is not None:
+        return await anyio.to_thread.run_sync(lambda: _as_value_error(d.audio_mics))
+    from .core import platform as _platform
+
+    return {"devices": await anyio.to_thread.run_sync(_platform.current().audio_source.list_input_devices)}
 
 
 def main() -> None:

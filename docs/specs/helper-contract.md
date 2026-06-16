@@ -28,8 +28,16 @@ this spec is only the contract.
 
 ### argv
 
-- macOS: `audiocap --pid <PID> | --bundle <bundle.id> | --system [--rate <hz>]`
-  (exactly one target; no target → usage on stderr, exit 2).
+- macOS: `audiocap --pid <PID> | --bundle <bundle.id> | --system | --mic [<deviceID>] [--rate <hz>]`
+  (exactly one target; no target → usage on stderr, exit 2). `--mic` captures the microphone via
+  AVFoundation `AVCaptureSession` (NOT ScreenCaptureKit) — same s16le + READY contract — and needs only
+  the Microphone permission, no Screen Recording. The optional value is a device uniqueID from
+  `--list-mics`; absent/`default` = system default input. **No echo cancellation** — a laptop's built-in
+  mic captures its own speaker output (use headphones; proper AEC is tracked as feature #38). A
+  voice-processing (`setVoiceProcessingEnabled`) attempt was reverted because it ducked/muted other apps'
+  audio.
+- macOS: `audiocap --list-mics` — prints one JSON object per stdout line `{"id","name","default"}`
+  for the available input devices, then exits 0 (used by `GET /v1/audio/mics`). Not a PCM stream.
 - Windows: `python helper/audiocap_win.py [--rate <hz>] [--stall-timeout <s>]`
   (system mix only today; `--stall-timeout` is accepted but currently a no-op —
   see Known limitations).

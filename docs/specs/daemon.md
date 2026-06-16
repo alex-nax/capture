@@ -50,14 +50,19 @@ server's daemon-first mode are **[planned]** (see Known limitations).
 |--------|------|--------------|---------|
 | GET  | `/v1/health` | — (no auth) | `{ok, version, api_version, pid, platform, sessions:{live,history}}` |
 | GET  | `/v1/windows` | `?app_name=&pid=` | `{windows:[...], count}` (via `core.list_windows`) |
-| POST | `/v1/sessions` | `capture_start` args + `output_dir` | session summary (201); exactly-one-target enforced |
+| POST | `/v1/sessions` | `capture_start` args + `output_dir` | session summary (201); exactly-one-target enforced. Optional `window_id` pins screenshots to that exact window (audio stays per-pid); optional `mic_device` ALSO records that input device as a separate mic track (`mic.s16le`/`mic_transcript.jsonl`) |
 | GET  | `/v1/sessions` | — | `{sessions:[summary,...]}` (live + recovered, oldest first) |
 | GET  | `/v1/sessions/{id}` | — | session summary (404 if unknown) |
 | POST | `/v1/sessions/{id}/stop` | — | final summary; a recovered (finished) id returns its record |
+| POST | `/v1/sessions/{id}/delete` | — | `{deleted, session_id}`; removes the session dir (guarded: must contain `session.json`) + its registry/index record. 404 unknown, **400 if still live** (stop first) |
 | GET  | `/v1/sessions/{id}/transcript` | `?tail=N` | `{session_id, segments:[...], count}` from `transcript.jsonl` |
 | GET  | `/v1/asr/models` | — | `{backend_available, active, models:[{repo,name,size_label,downloaded,active,downloading}]}` — Whisper model catalog |
 | POST | `/v1/asr/models/download` | `{repo}` | `{repo, started}` (202); downloads in background, progress over `/v1/events`; dup is `started:false` |
+| POST | `/v1/asr/models/delete` | `{repo}` | `{repo, deleted, freed_bytes}`; removes the model's weights from the HF cache. 400 if not in catalog, **409 if it's currently downloading** |
 | POST | `/v1/asr/model` | `{repo}` | `{active}` — set the active model (persisted to `~/.capture/config.json`); 400 if not in catalog |
+| GET  | `/v1/audio/mics` | — | `{devices:[{id,name,default}]}` — input devices for the mic selector (macOS: `audiocap --list-mics`; other platforms: `[]`) |
+| GET  | `/v1/permissions` | — | `{platform, screen_recording, microphone}` — macOS TCC status (`granted`/`denied`/`undetermined`/`not_applicable`) |
+| POST | `/v1/permissions/request` | `{kind}` | trigger the `screen_recording` or `microphone` prompt (the daemon is the grantee); 400 for an unknown kind |
 | GET  | `/v1/events` | — | **SSE** (`text/event-stream`): each `data:` line is one event `{t, type, session_id, …}`; `: ping` heartbeats |
 | GET  | `/v1/schema` | — | the `/v1` JSON Schema (`{api_version, models:{…}}`) from the pydantic models — for client/Rust-type generation |
 | POST | `/v1/admin/shutdown` | — | `{shutdown:true}` then the server stops |
@@ -109,18 +114,40 @@ detached (`start_new_session`) and waits for `/v1/health`.
   clients send commands via the REST routes. WebSocket stays **[planned]** only if
   a bidirectional channel is ever needed.
 - **ASR model manager (`/v1/asr/*`):** lists the curated `mlx-community/whisper-*`
-  catalog (`core.asr.manager`) with per-model `downloaded` (HF-cache check) and
-  `active` flags. `POST .../download` validates the repo against the catalog, then
+  catalog (`core.asr.manager`) with per-model `downloaded` (HF-cache check — config.json
+  + **either** `weights.npz` *or* `weights.safetensors`, since `whisper-large-v3-turbo`
+  ships safetensors while the rest ship npz) and `active` flags. `POST .../download`
+  validates the repo against the catalog, then
   fetches it into the shared HF cache on a background thread (a dup while in-flight
   is a no-op). Progress is fanned out over `/v1/events` as `asr_download`
   (`{repo, fraction, downloaded, total}`), then `asr_download_done` /
   `asr_download_error` — these events carry **no `session_id`** (daemon-wide).
   Progress is measured by polling the repo's on-disk cache size vs the Hub's
-  reported total (backend-agnostic — hf_hub's accelerated xet/hf_transfer paths
-  bypass the Python `tqdm` hook). `POST /v1/asr/model` persists the active model to
+  reported total. To make that poll *meaningful* the download **forces the plain
+  HTTP backend** (`constants.HF_HUB_DISABLE_XET = True`, read live by hf_hub): xet
+  streams content-addressed chunks into a separate cache and only materializes the
+  final blob at the very end, so the size poll would read ~0 % then jump to 100 % —
+  the plain backend instead grows a `<blob>.incomplete` file the poll can track.
+  `POST .../delete` (`manager.delete`) `rmtree`s the repo's HF-cache dir (catalog-
+  validated; 409 while it's downloading); deleting the *active* model just reverts
+  it to "active · needs download". `POST /v1/asr/model` persists the active model to
   `~/.capture/config.json` (`core.config`), which the Whisper backend reads (arg →
   `CAPTURE_WHISPER_MODEL` env → config → default) so a GUI choice applies to new
   captures started anywhere. Weights are **downloaded on demand, never bundled**.
+- **Permissions (`/v1/permissions`, macOS):** the daemon **only checks** status
+  (`core.permissions`): Screen Recording via `Quartz.CGPreflightScreenCaptureAccess` (safe)
+  and Microphone via `AVCaptureDevice.authorizationStatusForMediaType` (safe). It does **NOT**
+  trigger the Screen Recording prompt — `CGRequestScreenCaptureAccess` requires a window-server
+  connection and **aborts the headless daemon** (SIGABRT); so `request("screen_recording")`
+  returns status without prompting, and the **GUI** shows that prompt itself (CoreGraphics FFI,
+  it's a real app). `request("microphone")` ALSO returns status without prompting —
+  `requestAccessForMediaType` likewise aborts a background-only process when it must show the
+  dialog. The mic prompt comes from elsewhere: the GUI links to Settings, and macOS prompts
+  automatically the first time the ffmpeg mic-fallback opens the device. A new Screen Recording
+  grant needs the daemon to
+  **restart** (GUI "Restart daemon" → `/v1/admin/shutdown` → the menu-bar agent respawns it);
+  a Microphone grant applies immediately. Attribution/persistence for the ad-hoc daemon is the
+  #31 TCC caveat. Non-macOS → `not_applicable`.
 - **stdout is NOT special** here (unlike `server.py`): the daemon is its own
   process; logs go to stderr.
 

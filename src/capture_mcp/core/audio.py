@@ -1,13 +1,15 @@
 """Audio capture → chunking → ASR → timestamped transcript.
 
-Source of PCM, in priority order:
-  * the compiled ``audiocap`` ScreenCaptureKit helper (per-app audio), or
-  * ``ffmpeg`` capturing the default microphone (fallback / when no helper or
-    when ``source="mic"`` is requested).
+Source of PCM (both via the bundled ``audiocap`` helper — no external deps):
+  * app/system audio via ScreenCaptureKit (``--pid``/``--bundle``), or
+  * the microphone via AVFoundation ``AVCaptureSession`` (``--mic``), used when
+    ``source="mic"`` (e.g. a session's separate mic track).
 
 Either source yields raw signed-16-bit-LE mono PCM at 16 kHz on its stdout. We
 buffer it into fixed windows and transcribe each window, appending results to
-``transcript.jsonl`` (machine) and ``transcript.txt`` (human).
+``<track>transcript.jsonl`` (machine) and ``…txt`` (human) — ``track="audio"``
+uses ``transcript.*``/``audio.s16le``; a second instance with ``track="mic"``
+writes ``mic_transcript.*``/``mic.s16le`` alongside, never clobbering the app's.
 
 Timestamps: the audio timeline is anchored to the wall-clock arrival of the
 *first* PCM bytes (not session start), which corrects for capture-startup
@@ -49,6 +51,8 @@ class AudioCapture:
         pid: int | None = None,
         bundle_id: str | None = None,
         source: str = "auto",  # "auto" | "app" | "mic"
+        mic_device: str | None = None,  # input-device id when source == "mic" (None = default)
+        track: str = "audio",  # output naming: "audio" -> audio.s16le/transcript.*; else "<track>_…"
         chunk_seconds: float = 8.0,
         asr_backend: str = "auto",
         t0: float | None = None,
@@ -58,6 +62,14 @@ class AudioCapture:
         self.pid = pid
         self.bundle_id = bundle_id
         self.source = source
+        self.mic_device = mic_device
+        self.track = track
+        # A non-default track (e.g. the mic) writes alongside the app audio without
+        # clobbering it: mic.s16le / mic_transcript.jsonl / mic_transcript.txt.
+        if track == "audio":
+            self._fn_raw, self._fn_jsonl, self._fn_txt = "audio.s16le", "transcript.jsonl", "transcript.txt"
+        else:
+            self._fn_raw, self._fn_jsonl, self._fn_txt = f"{track}.s16le", f"{track}_transcript.jsonl", f"{track}_transcript.txt"
         self.chunk_seconds = max(1.0, float(chunk_seconds))
         self.asr_name = asr_backend
         self.t0 = t0 if t0 is not None else now()
@@ -105,9 +117,9 @@ class AudioCapture:
         # Open outputs and launch; roll everything back on any failure so we
         # never leak file handles or an undrained subprocess.
         try:
-            self._jsonl = open(self.out_dir / "transcript.jsonl", "w", buffering=1)
-            self._txt = open(self.out_dir / "transcript.txt", "w", buffering=1)
-            self._raw = open(self.out_dir / "audio.s16le", "wb")
+            self._jsonl = open(self.out_dir / self._fn_jsonl, "w", buffering=1)
+            self._txt = open(self.out_dir / self._fn_txt, "w", buffering=1)
+            self._raw = open(self.out_dir / self._fn_raw, "wb")
             self._proc = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=_NO_WINDOW
             )
@@ -124,7 +136,7 @@ class AudioCapture:
         # Keep the no-ASR condition visible rather than clobbering it with "running".
         self.status = "running" if self._asr else f"running (asr-unavailable: {self._asr_error})"
         if self._emit:
-            self._emit("audio_status", status=self.status, mode=self.mode)
+            self._emit("audio_status", status=self.status, mode=self.mode, track=self.track)
         log.info("audio capture started (mode=%s, asr=%s)", self.mode, self._asr.name if self._asr else "none")
 
     def _build_command(self) -> tuple[list[str] | None, str]:
@@ -136,6 +148,7 @@ class AudioCapture:
             bundle_id=self.bundle_id,
             source=self.source,
             rate=SAMPLE_RATE,
+            mic_device=self.mic_device,
         )
         if result is None:
             return None, "none"
@@ -175,7 +188,7 @@ class AudioCapture:
         if not any(k in self.status for k in ("failed", "unavailable", "no-audio-source")):
             self.status = f"stopped (asr-errors={self.asr_errors})" if self.asr_errors else "stopped"
         if self._emit:
-            self._emit("audio_status", status=self.status, mode=self.mode)
+            self._emit("audio_status", status=self.status, mode=self.mode, track=self.track)
 
     def _teardown_proc(self) -> None:
         self._kill_proc()
@@ -264,7 +277,7 @@ class AudioCapture:
                 )
             log.warning("audio source produced no data: %s", self.status)
             if self._emit:
-                self._emit("audio_status", status=self.status, mode=self.mode)
+                self._emit("audio_status", status=self.status, mode=self.mode, track=self.track)
 
     def _flush_chunk(self, final: bool = False) -> None:
         if final and len(self._buf) >= MIN_TAIL_BYTES:
@@ -309,4 +322,4 @@ class AudioCapture:
                 self._txt.write(f"[{rec['start']}] {seg.text}\n")
             self.segments += 1
             if self._emit:
-                self._emit("transcript_segment", **rec, count=self.segments)
+                self._emit("transcript_segment", **rec, count=self.segments, track=self.track)

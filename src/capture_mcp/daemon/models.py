@@ -35,6 +35,11 @@ class StartSessionRequest(_Strict):
     output_dir: str
     command: str | None = None
     pid: int | None = None
+    #: Optional refinement of a `pid`/`app_name` target: pin screenshots to this exact
+    #: window (a `CGWindowID`/HWND from the picker). Without it the screenshotter grabs
+    #: the app's *primary* window — wrong when one process owns several (e.g. two Chrome
+    #: windows share a pid). Audio stays per-process, so it's unaffected.
+    window_id: int | None = None
     app_name: str | None = None
     bundle_id: str | None = None
     screenshot_interval: float = 1.0
@@ -44,6 +49,10 @@ class StartSessionRequest(_Strict):
     capture_screenshots: bool = True
     capture_audio: bool = True
     audio_source: str = "auto"
+    #: Optional input-device id (from GET /v1/audio/mics). When set, the session ALSO
+    #: records that microphone as a SEPARATE track (mic.s16le / mic_transcript.jsonl),
+    #: never mixed with the app audio. The GUI sets this on one app's session only.
+    mic_device: str | None = None
     audio_chunk_seconds: float = 8.0
     asr_backend: str = "auto"
     cwd: str | None = None
@@ -80,6 +89,8 @@ class SessionSummary(_Strict):
     audio_status: str
     transcript_segments: int
     asr_errors: int
+    mic_status: str = "off"
+    mic_segments: int = 0
     notes: list[str]
 
 

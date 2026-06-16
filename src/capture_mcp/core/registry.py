@@ -91,6 +91,21 @@ class SessionRegistry:
             rec = self._history.get(session_id)
             return dict(rec) if rec is not None else None
 
+    def delete(self, session_id: str) -> bool:
+        """Forget a *finished* session: drop its history/live record and rewrite the
+        index without it. Returns True if it was known. Raises ValueError for a live
+        (starting/running/stopping) session — stop it first. Does NOT touch the
+        session's on-disk dir; the caller removes that."""
+        with self._lock:
+            live = self._live.get(session_id)
+            if live is not None and live.state in _LIVE_STATES:
+                raise ValueError("session is live; stop it before deleting")
+            existed = session_id in self._history or session_id in self._live
+            self._history.pop(session_id, None)
+            self._live.pop(session_id, None)
+            self._rewrite_index_locked(session_id)
+            return existed
+
     # -- internals --------------------------------------------------------------
 
     def _prune_locked(self) -> None:
@@ -122,15 +137,48 @@ class SessionRegistry:
         except Exception:
             log.exception("failed to append session index %s", self.index_path)
 
-    def _load_history(self) -> None:
-        """Rebuild finished-session records from the index + each session.json."""
+    def _rewrite_index_locked(self, drop_id: str) -> None:
+        """Rewrite the append-only index without ``drop_id`` (best-effort; atomic).
+
+        Unparseable lines are kept verbatim (same tolerance as ``_load_history``).
+        Caller holds ``self._lock``.
+        """
         try:
             text = self.index_path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return
         except Exception:
-            log.exception("failed to read session index %s", self.index_path)
+            log.exception("failed to read session index for rewrite %s", self.index_path)
             return
+        kept: list[str] = []
+        for ln in text.splitlines():
+            s = ln.strip()
+            if not s:
+                continue
+            try:
+                if json.loads(s).get("id") == drop_id:
+                    continue
+            except Exception:
+                kept.append(ln)  # keep torn/corrupt lines as-is
+                continue
+            kept.append(ln)
+        try:
+            tmp = self.index_path.with_suffix(".jsonl.tmp")
+            tmp.write_text("".join(k + "\n" for k in kept), encoding="utf-8")
+            tmp.replace(self.index_path)
+        except Exception:
+            log.exception("failed to rewrite session index %s", self.index_path)
+
+    def _load_history(self) -> None:
+        """Rebuild finished-session records from the index, then also scan the runs
+        dir so on-disk captures whose index entry was lost still appear."""
+        try:
+            text = self.index_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            text = ""
+        except Exception:
+            log.exception("failed to read session index %s", self.index_path)
+            text = ""
 
         entries: dict[str, dict] = {}
         for ln in text.splitlines():
@@ -146,6 +194,31 @@ class SessionRegistry:
         # Newest max_sessions only; ids are timestamp-prefixed (chronological).
         for sid in sorted(entries)[-self.max_sessions :]:
             self._history[sid] = self._recover(sid, entries[sid].get("dir", ""))
+
+        self._scan_runs_dir()
+
+    def _scan_runs_dir(self) -> None:
+        """Recover any `capture-*` session folders on disk that the index doesn't
+        cover (the index can be lost/reset while the folders remain). Idempotent;
+        index entries win. Scans ``$CAPTURE_RUNS_DIR`` else ``~/.capture/runs``."""
+        runs = os.environ.get("CAPTURE_RUNS_DIR")
+        runs_dir = Path(runs).expanduser() if runs else Path.home() / ".capture" / "runs"
+        try:
+            candidates = [d for d in runs_dir.glob("capture-*") if d.is_dir()]
+        except OSError:
+            return
+        prefix = "capture-"
+        for d in candidates:
+            sid = d.name[len(prefix) :] if d.name.startswith(prefix) else d.name
+            if not sid or sid in self._history or sid in self._live:
+                continue
+            if not (d / "session.json").exists():
+                continue
+            self._history[sid] = self._recover(sid, str(d))
+        # Bound retained history (live sessions aren't in _history yet at load time).
+        if len(self._history) > self.max_sessions:
+            for sid in sorted(self._history)[: len(self._history) - self.max_sessions]:
+                self._history.pop(sid, None)
 
     @staticmethod
     def _template(session_id: str, session_dir: str) -> dict:

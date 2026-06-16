@@ -1,12 +1,14 @@
 //! capture-gui: native GPUI desktop client for the capture-mcp daemon.
 
 mod app;
+mod assets;
 mod daemon;
 mod hotkey;
 mod skill;
 mod tray;
 
 use app::CaptureApp;
+use assets::Assets;
 use gpui::{px, size, App, AppContext, Application, Bounds, WindowBounds, WindowOptions};
 
 fn main() {
@@ -44,7 +46,7 @@ fn main() {
         }
     }
 
-    Application::new().run(|cx: &mut App| {
+    Application::new().with_assets(Assets).run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(760.0), px(680.0)), cx);
         cx.open_window(
             WindowOptions {
@@ -55,5 +57,12 @@ fn main() {
         )
         .unwrap();
         cx.activate(true);
+        // Launched by the native menu-bar agent: this process is *just* the window.
+        // GPUI doesn't quit on last-window-close, so exit explicitly when the window
+        // closes — that way each agent "Open Window" is a fresh, non-lingering window
+        // and the persistent menu-bar presence is the agent's job, not ours.
+        if std::env::var_os("CAPTURE_AGENT").is_some() {
+            cx.on_window_closed(|cx| cx.quit()).detach();
+        }
     });
 }

@@ -14,9 +14,9 @@ loop/scheduling/chunking logic lives platform-neutrally in ``screenshots.py`` /
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-import shutil
 import struct
 import subprocess
 import sys
@@ -163,6 +163,7 @@ class MacAudioSource(AudioSource):
         bundle_id: str | None,
         source: str,
         rate: int,
+        mic_device: str | None = None,
     ) -> tuple[list[str], str] | None:
         want_app = source in ("auto", "app")
         hp = helper_path()
@@ -177,16 +178,35 @@ class MacAudioSource(AudioSource):
         if source == "app":
             return None  # explicitly wanted app audio but cannot satisfy it
 
-        # Microphone fallback via ffmpeg avfoundation.
-        if shutil.which("ffmpeg"):
-            cmd = [
-                "ffmpeg", "-hide_banner", "-loglevel", "warning",
-                "-f", "avfoundation", "-i", ":default",
-                "-ac", "1", "-ar", str(rate),
-                "-f", "s16le", "-",
-            ]
+        # Microphone: the SAME bundled helper, AVCaptureSession path (NO ffmpeg).
+        if hp:
+            cmd = [str(hp), "--rate", str(rate), "--mic", mic_device or "default"]
             return cmd, "mic"
         return None
+
+    def list_input_devices(self) -> list[dict]:
+        """Run ``audiocap --list-mics`` (one JSON object per stdout line) -> list."""
+        hp = helper_path()
+        if not hp:
+            return []
+        try:
+            out = subprocess.run(
+                [str(hp), "--list-mics"], capture_output=True, text=True, timeout=10
+            ).stdout
+        except Exception:
+            return []
+        devices: list[dict] = []
+        for line in out.splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(d, dict) and d.get("id"):
+                devices.append({"id": d["id"], "name": d.get("name", d["id"]), "default": bool(d.get("default"))})
+        return devices
 
 
 class MacOSPlatform(Platform):

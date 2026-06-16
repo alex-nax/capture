@@ -20,7 +20,7 @@ import threading
 from pathlib import Path
 
 from . import platform as _platform
-from .util import fs_stamp, now
+from .util import descendant_pids, fs_stamp, now
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +71,7 @@ class Screenshotter:
         out_dir: Path,
         *,
         pid: int | None = None,
+        window_id: int | None = None,
         app_name: str | None = None,
         interval: float = 1.0,
         fmt: str = "png",
@@ -85,6 +86,7 @@ class Screenshotter:
 
         self.out_dir = out_dir
         self.pid = pid
+        self.window_id = window_id
         self.app_name = app_name
         self.interval = max(0.05, float(interval))
         self.fmt = fmt
@@ -121,15 +123,39 @@ class Screenshotter:
     # -- capture --------------------------------------------------------------
 
     def _resolve_window_id(self) -> int | None:
+        # An explicitly picked window wins: target that exact id for the whole
+        # session (a CGWindowID/HWND is stable for the window's lifetime). This is
+        # what makes "capture the 2nd Chrome window" grab the right one — its two
+        # windows share a pid, so primary() can't tell them apart.
+        if self.window_id is not None:
+            self._last_wid = self.window_id
+            return self.window_id
         if self.pid is None and self.app_name is None:
             return None
         w = self._finder.primary(pid=self.pid, app_name=self.app_name)
+        if w is None and self.pid is not None:
+            # No window owned by the target pid itself — it may be a launcher whose
+            # real window belongs to a child process (shell→wine→game, electron,
+            # java). Look for the largest window owned by a descendant (GitHub #2).
+            w = self._descendant_primary(self.pid)
         if w:
             self._last_wid = w.window_id
             return w.window_id
         # Window not on the current Space right now; keep using the last known id
         # (the grabber still targets it) rather than falling back to whole-screen.
         return self._last_wid
+
+    def _descendant_primary(self, pid: int):
+        """The largest on-screen window owned by a descendant of ``pid`` (or None)."""
+        kids = descendant_pids(pid)
+        if not kids:
+            return None
+        # find() is largest-area-first, so the first descendant-owned window is the
+        # natural "primary" — matching WindowFinder.primary()'s convention.
+        for w in self._finder.find():
+            if w.pid in kids:
+                return w
+        return None
 
     def _capture_once(self) -> None:
         ts = now()

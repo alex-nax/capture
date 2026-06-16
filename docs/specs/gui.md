@@ -46,7 +46,14 @@ a frozen daemon with on-device mlx ASR.
   `Contents/Resources/captured/` (with the signed `audiocap` helper beside it), and
   bundles the skill in `Contents/Resources/skill`. Signs inside-out so the helper keeps
   its stable `com.local.audiocap` identity (TCC-grant persistence).
-  - `gui/src/main.rs` — `Application::new().run(...)`, opens one window.
+  - `gui/src/main.rs` — `Application::new().with_assets(Assets).run(...)`, opens one window.
+  - `gui/src/assets.rs` — `Assets`, a gpui `AssetSource` serving the embedded SVG icons
+    (`include_bytes!` of `gui/assets/icons/*.svg`, Lucide/MIT). Wired via `with_assets`.
+
+**Icons:** real SVG (not emoji/Unicode glyphs) via gpui's `svg()` element, which rasterizes
+each icon to an alpha mask tinted by `text_color`. The `icon(name, size, color)` helper in
+`app.rs` renders `svg().path("icons/<name>.svg")`. Add an icon by dropping an SVG in
+`gui/assets/icons/` and listing it in `assets.rs::ICONS`.
 
 ## Public contract
 
@@ -66,24 +73,60 @@ a frozen daemon with on-device mlx ASR.
   detached (`bundled_daemon()` + `spawn_detached()`) so the app is self-contained — no
   separate `capture daemon start`. It then does a brief blocking initial load (health +
   sessions + windows) and starts a poll loop.
+- **Agent mode (`CAPTURE_AGENT=1`):** when launched by the native menu-bar agent
+  ([agent.md](agent.md)) the GPUI process is *just the window* — it builds **no** tray
+  (the agent owns the menu bar), does **not** spawn the daemon (the agent owns the
+  lifecycle), and **exits when its window closes** (`main.rs` registers
+  `on_window_closed → cx.quit()`, since GPUI doesn't auto-quit on last-window-close). Run
+  standalone (dev, no agent) it keeps its own tray + daemon auto-spawn and persists.
 - **Poll loop:** `cx.spawn` + `Timer::after(1.5s)`; each tick **re-discovers** the daemon
   (so it attaches to the just-spawned bundled one) and fetches health + sessions on the
   **background executor** (blocking ureq off the main thread), updating the view via
   `WeakEntity::update` + `cx.notify()`. Ends when the view drops.
-- **Window picker:** the `/v1/windows` list; clicking a row selects it (`selected`).
-  "Refresh windows" re-fetches.
-- **Start:** "Start capture" POSTs `/v1/sessions` for the selected window
-  (`pid`, `audio_source:"app"`, 2 s interval) into `~/.capture/runs`; the daemon's
-  shared registry means the new session appears in the list (and to the CLI / any
-  MCP agent) on the next poll.
-- **Stop:** each running session row has a "Stop" button → `POST .../stop`.
-- **Live detail pane:** clicking a session (or auto-selecting the newest running one)
-  tracks it: a backfill of its transcript via `GET .../transcript`, then a background
-  SSE thread on `/v1/events` (which re-discovers the daemon each reconnect, so it
-  attaches to the bundled daemon spawned after launch) appends new `transcript_segment`
-  text and updates the latest `screenshot_taken` path into a shared `LiveState`. The pane renders the
-  latest screenshot via `img(PathBuf)` and the last ~12 transcript lines; the poll
-  loop's `cx.notify()` repaints it ~1×/s.
+- **Window picker (grouped, multi-select):** the `/v1/windows` list **grouped by application**
+  (first-seen order). Each group is a header (`App  (N)` + a 🎤 mic radio) followed by a **checkbox
+  row** per window (`☑/☐` + title). `checked: HashSet<window_id>` holds the selection; you can check
+  windows across **several apps** at once. "Refresh windows" re-fetches (and the mic device list). A
+  blank title shows `(untitled window)` — macOS redacts `kCGWindowName` for processes **without Screen
+  Recording permission**.
+- **Mic selector:** a `Mic:` row of chips — **No mic** + one chip per input device from
+  `GET /v1/audio/mics` (`mics`, fetched once a daemon appears + on Refresh). The chosen device id
+  (`mic_device`) persists in `gui-settings.json`. The 🎤 radio on a group header picks the single app
+  (`mic_app`) the mic attaches to — see Start.
+- **Start (multi-session):** "Start capture" POSTs **one `/v1/sessions` per checked window** into
+  `~/.capture/runs` (sequentially), each with `pid`, **`window_id`** (pins screenshots to the exact
+  window — pid alone can't disambiguate two windows of one process, e.g. two Chrome windows),
+  `audio_source:"app"`, and the persisted capture-quality. **Audio is deduped per app**: only the
+  first checked window of each `pid` gets `capture_audio:true` (macOS audio is per-app — see
+  `audio.md`); the rest are screenshots-only. If a device is selected and the window's app matches the
+  🎤 `mic_app`, that first session also gets `mic_device` (a **separate** mic track). The shared
+  registry means every new session appears in the list (and to the CLI / any MCP agent) on the next
+  poll. `checked` clears on success.
+- **Launch & Capture (process/URL):** a minimal single-line input (`cmd_input`, a
+  focusable `div` + `track_focus`/`on_key_down`: printable `key_char`, backspace,
+  ⌘V paste, Enter = launch — no IME/selection) + a button POST `/v1/sessions` with
+  `command` (launch mode). A URL is just a command, e.g. `open https://…`.
+- **Sessions list:** newest first, all sessions (no 6-row truncate; the page scrolls).
+  Each row has compact **SVG icon** actions (Lucide, via the `AssetSource` — see Icons):
+  **folder** (`open` the session's `dir` in Finder), **clipboard** (copy a ready-to-paste
+  summarization prompt for a coding agent; `cx.write_to_clipboard`), and **stop** (running)
+  or **trash** (finished). Clicking the row body **opens the Playback screen** (below).
+- **Delete confirmation:** the trash icon sets `confirm_delete` (it does NOT delete
+  immediately); a modal overlay (an occluding dim backdrop + a centered card with
+  **Cancel** / **Delete**) confirms, then `POST .../delete`.
+- **Playback screen (3rd top-level screen):** clicking a session opens `playback` (with a
+  `← Back` header). It tracks the session for live SSE (backfill via `GET .../transcript`,
+  then `/v1/events` appends `transcript_segment` + updates `screenshot_taken` into
+  `LiveState`). **Running** sessions show the live latest screenshot (`img(PathBuf)`) + the
+  recent transcript ("● live"). **Finished** sessions load `screenshots/` + `transcript.jsonl`
+  + `mic_transcript.jsonl` from disk off the main thread (filenames/segment `start`/`end` are
+  ISO stamps parsed to epoch by `parse_iso_epoch`, no `chrono`) and render a **video-style
+  scrubber**: a draggable timeline + transport (`skip-back` / `rewind −5s` / `play`·`pause` /
+  `fast-forward +5s` / `skip-forward` + `m:ss / m:ss`) that moves the shown screenshot (last
+  frame ≤ playhead) and the active subtitle (segment spanning the playhead; mic lines marked
+  with the mic icon) through time. Play auto-advances via a ~200 ms ticker. The scrubber maps
+  mouse-x to time using the content width (`window.viewport_size()`), drag handled on the root
+  like the scrollbar (`pb_dragging`).
 - **Menu-bar (tray):** a status item built on the main thread inside the GPUI run
   loop (`tray.rs`). Its title tracks the running-capture count (`● capture` idle,
   `⦿ N` while N run), updated from the GPUI tray loop (`cx.spawn` + 250 ms `Timer`)
@@ -108,21 +151,59 @@ a frozen daemon with on-device mlx ASR.
   (`GET /v1/asr/models`, polled). Each row shows the model + size and a status:
   `● active` (downloaded), `● active · needs download` in **amber** when the active
   model (e.g. the default `large-v3-turbo`) isn't fetched yet, `✓ downloaded`, or a
-  live `↓ NN%` while downloading. The action is a **Download** button for any
-  not-yet-downloaded model (including an un-downloaded active one) and a **Use**
-  button for a downloaded-but-inactive model. **Download** POSTs
+  live `↓ NN%` while downloading. While a download is in flight the row also shows a
+  thin **determinate progress bar** (a `relative(fraction)`-width fill) under the
+  header, so progress is visible at a glance, not just as a percentage. The action is
+  a **Download** button for any not-yet-downloaded model (including an un-downloaded
+  active one), a **Use** button for a downloaded-but-inactive model, and a **Remove**
+  button (amber-red) for any downloaded model. **Download** POSTs
   `/v1/asr/models/download` (the daemon fetches in the background); progress arrives as
   `asr_download` events on the same SSE stream and is accumulated into
   `LiveState.asr_progress` (repo → fraction) — these events have **no `session_id`**, so
   the SSE thread handles them *before* the session filter that would drop them.
-  **Use** POSTs `/v1/asr/model` to set the active model. The runtime lives in the
+  **Use** POSTs `/v1/asr/model` to set the active model. **Remove** POSTs
+  `/v1/asr/models/delete` to free the model's weights from the HF cache (removing the
+  active model just reverts it to "active · needs download"); the poll loop then flips
+  the row back to **Download**. The runtime lives in the
   daemon (mlx); if a daemon lacks it, `backend_available:false` shows a "runtime
   unavailable" note instead of the list. Weights download on demand (never bundled).
-- **Layout:** the single window is one vertically-scrolling column
-  (`#root` + `overflow_y_scroll`) — the content (windows/sessions, model manager, live
-  detail pane) exceeds the viewport, so it scrolls rather than clipping. The detail
-  pane is content-sized (`flex_shrink_0`), not `flex_1` (which would grab the scroll
-  container's unbounded main axis).
+- **Three screens:** a header button (top-right) shows a **settings** icon ("Settings") on
+  the dashboard and a **chevron-left** ("Back") on a sub-screen. Exactly one of **dashboard**
+  (Refresh/Start, Launch input, windows/sessions lists), **Settings**, or **Playback** renders
+  — gated by `let playback = self.playback.is_some(); let sett = settings && !playback; let dash
+  = !settings && !playback;` (panels use `sett.then(|| …)` / `dash.then(|| …)` / `playback.then(||
+  render_playback)`). Settings holds: **Capture quality** (`chip` toggles —
+  PNG/JPEG `shot_format`, resolution `shot_res_ix` over `RES_PRESETS`, JPEG quality when
+  jpeg; merged into the `/v1/sessions` body via `shot_settings()` for new captures). These
+  prefs (and the selected `mic_device`) **persist across relaunch**: each change writes
+  `~/.capture/gui-settings.json` (`save_settings`) and `new()` seeds the fields from it
+  (`load_settings`) — they live in the window process (a UI default), not the daemon. Settings also holds the
+  **Whisper model manager**, the **Permissions** panel, and the **skill installer**. Each
+  panel is rendered via `settings.then(|| …)` / `(!settings).then(|| …)` so only one
+  screen's panels exist at a time.
+- **Layout & scrolling:** the window is **one** vertically-scrolling column (`#root`,
+  `track_scroll(&root_scroll)` + `overflow_y_scroll`); the content (windows/sessions,
+  model manager, live detail pane) exceeds the viewport. There is deliberately **no
+  nested scroll** — bare gpui 0.2.2 has no scrollbar widget and nested `overflow_scroll`
+  regions fight the root for the wheel ("scroll together"), so a single scroll context is
+  used. A **custom draggable scrollbar** (`scrollbar()` + `on_scrollbar_drag()`) is drawn
+  as an absolute overlay on the right from the `ScrollHandle`'s prior-frame
+  `bounds()`/`max_offset()`/`offset()` (thumb size = viewport/content; auto-hidden when
+  content fits; drag updates `set_offset`). The detail pane is content-sized
+  (`flex_shrink_0`), not `flex_1` (which would grab the scroll container's unbounded axis).
+- **Permissions (macOS):** a panel (`perm_row`) with a row each for **Screen Recording**
+  and **Microphone**, each showing the daemon's status (`GET /v1/permissions`, polled:
+  `✓ granted` / `✗ not granted` amber-with-why / `not requested`) + **Grant** + **Settings**
+  (`x-apple.systempreferences:…?Privacy_ScreenCapture|Privacy_Microphone` for grant **or
+  revoke**). Neither prompt goes through the headless daemon (it aborts): **Screen
+  Recording** is prompted in THIS process (`screen_perm::request()`, CoreGraphics FFI to
+  `CGRequestScreenCaptureAccess`); **Microphone** by spawning the bundled **agent one-shot**
+  (`<exe dir>/CaptureBar --request-mic` → Swift `AVCaptureDevice.requestAccess`). Both work
+  because every binary shares the Developer-ID **Team ID**, so the grant reaches the daemon
+  and persists (the whole point of #31). A **Restart daemon** button applies a new Screen
+  Recording grant: POSTs
+  `/v1/admin/shutdown`; the **menu-bar agent auto-respawns** the daemon (no app quit/reopen).
+  The panel is hidden on non-macOS.
 - All daemon calls run off the main thread (background executor / a dedicated SSE
   thread); failures land in the status line, never crash the UI.
 

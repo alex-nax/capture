@@ -91,8 +91,14 @@ class DaemonClient:
     def stop(self, sid: str) -> dict:
         return self._request("POST", f"/v1/sessions/{sid}/stop", body={}, timeout=120.0)
 
+    def delete(self, sid: str) -> dict:
+        return self._request("POST", f"/v1/sessions/{sid}/delete", body={})
+
     def transcript(self, sid: str, tail: int | None = None) -> dict:
         return self._request("GET", f"/v1/sessions/{sid}/transcript", params={"tail": tail})
+
+    def audio_mics(self) -> dict:
+        return self._request("GET", "/v1/audio/mics")
 
     def asr_models(self) -> dict:
         return self._request("GET", "/v1/asr/models")
@@ -102,6 +108,12 @@ class DaemonClient:
 
     def asr_set_model(self, repo: str) -> dict:
         return self._request("POST", "/v1/asr/model", body={"repo": repo})
+
+    def permissions(self) -> dict:
+        return self._request("GET", "/v1/permissions")
+
+    def request_permission(self, kind: str = "screen_recording") -> dict:
+        return self._request("POST", "/v1/permissions/request", body={"kind": kind})
 
     def shutdown(self) -> dict:
         return self._request("POST", "/v1/admin/shutdown", body={}, timeout=5.0)

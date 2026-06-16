@@ -41,6 +41,8 @@ pub struct Session {
     pub audio_status: String,
     #[serde(default)]
     pub window_title: Option<String>,
+    #[serde(default)]
+    pub dir: String,
 }
 
 #[derive(Deserialize)]
@@ -81,6 +83,17 @@ pub struct AsrModel {
 }
 
 #[derive(Deserialize, Clone, Default)]
+pub struct Permissions {
+    #[serde(default)]
+    #[allow(dead_code)] // wire shape; UI keys off the per-permission fields
+    pub platform: String,
+    #[serde(default)]
+    pub screen_recording: String,
+    #[serde(default)]
+    pub microphone: String,
+}
+
+#[derive(Deserialize, Clone, Default)]
 pub struct AsrModels {
     #[serde(default)]
     pub backend_available: bool,
@@ -89,6 +102,20 @@ pub struct AsrModels {
     pub active: String,
     #[serde(default)]
     pub models: Vec<AsrModel>,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct AudioDevice {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub default: bool,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct AudioDevices {
+    #[serde(default)]
+    pub devices: Vec<AudioDevice>,
 }
 
 #[derive(Deserialize)]
@@ -227,6 +254,34 @@ impl Daemon {
         parse_session_or_error(resp)
     }
 
+    /// Delete a finished capture (its dir + record). Errs (400) on a live session.
+    pub fn delete(&self, id: &str) -> Result<(), String> {
+        let resp = Self::agent()
+            .post(&format!("{}/v1/sessions/{}/delete", self.endpoint, id))
+            .set("Authorization", &self.auth())
+            .send_json(serde_json::json!({}));
+        match resp {
+            Ok(_) => Ok(()),
+            Err(ureq::Error::Status(_, r)) => Err(r
+                .into_json::<serde_json::Value>()
+                .ok()
+                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+                .unwrap_or_else(|| "delete failed".into())),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// Available microphone/input devices for the mic selector.
+    pub fn audio_mics(&self) -> Result<AudioDevices, String> {
+        Self::agent()
+            .get(&format!("{}/v1/audio/mics", self.endpoint))
+            .set("Authorization", &self.auth())
+            .call()
+            .map_err(|e| e.to_string())?
+            .into_json()
+            .map_err(|e| e.to_string())
+    }
+
     /// The Whisper model catalog (+ downloaded/active/downloading flags).
     pub fn asr_models(&self) -> Result<AsrModels, String> {
         Self::agent()
@@ -246,6 +301,33 @@ impl Daemon {
     /// Set the active Whisper model (persisted; new captures use it).
     pub fn asr_set_model(&self, repo: &str) -> Result<(), String> {
         self.asr_post("/v1/asr/model", repo)
+    }
+
+    /// Remove a downloaded model's weights from the HF cache (frees disk).
+    pub fn asr_delete(&self, repo: &str) -> Result<(), String> {
+        self.asr_post("/v1/asr/models/delete", repo)
+    }
+
+    /// Ask the daemon to stop (the menu-bar agent respawns it — used to restart so a
+    /// just-granted Screen Recording right takes effect).
+    pub fn shutdown(&self) -> Result<(), String> {
+        Self::agent()
+            .post(&format!("{}/v1/admin/shutdown", self.endpoint))
+            .set("Authorization", &self.auth())
+            .send_json(serde_json::json!({}))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// macOS TCC status (e.g. `screen_recording: "granted"|"denied"`).
+    pub fn permissions(&self) -> Result<Permissions, String> {
+        Self::agent()
+            .get(&format!("{}/v1/permissions", self.endpoint))
+            .set("Authorization", &self.auth())
+            .call()
+            .map_err(|e| e.to_string())?
+            .into_json()
+            .map_err(|e| e.to_string())
     }
 
     fn asr_post(&self, path: &str, repo: &str) -> Result<(), String> {

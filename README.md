@@ -223,10 +223,15 @@ signed `audiocap` helper beside it) and ad-hoc signs everything. Open the DMG an
 
 **What the app needs / does:**
 
-- It is **self-contained** — on launch the GUI auto-spawns its **bundled** frozen daemon (detached,
-  so captures outlive the app) if one isn't already running. No repo, no venv, no
-  `capture daemon start`. (If you *do* have a daemon running — e.g. from the repo — the app attaches
-  to that one instead.)
+- Launching **Capture.app** runs a small **menu-bar agent** (`CaptureBar`) — it lives in the menu
+  bar (top-right, `● capture`), with **no Dock icon**. It is the persistent part: it spawns the
+  bundled daemon, shows capture status, and opens the window. **Closing the window keeps the agent
+  (and your captures) running** — re-open from the menu-bar **Open Window**. Use the menu-bar
+  **Quit Capture** to fully exit (it stops the daemon when idle, so the app isn't "in use" if you
+  want to delete/replace it).
+- It is **self-contained** — the agent auto-spawns its **bundled** frozen daemon (detached) if one
+  isn't already running. No repo, no venv, no `capture daemon start`. (If a daemon is already
+  running — e.g. from the repo — it attaches to that one instead.)
 - **On-device transcription works out of the box** — the app bundles the mlx Whisper runtime.
   Whisper **model weights** are *not* bundled (they're large); download them from the app's
   **Whisper models** panel (Download → pick a size; it shows live progress), then **Use** to make

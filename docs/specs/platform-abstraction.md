@@ -19,9 +19,11 @@ on a Windows/NVIDIA box, which also enables the Whisper-vs-Nemotron benchmark (f
   by `sys.platform` (`darwin`→macos, `win32`→windows), overridable by env `CAPTURE_PLATFORM`,
   and caches one `Platform` per resolved name (`_cache`).
 - `src/capture_mcp/core/platform/macos.py` — `MacWindowFinder` (delegates to `capture_mcp.core.windows`,
-  the Quartz module), `MacScreenGrabber` (`screencapture` + `sips`), `MacAudioSource` (the
-  ScreenCaptureKit `audiocap` helper, else `ffmpeg` `avfoundation`), `MacOSPlatform`. Also owns
-  `helper_path()` and the screenshot helpers `_sc_format`/`_sips_format`/`_png_size`.
+  the Quartz module), `MacScreenGrabber` (`screencapture` + `sips`), `MacAudioSource` — the bundled
+  `audiocap` helper for BOTH app audio (`--pid`/`--bundle`, ScreenCaptureKit) and the microphone
+  (`--mic`, AVFoundation `AVCaptureSession`); **no ffmpeg**. It also enumerates input devices via
+  `audiocap --list-mics` (`list_input_devices()`). `MacOSPlatform`. Also owns `helper_path()` and the
+  screenshot helpers `_sc_format`/`_sips_format`/`_png_size`.
 - `src/capture_mcp/core/platform/windows.py` — `Win32WindowFinder` (`EnumWindows`), `Win32ScreenGrabber`
   (GDI `BitBlt`/`PrintWindow` → GDI+ scale + encode; sets per-monitor **DPI awareness** at import so
   captures aren't cropped on a scaled display), `Win32AudioSource` (WASAPI system loopback),
@@ -56,10 +58,12 @@ on a Windows/NVIDIA box, which also enables the Whisper-vs-Nemotron benchmark (f
   in-process backends (Windows GDI+) ignore it.
 
 ### `AudioSource`
-- `command(*, pid, bundle_id, source, rate) -> tuple[list[str], str] | None` — `(argv, mode)`
+- `command(*, pid, bundle_id, source, rate, mic_device=None) -> tuple[list[str], str] | None` — `(argv, mode)`
   for a process whose **stdout is 16 kHz mono signed-16-bit-LE PCM**, or `None` if no source can
   satisfy the request. `source` is `"auto"|"app"|"mic"`; `mode` is the kind selected
-  (`"app"|"mic"`).
+  (`"app"|"mic"`). `mic_device` selects the input device when `source=="mic"` (`None` = default input).
+- `list_input_devices() -> list[{id,name,default}]` — available mic/input devices (default impl `[]`;
+  macOS shells `audiocap --list-mics`).
 
 ### `Platform` + `current()`
 `Platform` holds `.window_finder`, `.screen_grabber`, `.audio_source`. `current()` returns the

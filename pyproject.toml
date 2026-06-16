@@ -11,6 +11,9 @@ dependencies = [
     # on Windows, where the Win32 backend uses ctypes (no extra deps). The Windows
     # screenshot backend uses GDI+ (gdiplus.dll), also dependency-free.
     "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
+    # macOS Microphone permission status/request (AVCaptureDevice). Screen Recording
+    # uses Quartz (above); both back the GUI's permissions panel.
+    "pyobjc-framework-AVFoundation>=10.0; sys_platform == 'darwin'",
 ]
 
 [project.optional-dependencies]

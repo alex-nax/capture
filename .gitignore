@@ -7,6 +7,13 @@ dist/
 build/
 .DS_Store
 
+# Notarization / signing secrets — LOCAL ONLY, never commit
+.asp.capture
+.notary-password
+.notary-creds
+*.secret
+agent/build/
+
 # transient capture session output (anchored to repo root so it does NOT match
 # .claude/skills/capture-* skills)
 /capture-*/

@@ -9,6 +9,16 @@
 // Usage:
 //   audiocap --pid <PID> [--rate 16000]
 //   audiocap --bundle <bundle.id> [--rate 16000]
+//   audiocap --mic [<deviceUniqueID>] [--rate 16000]   (microphone via AVCaptureSession)
+//   audiocap --list-mics                                (print input devices as JSON lines, exit)
+//
+// The --mic path uses AVFoundation AVCaptureSession (NOT ScreenCaptureKit), so it
+// needs only the Microphone permission — no Screen Recording — and no ffmpeg. It
+// emits the SAME s16le PCM + READY contract as the app path, so the parent treats
+// app audio and mic audio identically (capture-mcp records the mic as a separate
+// track: mic.s16le / mic_transcript.jsonl). NOTE: no echo cancellation — a laptop's
+// built-in mic will pick up its own speakers; use headphones. (System voice-processing
+// AEC was tried but it ducks/mutes other apps' audio — tracked as a feature, #38.)
 //
 // stdout : raw PCM (s16le, mono, <rate> Hz) — pipe this.
 // stderr : human-readable status. Diagnostics (content counts, target) come
@@ -37,9 +47,17 @@ let targetPID = argValue("--pid").flatMap { Int32($0) }
 let targetBundle = argValue("--bundle")
 let targetRate = Double(argValue("--rate") ?? "16000") ?? 16000
 let captureSystem = CommandLine.arguments.contains("--system")  // whole-display audio
+let listMics = CommandLine.arguments.contains("--list-mics")
+let micMode = CommandLine.arguments.contains("--mic")
+// The value after --mic is the device uniqueID; absent / another flag / "default"
+// all mean "system default input device".
+let micDeviceID: String? = {
+    guard let v = argValue("--mic"), !v.hasPrefix("--"), v != "default" else { return nil }
+    return v
+}()
 
-if targetPID == nil && targetBundle == nil && !captureSystem {
-    FileHandle.standardError.write("usage: audiocap --pid <PID> | --bundle <id> | --system [--rate 16000]\n".data(using: .utf8)!)
+if targetPID == nil && targetBundle == nil && !captureSystem && !micMode && !listMics {
+    FileHandle.standardError.write("usage: audiocap --pid <PID> | --bundle <id> | --system | --mic [<id>] | --list-mics [--rate 16000]\n".data(using: .utf8)!)
     exit(2)
 }
 
@@ -47,9 +65,35 @@ func logErr(_ s: String) {
     FileHandle.standardError.write((s + "\n").data(using: .utf8)!)
 }
 
+// ---- microphone device listing (--list-mics) --------------------------------
+// One JSON object per stdout line: {"id","name","default"}. Used by the daemon's
+// GET /v1/audio/mics to populate the GUI's mic selector. AVFoundation only — no
+// ScreenCaptureKit, no ffmpeg, needs no permission to enumerate.
+
+func listMicrophonesAndExit() -> Never {
+    // `.microphone` covers built-in and USB/external audio inputs; we deliberately
+    // omit `.external` (Continuity-Camera iPhone mics, plus a deprecation warning).
+    let discovery = AVCaptureDevice.DiscoverySession(
+        deviceTypes: [.microphone],
+        mediaType: .audio,
+        position: .unspecified
+    )
+    let defaultID = AVCaptureDevice.default(for: .audio)?.uniqueID
+    for d in discovery.devices {
+        let obj: [String: Any] = ["id": d.uniqueID, "name": d.localizedName, "default": d.uniqueID == defaultID]
+        if let data = try? JSONSerialization.data(withJSONObject: obj),
+           let line = String(data: data, encoding: .utf8) {
+            print(line)
+        }
+    }
+    exit(0)
+}
+
+if listMics { listMicrophonesAndExit() }
+
 // ---- stream output handler --------------------------------------------------
 
-final class AudioSink: NSObject, SCStreamOutput, SCStreamDelegate {
+final class AudioSink: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     let outRate: Double
     var converter: AVAudioConverter?
     var outFormat: AVAudioFormat?
@@ -65,10 +109,22 @@ final class AudioSink: NSObject, SCStreamOutput, SCStreamDelegate {
         )
     }
 
+    // ScreenCaptureKit app/system audio.
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .audio, sampleBuffer.isValid else { return }
         guard let pcm = makeInputBuffer(from: sampleBuffer) else { return }
+        convertAndWrite(pcm)
+    }
 
+    // AVCaptureSession microphone audio (the --mic path). Same conversion + output
+    // contract as the ScreenCaptureKit path above, so the parent can't tell them apart.
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard sampleBuffer.isValid, let pcm = makeInputBuffer(from: sampleBuffer) else { return }
+        convertAndWrite(pcm)
+    }
+
+    // Convert an audio PCM buffer to s16le @ outRate mono and write it to stdout.
+    func convertAndWrite(_ pcm: AVAudioPCMBuffer) {
         // Lazily build the converter from the real input buffer's format. The
         // converter instance is retained across callbacks, so any resampler tail
         // carries into the next buffer; only the final buffer's tail at stream
@@ -177,6 +233,7 @@ signal(SIGPIPE, SIG_IGN)
 let audioQueue = DispatchQueue(label: "audiocap.audio")
 var signalSources: [DispatchSourceSignal] = []  // retained for the process lifetime
 var captureStream: SCStream?  // global so ARC never releases it mid-capture
+var micSession: AVCaptureSession?  // retained for the --mic path's process lifetime
 
 // Terminations can be requested concurrently (EPIPE on the audio queue, a signal
 // handler, the stream-error delegate). Funnel them so exactly one thread exits.
@@ -254,7 +311,44 @@ func enumerateShareableContent() async -> SCShareableContent? {
     return nil
 }
 
-Task {
+// ---- microphone capture (--mic) ---------------------------------------------
+// AVFoundation AVCaptureSession on the chosen (or default) input device. Emits the
+// same s16le PCM + READY contract as the ScreenCaptureKit path. Needs the Microphone
+// permission only (no Screen Recording). NOTE: no echo cancellation — see the header
+// (system voice-processing AEC ducks other apps' audio; tracked as feature #38).
+
+func startMicCapture() {
+    let device: AVCaptureDevice? =
+        (micDeviceID.flatMap { AVCaptureDevice(uniqueID: $0) }) ?? AVCaptureDevice.default(for: .audio)
+    guard let device else { logErr("no audio input device available"); shutdown(3) }
+    guard let input = try? AVCaptureDeviceInput(device: device) else {
+        logErr("cannot open microphone '\(device.localizedName)' — check Microphone permission")
+        shutdown(3)
+    }
+    let session = AVCaptureSession()
+    guard session.canAddInput(input) else { logErr("cannot add mic input"); shutdown(3) }
+    session.addInput(input)
+    let output = AVCaptureAudioDataOutput()
+    output.setSampleBufferDelegate(sink, queue: audioQueue)
+    guard session.canAddOutput(output) else { logErr("cannot add audio data output"); shutdown(3) }
+    session.addOutput(output)
+    micSession = session
+    // Stop cleanly on SIGINT/SIGTERM.
+    let stop: () -> Void = { stopping = true; micSession?.stopRunning(); shutdown(0) }
+    for s in [SIGTERM, SIGINT] {
+        signal(s, SIG_IGN)
+        let src = DispatchSource.makeSignalSource(signal: s, queue: .main)
+        src.setEventHandler(handler: stop)
+        src.resume()
+        signalSources.append(src)
+    }
+    session.startRunning()
+    logErr("READY rate=\(Int(targetRate)) channels=1 fmt=s16le target=mic:\(device.localizedName)")
+}
+
+if micMode { startMicCapture() }
+
+if !micMode { Task {
         guard let content = await enumerateShareableContent() else {
             logErr("startup failed: could not enumerate shareable content after 5 attempts")
             exit(5)
@@ -310,6 +404,7 @@ Task {
 
         logErr("target=\(capLabel); starting capture...")
         connect()
+    }
 }
 
 RunLoop.main.run()

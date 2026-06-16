@@ -1,5 +1,475 @@
 # Progress Log
 
+## Session 48 — 2026-06-16
+**Agent**: builder (macOS box, branch **main**) — feature #39 (plan: calm-dazzling-harbor.md).
+**Summary**: Session-list UX — proper SVG icons, a delete-confirmation modal, and a session **playback
+screen** with a video-style scrubber. GUI-only (no daemon change). Pruning + capabilities + re-transcribe
+deferred to tracked features #40/#41.
+- **Proper SVG icons (not emoji)**: Alex pushed back on emoji. Added a gpui **`AssetSource`**
+  (`gui/src/assets.rs`, `include_bytes!` of `gui/assets/icons/*.svg`, Lucide/MIT), wired via
+  `Application::with_assets(Assets)` in `main.rs`, and an `icon(name,size,color)` helper rendering
+  `svg().path("icons/<name>.svg")` (gpui masks + tints by `text_color`). Session-row actions
+  (folder/clipboard/stop/trash), the mic radio, and the header (settings/chevron-left) now use SVG.
+- **Delete confirmation**: trash icon sets `confirm_delete`; a modal overlay (occluding `rgba` backdrop +
+  centered Cancel/Delete card) confirms before `delete_session`.
+- **Playback screen** (3rd top-level screen via `playback`/`sett`/`dash` gating + a `← Back` header):
+  clicking a session opens it. Running → live latest shot + transcript. Finished → reads `screenshots/` +
+  `transcript.jsonl` + `mic_transcript.jsonl` off-thread (`load_playback_data`; ISO stamps → epoch via
+  `parse_iso_epoch`, no chrono) and renders a **scrubber** (`pb-track` drag + click-seek via
+  `window.viewport_size()`) + transport (start/−5s/play·pause/+5s/end + `m:ss`), moving the
+  screenshot-at-playhead + active subtitle; play auto-advances (`pb_start_ticker`, 200 ms).
+- **Tracked**: features.json **#39** (this work, flip true after deploy verify), **#40** (session pruning +
+  capability status icons — daemon prune endpoint + summary flags), **#41** (re-transcribe saved session
+  with a chosen model). Specs synced (`gui.md`).
+**Verification**: `cargo build --release` clean (no warnings); standalone GUI ran 4 s with no panic
+(render incl. SVG icons + playback executed). Deploy (skip-freeze, GUI-only) + visual check: end of session.
+
+---
+
+## Session 47 — 2026-06-16
+**Agent**: builder (macOS box, branch **main**)
+**Summary**: **Reverted the mic echo-cancellation (Session 45)** — it broke playback. Alex: "When I
+start capture now I do not hear anything (but it adds to transcript) and microphone transcript is empty."
+- **Root cause**: the Session-45 AEC used the macOS voice-processing unit
+  (`AVAudioEngine.inputNode.setVoiceProcessingEnabled(true)`). It DOES echo-cancel, but it engages a
+  system **communication audio mode** that ducks/mutes other apps' output (→ "I don't hear anything")
+  and over-cancels the mic to near-silence (→ empty mic transcript). Confirmed: reverted `--mic` RMS=224
+  (real audio) vs the AEC build's near-silent mic.
+- **Fix**: reverted `audiocap.swift --mic` to plain **`AVCaptureSession`** (the Session-44 path that
+  doesn't touch the output): removed AVAudioEngine/VPIO + the CoreAudio device-ID lookup + the
+  `--aec`/`--no-aec` flags + the AudioToolbox/CoreAudio frameworks. Mic now records cleanly; the user
+  hears the app again. **Headphones are the interim answer for echo.**
+- **Tracked as features.json #38** (mic echo/noise cancellation WITHOUT breaking playback — proper fix
+  likely offline NLMS using the captured app audio as the reference, or a non-invasive AEC config).
+- Helper-only change → fast build (skip freeze). Specs reverted (`helper-contract.md`, `audio.md`).
+**Verification**: reverted helper `--mic` → real audio (rms 224), no voice-processing line; built OK.
+Deploy: see end of session.
+
+---
+
+## Session 46 — 2026-06-16
+**Agent**: builder (macOS box, branch **main**)
+**Summary**: MCP-surface parity for the picker/mic work + confirmed echo cancellation end-to-end
+through MCP. Alex: "start capture on chrome window through mcp (new session in gui) with mic, see if
+handled correctly."
+- **MCP `capture_start` predated the GUI's window_id/mic work** — added `window_id` and `mic_device`
+  params (forwarded via `DaemonClient.start(**kwargs)` → `/v1/sessions`), plus a new **`list_audio_devices`**
+  MCP tool (+ `DaemonClient.audio_mics()` → `GET /v1/audio/mics`). MCP server runs from source (not the
+  frozen daemon), so live immediately. `mcp-server.md` synced (now 5 tools).
+- **Verified through the actual MCP tool path** (daemon-first → deployed daemon → GUI): `list_windows`
+  + `list_audio_devices` + `capture_start(pid, window_id, mic_device="default")` on a Chrome window.
+  Session appeared in `/v1/sessions` (so in the GUI), recording all 4 tracks: `audio.s16le` (1 MB) +
+  `transcript.jsonl`, `mic.s16le` (1 MB, AEC) + `mic_transcript.jsonl`, 17 per-window screenshots.
+- **Echo cancellation CONFIRMED**: with the Batumi YouTube video on speakers, the **app** transcript had
+  the Russian narration; the **mic** transcript had only Whisper's silence-hallucination ("Thank you.")
+  — i.e. the speaker bleed was cancelled, not transcribed into the mic track. (If AEC had failed the mic
+  transcript would mirror the app's.) Known: Whisper hallucinates on true silence — a VAD/silence gate is
+  a possible follow-up.
+**Status**: MCP path + AEC verified on the deployed/notarized build. Specs synced (`mcp-server.md`).
+
+---
+
+## Session 45 — 2026-06-16
+**Agent**: builder (macOS box, branch **main**)
+**Summary**: Echo cancellation for the mic track. Alex (on a laptop): the mic caught the speaker audio.
+- **Root cause**: laptop built-in mic picks up its own speaker output (acoustic echo) — the Session-44
+  mic path used `AVCaptureSession`, which has no echo cancellation.
+- **Fix (`audiocap.swift`, helper-only — no daemon change)**: rewrote `--mic` to use **`AVAudioEngine`**
+  with the system **voice-processing unit** (`inputNode.setVoiceProcessingEnabled(true)`) = acoustic
+  echo cancellation + noise suppression + AGC, **ON by default**; `--no-aec` for a raw capture. Device
+  selection now maps the AVCaptureDevice uniqueID → CoreAudio `AudioDeviceID` and sets it on the
+  engine's input unit (falls back to default). `AudioSink` refactored to a shared `convertAndWrite()`
+  used by both the SCStream callback and the engine tap. Linked CoreAudio + AudioToolbox.
+- Because only the **helper** changed (the daemon's `--mic <device>` command is unchanged), the build
+  **skips the freeze** (re-bundle the new helper + re-sign + notarize).
+**Verification**: `--mic` → "voice processing (echo cancellation) enabled", READY `aec=true`, 59 KB PCM;
+`--mic --no-aec` → `aec=false`, raw; `--list-mics` clean. Echo-removal *quality* is Alex's ear-test with
+speakers playing. Specs synced (`helper-contract.md`, `audio.md`). Deploy: see end of session.
+
+---
+
+## Session 44 — 2026-06-16
+**Agent**: builder (macOS box, branch **main**) — feature #37, planned in `~/.claude/plans/calm-dazzling-harbor.md`.
+**Summary**: Grouped multi-app window picker (checkboxes) + microphone selector (separate mic track,
+helper-native, no ffmpeg). Resolved with Alex: multiple apps captured simultaneously; **one audio per
+app**; mic attaches to **one** app as a **separate track** (not mixed); **no ffmpeg**.
+- **Helper (`audiocap.swift`)**: new `--list-mics` (AVCaptureDevice discovery → JSON lines
+  `{id,name,default}`) and `--mic [<id>]` (AVFoundation **AVCaptureSession** mic-only capture → same
+  s16le/READY contract as the app path; needs only Microphone permission). Shared CMSampleBuffer→s16le
+  `process()` between the SCStream and AVCapture delegates. Verified: list prints devices; `--mic`
+  emitted 64 KB PCM in ~2 s (48k→16k resample).
+- **Daemon**: `MacAudioSource.command(mic_device=…)` now builds `--mic` for `source="mic"` (**dropped
+  the ffmpeg branch**); `list_input_devices()` shells `--list-mics`; `GET /v1/audio/mics`. `AudioCapture`
+  gained `track`/`mic_device` (own filenames: `mic.s16le`/`mic_transcript.*`). `CaptureSession` starts a
+  **second** AudioCapture for the mic; `mic_device` on `StartSessionRequest` + `mic_status`/`mic_segments`
+  in the summary. Verified end-to-end: a session with `mic_device` wrote `mic.s16le(121844)` +
+  `mic_transcript.jsonl` alongside the app track.
+- **GUI**: picker grouped by app with checkbox rows (`checked: HashSet<window_id>`, multi-app) + a per-app
+  🎤 radio (`mic_app`); a `Mic:` device-selector row (`mics` from `/v1/audio/mics`, `mic_device` persisted
+  in gui-settings.json); `start_capture` spawns one session per checked window, dedupes app audio per pid
+  (`capture_audio` only on the first window of each pid), and sets `mic_device` on the first window of the
+  mic app. `daemon.rs`: `AudioDevice`/`AudioDevices` + `audio_mics()`. `cargo build --release` clean.
+- **Docs**: `audio.md`, `daemon.md`, `gui.md`, `platform-abstraction.md`, `helper-contract.md`, the
+  `audiocap.swift` header. **features.json #37** added (`passes:false` → flip after deployed verify). Smoke 68/68.
+**Verification (DEPLOYED, frozen daemon)**: re-froze + signed + bundled the new helper (Developer ID,
+`--mic`/`--list-mics` work) + redeployed. `GET /v1/audio/mics` returns devices via the frozen daemon;
+a real capture of a Chrome window recorded **`audio.s16le`=190 KB (app) + `mic.s16le`=192 KB (separate
+mic track) + 6 per-window screenshots together** — all three tracks at once. Smoke 68/68; GUI clean.
+**features.json #37 → passes:true.** DMG notarization finished after the local cp-deploy, so the
+installed `.app` was stapled separately (local cp has no quarantine, launches fine regardless). The
+GUI picker checkboxes / 🎤 radio / mic chips are a visual check, but the full daemon+helper path is proven.
+
+---
+
+## Session 43 — 2026-06-16
+**Agent**: builder (macOS box, branch **main**)
+**Summary**: Diagnosed an audio-duplication report. Alex: started sessions 60b42b + 3db935
+simultaneously on different videos in different windows, but "they have apparently captured one audio."
+- **Root cause = a hard macOS limit, not a bug.** Both sessions targeted the **same pid 1235** (two
+  windows of one browser). Evidence: 60b42b's window was the Batumi video, 3db935's was the NixOS
+  video, but BOTH transcripts contain the Batumi audio ("Чисто Дубай на берегу Черного моря"). The
+  `audiocap` helper builds `SCContentFilter(display:, including:[app], exceptingWindows:[])` —
+  ScreenCaptureKit (and Core Audio process taps) capture audio **per-application**, never per-window.
+  Two windows of one process ⇒ one shared audio stream. There is no per-window audio API.
+- **Improvement (honest surfacing, not a "fix"):** `server._start_session` now detects when a new
+  app-audio session's `pid` matches a live session already capturing that pid's audio, and appends a
+  session **note** ("audio: app pid N is already captured by session …; macOS captures audio per-app,
+  not per-window … Capture from separate processes for distinct audio."). So the duplication is
+  visible instead of looking like a bug. NOTE: screenshots ARE per-window now (Session 42 window_id);
+  only audio can't be split.
+- **Workaround for Alex**: distinct audio needs distinct processes — e.g. two different browser apps
+  (Chrome + Safari), not two windows of one.
+- **Specs synced**: `audio.md` (per-app limitation + the overlap note).
+**Verification**: predicate unit-tested with real `SessionRegistry`+`CaptureSession` — same-pid+app
+→ warns; different pid / new-session-mic / new-session-no-audio → no warn. py_compile OK.
+**NOT yet deployed** — daemon change needs a re-freeze; holding for Alex's go-ahead (the core finding
+is "can't be done per-window", so the deploy only adds the warning note).
+
+---
+
+## Session 42 — 2026-06-16
+**Agent**: builder (macOS box, branch **main**)
+**Summary**: Fixed a window-targeting bug. Alex: "I have 2 chrome windows… selected the second one
+for capture, but screenshots were for the first one, although the sound transcribed."
+- **Root cause**: `StartSessionRequest` only carried `pid`/`app_name` — never a `window_id`. The
+  screenshotter's `_resolve_window_id()` called `_finder.primary(pid=…)`, which returns the app's
+  *primary* window. Chrome's windows share one process pid, so "primary" ≠ the picked window → shots
+  of the wrong window. **Audio was right** because it's keyed per-process (pid), not per-window.
+- **Fix (carry `window_id` end-to-end)**: `StartSessionRequest.window_id` (optional refinement, not a
+  target — audio still per-pid) → `CaptureSession(window_id=…)` (also re-labels `window_title` from
+  the picked window) → `Screenshotter(window_id=…)`. `_resolve_window_id()` now returns the explicit
+  id verbatim every tick (a CGWindowID is stable for the window's lifetime; `primary()` never
+  consulted). GUI `start_capture` sends `"window_id": w.window_id` from the selected picker row.
+- **Also closed GitHub #2 (the "proper resolution" Alex pointed to)** — same bug class, deeper root:
+  a Wine game (shell→wine→`lithtech.exe`) screenshotted the whole desktop. The window belongs to a
+  **child process** (different pid than the launched shell), so `primary(pid=launcher)` found nothing
+  → whole-screen fallback. Fix: **descendant-pid discovery** — `util.descendant_pids(pid)` walks the
+  process tree (POSIX `ps -axo pid=,ppid=`); `screenshots._descendant_primary` returns the largest
+  window owned by any descendant. `_resolve_window_id` tries it when the pid owns no window. POSIX
+  only (Windows returns empty — its windows are owned by their own pid; Wine chains are the mac case).
+- **Specs synced**: `screenshots.md` (resolve order + descendant fallback), `daemon.md` (start-body
+  `window_id`), `gui.md` (picker sends window_id).
+**Verification**: (1) unit — `_resolve_window_id` returns the explicit id and asserts `primary()` is
+NOT called when window_id is set; falls back to `primary()` otherwise. (2) OS-level — captured two
+real windows by id (Zed 1280×720 landscape, Slack 754×945 portrait); each shot matched its target's
+aspect (2560×1440 / 1508×1890) → exact per-window capture. (3) #2 — `descendant_pids` found a real
+python→sleep child; a launcher owning no window resolved to its child's window (not whole-screen).
+(4) smoke 68/68; GUI build clean; daemon py_compile OK. NOTE: with the new GUI sending `window_id`, an
+OLD frozen daemon would 400 (extra field) — GUI+daemon ship together so they stay in sync; just don't
+run a new GUI against a stale daemon. (build4 failed at codesign — Apple TSA "timestamp not found",
+transient; rebuilt.)
+
+---
+
+## Session 41 — 2026-06-16
+**Agent**: builder (macOS box, branch **main**)
+**Summary**: Two follow-up bugs from Alex on the Session-40 model manager + settings.
+- **Bug A — capture-quality settings reverted on GUI relaunch.** They lived only in
+  `CaptureApp`'s in-memory fields (re-init'd to png/native/80 every launch). Fix: persist to
+  `~/.capture/gui-settings.json` — `save_settings()` writes `{shot_format, shot_res_ix,
+  jpeg_quality}` on every quality `chip` click; `load_settings()` seeds the fields in `new()`.
+  GUI-local (a UI default in the window process), not daemon-side. No re-freeze needed for this one.
+- **Bug B — "Whisper Large v3 Turbo" (1.6 GB) progress bar flashes, never "downloads"; the 4-bit
+  quant (464 MB) works.** Root cause: `is_downloaded()` only checked `config.json` + `weights.npz`,
+  but `mlx-community/whisper-large-v3-turbo` ships **`weights.safetensors`** (the q4 ships
+  `weights.npz`). So even after a *successful* 1.6 GB fetch the row read "not downloaded" and kept
+  offering Download; the bar "flashed" because `snapshot_download` returns instantly once it's
+  already cached (verified: 1614 MB on disk, returns <1s). Fix: `is_downloaded()` accepts
+  config.json + **either** `weights.npz` *or* `weights.safetensors` (`_WEIGHT_FILES`). This is
+  daemon-side → needs a re-freeze (deployed app runs the frozen daemon).
+- **Specs synced**: `gui.md` (settings persistence), `daemon.md` (downloaded = npz-or-safetensors).
+**Verification**: `is_downloaded('whisper-large-v3-turbo')` → **True** after fix (was False with the
+1.6 GB already cached); `base-mlx` still True. GUI `cargo build --release` clean. Re-froze + signed +
+notarized + redeployed (see end of session).
+
+---
+
+## Session 40 — 2026-06-16
+**Agent**: builder (macOS box, branch **main**)
+**Summary**: Deployed the Session-39 Settings build, then fixed ASR model-download **progress** +
+added model **removal**. Alex: "When I download new voice recognition model — no progress is being
+displayed. I think we should also give users the possibility of removing them."
+- **Deployed the Settings/quality build** (meeting over): reused freeze, signed, installed to
+  `/Applications/Capture.app`. **Screen Recording grant persisted** across the reinstall (same Team ID
+  YH3QP44ST4 — no re-grant); `/v1/permissions` → `screen_recording: granted`.
+- **Root cause of "no progress":** `hf_xet` is installed, so downloads used the **xet backend**,
+  which streams content-addressed chunks into a *separate* cache and only materializes the final
+  blob at the end. The daemon's progress = on-disk cache-size poll vs Hub total → it read ~0 % then
+  jumped to 100 %. Verified live (xet off: `0.0→0.07→0.22→0.44→0.66→0.88→1.0`).
+- **Fix (`core/asr/manager.download`)**: force the plain HTTP backend with
+  `constants.HF_HUB_DISABLE_XET = True` (read live by hf_hub at download time, so import order is
+  irrelevant). The plain backend grows a `<blob>.incomplete` file the existing poll already tracks.
+- **NEW removal**: `manager.delete(repo)` `rmtree`s the repo's HF-cache dir (catalog-validated;
+  returns `freed_bytes`). Route `POST /v1/asr/models/delete` (409 while downloading, 400 if unknown).
+  Deleting the *active* model just reverts it to "active · needs download".
+- **GUI (`app.rs`)**: each model row is now header + a thin **determinate progress bar**
+  (`relative(fraction)`-width fill) while busy; a **Remove** button (amber-red) on any downloaded
+  model → `delete_model` → `daemon.asr_delete`. New client method `Daemon::asr_delete`.
+- **Specs synced**: `daemon.md` (delete route + xet-disable rationale), `gui.md` (progress bar +
+  Remove). No `features.json` flip — this is a slice of the in-progress **#33 (M3 GPUI app)**, which
+  stays `passes:false` until the whole milestone lands.
+**Verification**: GUI `cargo build --release` clean. Daemon round-trip tested end-to-end on the source
+daemon: `delete(whisper-base-mlx)` freed 143 MB → `is_downloaded:false`; re-`download` emitted 5
+intermediate fractions (**progress visible**) → `is_downloaded:true`. Re-froze daemon + signed +
+notarized DMG, reinstalled, and re-verified in the running app (see end of session).
+
+---
+
+## Session 39 — 2026-06-16
+**Agent**: builder (macOS box, branch **main**)
+**Summary**: Settings screen (declutter the main view) + capture-quality controls. Alex: "settings
+should not bloat main screen … manage voice recognition model, permissions, and capture quality
+(png/jpeg + resolution)". **Did NOT deploy** — Alex has a live meeting transcribing on the running
+daemon ("do not terminate current process"); code is built but not reinstalled/relaunched.
+- **`show_settings` toggle** (`⚙ Settings` / `← Back`, top-right): the window is now two screens —
+  the **capture dashboard** (Refresh/Start, Launch input, windows/sessions, live detail) and a
+  **Settings** screen (Capture quality + Whisper model manager + Permissions + skill installer).
+  Each panel renders via `settings.then(|| …)` / `(!settings).then(|| …)` (only one screen's panels
+  exist at a time) — chose in-place conditional wrapping over extracting the big inline blocks.
+- **NEW Capture quality** (`chip` helper): screenshot format PNG/JPEG (`shot_format`), resolution
+  (`RES_PRESETS`: Native/1440p/1080p/720p, `shot_res_ix`), JPEG quality 60/80/95 (jpeg only). Merged
+  into the `/v1/sessions` body via `shot_settings()` for `start_capture`/`launch_command` — uses the
+  **existing** daemon `StartSessionRequest` fields (`screenshot_format`/`_resolution`/`_jpeg_quality`),
+  so NO daemon change/freeze needed; the running daemon already supports them.
+**Verification**: GUI builds clean (`Finished`, no warnings). Untested visually (no relaunch during
+the meeting). **TODO when the meeting ends**: rebuild signed+notarized DMG (the screen grant persists
+— same Team ID), reinstall, verify the Settings toggle + quality + mic Grant.
+
+---
+
+## Session 38 — 2026-06-16
+**Agent**: builder (macOS box, branch **main**)
+**Summary**: **#31 TCC fix VERIFIED** — Developer-ID signing makes the daemon inherit the app's
+Screen Recording grant. The whole permissions saga is solved.
+- Alex installed a **Developer ID Application** cert (Team **YH3QP44ST4**). Built signed via
+  `CAPTURE_SIGN_IDENTITY` (hardened runtime + `packaging/entitlements.plist` + secure timestamp).
+- **The signed+hardened frozen daemon BOOTS** (mlx/numba survive hardened runtime with the JIT /
+  library-validation entitlements). All 4 binaries (`CaptureBar`, `capture-gui`, `captured`,
+  `audiocap`) share **Team YH3QP44ST4** → ONE TCC identity.
+- **Proof**: after Alex granted Screen Recording once, the daemon reports `screen_recording=granted`,
+  and a FRESH daemon (after restart AND a full app relaunch) keeps it → **15 windows, 13 titles**,
+  real screenshots. The grant **persists** (Developer-ID identity is stable, not cdhash) — no
+  re-granting, no crash. Answered Alex's "restart daemon not app": restarting just the daemon is
+  enough (same identity); the macOS "restart the app" nudge is ignorable.
+- **Notarization**: `xcrun notarytool store-credentials capture-notary` (Apple ID **pr0fedt@gmail.com**
+  — alex.d.nax@ gave a 401; corrected). Submitted the signed DMG (in progress). Secrets gitignored
+  (`.asp.capture`, `.notary-password`); `.asp.capture` deleted (keychain holds the creds now).
+- Also shipped: agent **Open Window focuses** the existing window vs. relaunching (`guiProcess` +
+  `NSRunningApplication.activate`).
+**Next**: confirm notarization + staple; then the rest of M1 (brew tap, prebuilt helper, capture
+doctor). Re-freeze owed at some point so the daemon's permissions.py fixes (mic) ship signed.
+
+---
+
+## Session 37 — 2026-06-16
+**Agent**: builder (macOS box, branch **main**)
+**Summary**: Hit (and started fixing) the ad-hoc **TCC wall**, + a menu-bar focus fix.
+- **The wall (definitively diagnosed)**: an ad-hoc bundle's daemon binary (`captured`) is a SEPARATE
+  TCC identity from the granted app ("Capture"). Confirmed: Alex granted "Capture" in Settings, a
+  FRESH daemon still reports `screen_recording: denied`, 0 window titles, and a test capture wrote
+  **no screenshot**. The GUI's `CGRequest` grants the app's identity, which the differently-signed
+  daemon can't share. This is unfixable in ad-hoc — it needs Developer-ID signing (shared Team ID).
+- **Alex has a paid Apple Developer account → doing #31 properly.** Prepared the infra:
+  `packaging/entitlements.plist` (the frozen daemon needs `allow-jit` / `allow-unsigned-executable-
+  memory` / `disable-library-validation` / `allow-dyld-environment-variables` for mlx+numba JIT and
+  the many .so, + `device.audio-input`); `build_macos_dmg.sh` grew a **`CAPTURE_SIGN_IDENTITY`** path
+  (hardened runtime + entitlements + `--timestamp`, inside-out, re-signs the helper with the shared
+  Team ID) and **`CAPTURE_NOTARIZE_PROFILE`** (notarytool submit + staple), + `NSMicrophoneUsageDescription`.
+  **BLOCKED**: keychain has 0 signing identities — Alex needs to create a "Developer ID Application"
+  cert (Xcode ▸ Settings ▸ Accounts ▸ Manage Certificates ▸ + ▸ Developer ID Application) and
+  `xcrun notarytool store-credentials`. Then: build with the identity → verify the daemon inherits
+  the grant → notarize.
+- **Open Window focus**: the agent now tracks `guiProcess` and **focuses** the existing window
+  (`NSRunningApplication.activate`) instead of launching a duplicate; only launches when none is open.
+**Verification**: agent compiles; `bash -n` the build script OK; `plutil -lint` the entitlements OK.
+**Superseded**: the earlier ad-hoc workaround ideas (setdisclaim, daemon self-registration, GUI-as-
+wrapper) — Developer-ID signing makes them unnecessary (the daemon shares the app's grant cleanly).
+
+---
+
+## Session 36 — 2026-06-16
+**Agent**: builder (macOS box, branch **main**)
+**Summary**: Two more install-test fixes from Alex.
+- **Microphone Grant ALSO crashed the daemon** (the "permission request failed: Unexpected EOF"
+  in the screenshot was the *mic* Grant, not screen — screen already uses the GUI FFI). Turns out
+  `AVCaptureDevice.requestAccessForMediaType` aborts a headless/background-only process too when it
+  must show the dialog (my earlier "mic is safe" test ran in an already-granted context, so it
+  no-op'd). Fix: mic now mirrors screen — `request_microphone()` returns status without prompting;
+  the GUI mic row has **no Grant button** (`can_prompt:false`), only **Settings** (there's no
+  block-free Rust mic prompt, and macOS auto-prompts mic the first time the ffmpeg fallback opens
+  the device). Removed the now-unused Rust `request_permission` client method.
+- **No visible menu-bar tray on launch** — the agent WAS running (daemon + window came up), but the
+  text label `○ capture` was too easy to miss. Replaced with an **SF Symbol icon** (`applyIcon`:
+  `record.circle` idle / `record.circle.fill` + count capturing; text fallback) — far more findable
+  in a crowded/notched menu bar.
+**Verification**: daemon mic+screen requests survive (return status, no crash); smoke 68/68; GUI +
+agent compile clean. Fast rebuild (reused freeze — the daemon's dormant mic-request code is never
+hit now since the GUI doesn't POST it) and **reinstalled to /Applications**; relaunched → agent +
+daemon + GUI up, healthy, permissions report denied/undetermined as expected.
+
+---
+
+## Session 35 — 2026-06-16
+**Agent**: builder (macOS box, branch **main**)
+**Summary**: FIX — clicking **Grant (Screen Recording) crashed the daemon** ("permission request
+failed: Unexpected EOF" → "no daemon"). Plus robustness for the "GUI fails to reconnect on restart".
+- **Root cause**: `CGRequestScreenCaptureAccess` needs a window-server connection; calling it from
+  the **headless daemon** SIGABRTs the process. The daemon was calling it on `POST
+  /v1/permissions/request {screen_recording}`.
+- **Fix**: the daemon **never prompts** for screen recording — `request_screen_recording()` returns
+  status only (`CGPreflight` is safe). The **GUI** shows the prompt itself via **CoreGraphics FFI**
+  (`screen_perm::request()` → `CGRequestScreenCaptureAccess`); the GUI is a real GPUI app with a
+  window-server connection, so it won't crash. **Microphone stays in the daemon** —
+  `requestAccessForMediaType` is dispatch-queue-based and headless-safe (verified it survives).
+- **Reconnect/respawn**: the GUI poll already re-discovers each tick (reconnect was fine); the report
+  was the daemon being **down** from the crash. Verified the agent auto-respawns a `kill -9`'d daemon
+  in ~2 s. Made it more robust: respawn is now gated on **`userStoppedDaemon`** (set by "Stop Daemon")
+  instead of `weStartedDaemon`, so it recovers regardless of how the daemon first started.
+**Verification**: daemon `request('screen_recording')` survives (returns status, no crash); smoke
+68/68; GUI + agent compile clean; **re-froze** + rebuilt (165M). The in-GUI prompt itself (denied →
+dialog → no crash) is a manual check — my shell is already granted so `CGRequest` is a no-op here.
+**Caveat**: TCC attribution of a GUI-triggered grant to the daemon (different binary, same bundle) is
+the ad-hoc #31 limitation; "Open Settings" is the reliable fallback.
+
+---
+
+## Session 34 — 2026-06-16
+**Agent**: builder (macOS box, branch **main**)
+**Summary**: Finished the permissions UI ("we need both"): **Microphone** permission + **auto-restart
+after a grant**. #33 slice 12.
+- **Microphone**: added `pyobjc-framework-AVFoundation` (pyproject + freeze `--collect-all
+  AVFoundation/CoreMedia` — verified it loads **frozen**: the bundled daemon returns a real mic
+  status, not `unknown`). `core.permissions` gained `microphone_status`/`request_microphone`
+  (`AVCaptureDevice` authorizationStatus/requestAccess) + a `request(kind)` dispatcher. `GET
+  /v1/permissions` now returns `screen_recording` + `microphone`; the request route handles
+  `kind=microphone`. GUI: a reusable `perm_row` (status + Grant + Settings) for both, Settings
+  deep-linking `Privacy_ScreenCapture`/`Privacy_Microphone`.
+- **Auto-restart**: a new Screen Recording grant needs the daemon to restart. GUI **Restart daemon**
+  POSTs `/v1/admin/shutdown`; the menu-bar **agent auto-respawns** it — `CaptureBar` poll: if the
+  daemon is down AND `weStartedDaemon`, `ensureDaemon()` (debounced 6 s via `lastSpawn` so a slow
+  startup doesn't double-spawn). An intentional **Stop Daemon** clears `weStartedDaemon`, so it's
+  not respawned. Also gives crash recovery. No app quit/reopen needed.
+**Verification**: routes live (sr+mic, bad kind→400); bundled (frozen) daemon serves both; smoke
+68/68; GUI + agent compile clean. **Re-froze** + rebuilt the .app (166M) with AVFoundation. Mic grant
+applies immediately; SR needs the daemon restart (now one click).
+**Caveat**: TCC attribution/persistence for the ad-hoc daemon is still #31.
+
+---
+
+## Session 33 — 2026-06-16
+**Agent**: builder (macOS box, branch **main**)
+**Summary**: Two fixes from Alex testing + (next) a permissions UI request.
+- **Sessions list was incomplete** — 16 folders on disk in `~/.capture/runs` but only 8 showed.
+  The registry rebuilt history from the **index** (`sessions.jsonl`) only; 7 older folders predated
+  the current index (it had been reset) → orphaned/invisible. Added `_scan_runs_dir()` to
+  `_load_history`: after the index load, scan `$CAPTURE_RUNS_DIR` (else `~/.capture/runs`) for
+  `capture-*/session.json` and recover any sid not already covered (index wins; idempotent; re-bounds
+  to max_sessions). Verified: a fresh registry now returns **15** (was 8). NOTE: the **bundled**
+  daemon is frozen from old code — needs a **re-freeze** to take effect (batched with permissions).
+- **Window rows showed "Chrome — "** (dangling em-dash) — all 14 window titles came back EMPTY
+  because macOS redacts `kCGWindowName` for a process **without Screen Recording permission** (the
+  bundled daemon lacks the grant). Cosmetic fix: GUI shows just the app name when the title is empty.
+  The real cause (daemon needs Screen Recording) → the permissions UI Alex just asked for + TCC
+  onboarding (#31).
+- **Permissions UI (Alex: "setting up/revoking permissions should be in the gui")**: new
+  `core/permissions.py` (Quartz `CGPreflightScreenCaptureAccess` / `CGRequestScreenCaptureAccess`)
+  + daemon `GET /v1/permissions` + `POST /v1/permissions/request`. GUI Permissions row: Screen
+  Recording status (polled), **Grant** (the *daemon* — the grantee — triggers the system prompt;
+  needs an app restart to apply), **Open Settings** (deep-links the `Privacy_ScreenCapture` pane for
+  grant OR revoke — apps can't toggle a TCC right). The daemon is the right grantee since it does the
+  screen capture. Mic (AVFoundation) deferred — not in the venv. Apps can't grant/revoke TCC directly,
+  so the GUI = status + prompt + Settings deep-link.
+**Verification**: smoke 68/68; GUI builds clean; runs-dir scan live (15 sessions); permissions route
+live (granted/denied, bad kind→400). **Re-froze** the daemon + rebuilt the .app (166M) so the Python
+changes (registry scan + permissions) ship in the bundle.
+**Caveat**: TCC attribution/persistence for the ad-hoc unsigned daemon is the #31 problem; a granted
+Screen Recording right needs the app relaunched.
+
+---
+
+## Session 32 — 2026-06-16
+**Agent**: builder (macOS box, branch **main**)
+**Summary**: GUI usability batch from Alex testing the running app — six asks. #33 slice 10.
+- **Scrollable lists**: the Windows picker and Sessions lists now scroll (`max_h` 200 +
+  `overflow_y_scroll`, `#win-scroll`/`#sess-scroll`) and show ALL rows (dropped the top-6 slices).
+- **Launch a process/URL**: a minimal single-line text input (focusable `div` +
+  `track_focus`/`on_key_down` — `key_char`/backspace/⌘V-paste/Enter; no IME/selection, ~40 lines)
+  + "Launch & Capture" → `POST /v1/sessions` with `command` (launch mode). A URL is just a command
+  (`open https://…`). Confirmed the gpui-0.2.2 APIs (KeyDownEvent.key_char, Modifiers.platform=⌘,
+  cx.read/write_to_clipboard, window.focus) before building.
+- **Per-session actions**: **Folder** (`open` the dir in Finder), **Prompt** (copy a ready-to-paste
+  summarization prompt pointing a coding agent at the dir's transcript/screenshots/logs —
+  `cx.write_to_clipboard`; Alex: "deepen this flow later"), **Del** (finished only).
+- **Delete backend (new)**: `POST /v1/sessions/{id}/delete` → `registry.delete()` (drop history/live
+  record + **rewrite** the append-only `sessions.jsonl` index, atomically) + `rmtree` the dir
+  **guarded** by a `session.json` presence check (never nukes an arbitrary path); **400 if live**
+  (stop first). Python + Rust clients gained `delete()`; `Session` wire gained `dir`.
+**Verification**: delete route live-tested end-to-end (running→400 "stop first"; stopped→200
+`{deleted:true}` + dir gone + removed from the index + subsequent GET 404). smoke 68/68, contracts
+4/4 (no schema change — delete response is ad-hoc, like admin/shutdown). GUI builds clean (no
+warnings). The input + buttons are a manual visual check (no GPUI test harness).
+**Caveat**: open-folder uses macOS `open` (Windows/Linux branch owed); no delete-confirm yet.
+**Scroll fix (same session, Alex)**: the per-list `max_h`+`overflow_y_scroll` panes "had no scrollbar
+and scrolled together with the main view" — bare gpui 0.2.2 has no scrollbar widget and nested
+`overflow_scroll` regions fight the root for the wheel. Reverted to a **single** page scroll
+(`#root` `track_scroll`+`overflow_y_scroll`) with a **custom draggable scrollbar** (`scrollbar()` +
+`on_scrollbar_drag()`): an absolute right-edge thumb sized from the `ScrollHandle`'s prior-frame
+`bounds()`/`max_offset()`/`offset()` (auto-hidden when content fits; mouse-drag → `set_offset`).
+Builds clean; the thumb geometry/drag feel is a manual visual check (no GPUI harness).
+
+---
+
+## Session 31 — 2026-06-16
+**Agent**: builder (macOS box, branch **main**)
+**Summary**: Added a **native macOS menu-bar agent** so the tray + daemon persist independent of the
+GPUI window (Alex: "whenever the daemon is running a tray icon should persist"; then chose a
+**native per-OS agent** over an in-GPUI tray). #33 slice 9; Windows sibling = new #36.
+- **Why native, not in-GPUI**: gpui 0.2.2 forces `ActivationPolicy::Regular` (no `LSUIElement`
+  menu-bar mode) and a resident GPUI process is too heavy for an always-on tray. (The in-GPUI
+  approach IS feasible — verified the GPUI APIs — but the owner chose native per-OS agents.)
+- **`agent/macos/CaptureBar.swift` (new)**: AppKit `NSStatusItem` + `LSUIElement` app, ~110 KB
+  (`swiftc -O`). Polls `/v1` every 2 s → title `○ / ● / ⦿ N`. Menu: Open Window, Stop All
+  Captures, Start/Stop Daemon, Quit. Spawns the bundled `captured` detached; **Quit gracefully
+  `/v1/admin/shutdown`s the daemon when idle** → fixes the "running daemon pins the .app, can't
+  uninstall" problem. Launches `capture-gui` with `CAPTURE_AGENT=1`.
+- **GPUI app under the agent (`CAPTURE_AGENT=1`)**: builds no tray, doesn't spawn the daemon, and
+  **exits on window-close** (`main.rs` `on_window_closed → cx.quit()`; GPUI doesn't auto-quit on
+  last-window-close — confirmed in the gpui-0.2.2 source). Standalone/dev keeps its own tray + spawn.
+- **Bundle restructure** (`build_macos_dmg.sh`): `CFBundleExecutable=CaptureBar` + `LSUIElement`;
+  `MacOS/{CaptureBar,capture-gui}`; compiles the agent with `swiftc`; signs both.
+- **Specs**: new `docs/specs/agent.md`; product-architecture decision record + roadmap #36;
+  gui.md agent-mode note; specs/README row; README "what the app does".
+**Verification**: agent compiles (arm64). Launched the rebuilt `.app` via LaunchServices (`open`):
+CaptureBar stays **resident**, spawns the daemon (`/v1/health ok`), and opens the GPUI window
+(`capture-gui` running). The menu-bar UI clicks are a manual check (no `NSStatusItem` test harness).
+DMG rebuilt 164M (reused freeze). **Diagnosed Alex's "no tray" report**: no `Capture.app` was
+installed — the prior test was the GPUI-only build whose tray dies with the window; the agent build
+fixes exactly that.
+**Remaining**: move ⌃⌘R into the agent (window-less hotkey); a real menu-bar icon image; login-item
+(SMAppService); Windows agent (#36); Developer-ID signing (#31).
+
+---
+
 ## Session 30 — 2026-06-15
 **Agent**: builder (macOS box, branch **main**)
 **Summary**: In-GUI **Whisper model manager** + **on-device ASR in the self-contained app**
