@@ -1,6 +1,6 @@
 [project]
 name = "capture-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP server that captures a process's window (timestamped screenshots), stdout/stderr, and per-app audio transcribed by a pluggable ASR backend."
 requires-python = ">=3.10"
 dependencies = [

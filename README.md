@@ -197,20 +197,22 @@ Package the GUI as a double-clickable, **self-contained** `Capture.app` inside a
 bundles a frozen copy of the daemon, so there's no venv to set up and nothing to start by hand:
 
 ```bash
-bash packaging/build_macos_dmg.sh        # -> dist/Capture-0.1.0.dmg  (needs Rust + Xcode CLT + ./init.sh venv)
+bash packaging/build_macos_dmg.sh        # -> dist/Capture-0.2.0.dmg  (needs Rust + Xcode CLT + ./init.sh venv)
 ```
 
 The build PyInstaller-freezes the daemon into the app (`Contents/Resources/captured/`, with the
-signed `audiocap` helper beside it) and ad-hoc signs everything. Open the DMG and drag
-**Capture.app** to **Applications**.
+signed `audiocap` helper beside it). Open the DMG and drag **Capture.app** to **Applications**.
 
-> ⚠️ **This build is NOT notarized and NOT Developer-ID signed** — it is *ad-hoc* signed, for
-> testing. macOS **Gatekeeper will block it on first launch** ("Apple could not verify 'Capture'
-> is free of malware", or "unidentified developer"). **Bypassing that means you are choosing to
-> run an app Apple has not checked — only do it for a build you trust** (one you built yourself,
-> or got directly from us). Official builds will be Developer-ID signed + notarized (feature #31).
+> ✅ The **official release `.dmg`** (GitHub Releases) is **Developer-ID signed + notarized** —
+> just open it and drag to Applications, no Gatekeeper bypass needed. Set
+> `CAPTURE_SIGN_IDENTITY` + `CAPTURE_NOTARIZE_PROFILE` to produce a notarized build yourself;
+> otherwise the local build is **ad-hoc** signed (dev only).
 
-**Bypass Gatekeeper (first launch only):**
+> ⚠️ A **self-built ad-hoc** dmg is NOT notarized — macOS **Gatekeeper blocks it on first launch**
+> ("Apple could not verify 'Capture' is free of malware"). Bypassing means running an app Apple
+> hasn't checked — only do it for a build you trust (one you built yourself).
+
+**Bypass Gatekeeper (only for an ad-hoc / self-built dmg, first launch):**
 
 - **Easiest:** **Control-click** (right-click) `Capture.app` → **Open** → **Open** in the dialog.
 - **macOS 15 (Sequoia):** double-click → it's blocked → **System Settings ▸ Privacy & Security** →

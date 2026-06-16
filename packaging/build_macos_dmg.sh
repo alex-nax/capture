@@ -15,7 +15,7 @@
 # Output: dist/Capture-<version>.dmg  (dist/ is gitignored)
 #
 # Env knobs:
-#   CAPTURE_GUI_VERSION       bundle version (default 0.1.0)
+#   CAPTURE_GUI_VERSION       bundle version (default 0.2.0)
 #   CAPTURE_SKIP_FREEZE=1     reuse an existing freeze (fast GUI-only iteration)
 #   CAPTURE_SIGN_IDENTITY     "Developer ID Application: NAME (TEAMID)" — sign for
 #                             distribution (hardened runtime + entitlements + shared
@@ -27,7 +27,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Capture"
 BUNDLE_ID="com.capturemcp.gui"
-VERSION="${CAPTURE_GUI_VERSION:-0.1.0}"
+VERSION="${CAPTURE_GUI_VERSION:-0.2.0}"
 DIST="$ROOT/dist"
 APP="$DIST/$APP_NAME.app"
 DMG="$DIST/$APP_NAME-$VERSION.dmg"
