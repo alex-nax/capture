@@ -277,6 +277,16 @@ each icon to an alpha mask tinted by `text_color`. The `icon(name, size, color)`
   never repeat, so over a long capture the image cache grows — switch to
   `RenderImage` with eviction (product-architecture.md) before long-run use. The live
   transcript/preview itself is **done** (SSE).
+- **Cross-platform OS integrations (done 2026-06-17, Phase 2).** The window-process helpers are now
+  `#[cfg]`-gated per OS so the GUI is usable on Windows (macOS behaviour byte-for-byte unchanged): file
+  picker (`osascript` → PowerShell `OpenFileDialog`), folder reveal (`open` → `explorer`), privacy
+  settings (`x-apple.systempreferences:` → `ms-settings:`), mic-grant (CaptureBar one-shot → Settings
+  deep-link), and daemon spawn (`process_group` → Windows `creation_flags`, Phase 0). `main.rs` no longer
+  `unwrap()`s renderer creation — it logs a hint and exits cleanly instead of panicking when the DirectX
+  renderer can't be created (Windows needs the interactive desktop — `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE`
+  from a service shell). Remaining for Windows: the tray uses a text title (Windows wants an `.ico`); the
+  persistent tray + lifecycle is the native agent #36 ([agent-windows.md](agent-windows.md)). See
+  [windows-release.md](windows-release.md).
 - **Tray/hotkey latency** ~250 ms (the drain interval) — fine for clicks/presses; lower
   it or use `set_event_handler` if it ever feels laggy.
 - **Hotkey "start" needs a window selected** in the picker (the "stop from anywhere"

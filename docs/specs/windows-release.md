@@ -211,7 +211,10 @@ Generalize `gui/src/update.rs` (today: `.dmg`-only, `hdiutil`/`/bin/bash`/`/Appl
   folder/URL, `x-apple.systempreferences:` deep links, the `CaptureBar --request-mic` spawn, and
   `std::os::unix::process::CommandExt::process_group` (a **hard compile error** on Windows). Tracked
   in [gui.md](gui.md) / [agent-windows.md](agent-windows.md). This is the gating compile constraint
-  for everything downstream.
+  for everything downstream. **Status: DONE (Phase 0 + Phase 2, 2026-06-17)** — `process_group` (Phase
+  0) and the file picker / folder / URL / privacy / mic-grant + graceful renderer (Phase 2) are all
+  gated; the GUI builds and renders on Windows. Remaining GUI polish: an `.ico` tray glyph + the native
+  tray agent (#36).
 - **Weights and CUDA are never bundled** (product-architecture.md): the ASR runtime ships, weights
   download on demand into the HF cache; CUDA is on-demand with CPU/remote fallback ([asr.md](asr.md)).
 - **One version everywhere** via `bump_version.py`; never bump for a local build (capture-release rule).
@@ -293,6 +296,11 @@ Live backlog for the Windows release (tracked: `features.json` #34, #36):
   capture** (`capture start --pid … --no-screenshots`) wrote a non-silent `audio.s16le` (rms ~1526) via
   `Win32AudioSource` → native helper. `command()` returns the native helper for `app`+pid and the
   (path-fixed) Python system-loopback fallback otherwise. smoke 67/67.
+- **[current, Phase 2, 2026-06-17]** GUI runtime macOS-isms `#[cfg]`-gated for Windows (file picker →
+  PowerShell `OpenFileDialog`, folder reveal → `explorer`, privacy → `ms-settings:`, mic-grant →
+  Settings deep-link, launch help text per-OS) and `main.rs` renderer creation made **graceful** (logs +
+  clean exit, no panic). GUI rebuilds clean and re-renders (`RENDERER_OK`) in the interactive session;
+  macOS paths are unchanged (cfg-gated).
 - **[planned] packaged-bundle acceptance** (manual checklist; no GPUI UI harness): install from
   `CaptureSetup-<v>-x64.exe` on a clean Windows 10/11 box → tray icon appears and persists across
   closing the window → `/v1/health` ok → `list_windows` returns real windows → a ~5 s self-test

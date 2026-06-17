@@ -169,17 +169,43 @@ fn settings_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".capture").join("gui-settings.json"))
 }
 
-/// Native macOS file picker (osascript) for the "Import…" action: returns the chosen
-/// media file's POSIX path, or None if the user cancelled (or the dialog failed). The
-/// UTI filter shows audio + video files. Blocking — call it off the UI thread.
+/// File picker for the "Import…" action: returns the chosen media file's path, or None if
+/// the user cancelled / the dialog failed. macOS uses `osascript`; Windows a PowerShell
+/// `OpenFileDialog` (no extra crate — `powershell.exe` is signed, so Smart App Control
+/// doesn't block it); other platforms try `zenity`. Blocking — call it off the UI thread.
 fn pick_media_file() -> Option<String> {
-    let script = r#"POSIX path of (choose file with prompt "Import audio or video as a session" of type {"public.audio","public.movie","public.mpeg-4","com.apple.quicktime-movie"})"#;
-    let out = std::process::Command::new("osascript").arg("-e").arg(script).output().ok()?;
-    if !out.status.success() {
-        return None; // user cancelled (AppleScript error -128) or osascript unavailable
+    #[cfg(target_os = "macos")]
+    {
+        let script = r#"POSIX path of (choose file with prompt "Import audio or video as a session" of type {"public.audio","public.movie","public.mpeg-4","com.apple.quicktime-movie"})"#;
+        let out = std::process::Command::new("osascript").arg("-e").arg(script).output().ok()?;
+        if !out.status.success() {
+            return None; // user cancelled (AppleScript error -128) or osascript unavailable
+        }
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if path.is_empty() { None } else { Some(path) }
     }
-    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if path.is_empty() { None } else { Some(path) }
+    #[cfg(target_os = "windows")]
+    {
+        let script = r#"Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Title = 'Import audio or video as a session'; $f.Filter = 'Media|*.mp4;*.mov;*.m4a;*.mp3;*.wav;*.mkv;*.webm;*.aac;*.flac|All files|*.*'; if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($f.FileName) }"#;
+        let out = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-STA", "-Command", script])
+            .output()
+            .ok()?;
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if path.is_empty() { None } else { Some(path) }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let out = std::process::Command::new("zenity")
+            .args(["--file-selection", "--title=Import audio or video as a session"])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if path.is_empty() { None } else { Some(path) }
+    }
 }
 
 /// `(shot_format, shot_res_ix, jpeg_quality)` loaded from `gui-settings.json`, or
@@ -1618,14 +1644,20 @@ impl CaptureApp {
 
     // -- per-capture actions ----------------------------------------------------
 
-    /// Reveal a capture's output folder in Finder (macOS `open`).
+    /// Reveal a capture's output folder in the OS file manager (macOS `open` / Windows
+    /// `explorer` / else `xdg-open`).
     fn open_folder(&mut self, dir: String, cx: &mut Context<Self>) {
         if dir.is_empty() {
             self.message = "no folder for this capture".into();
             cx.notify();
             return;
         }
+        #[cfg(target_os = "macos")]
         let ok = std::process::Command::new("open").arg(&dir).spawn().is_ok();
+        #[cfg(target_os = "windows")]
+        let ok = std::process::Command::new("explorer").arg(&dir).spawn().is_ok();
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let ok = std::process::Command::new("xdg-open").arg(&dir).spawn().is_ok();
         self.message = if ok {
             format!("opened {dir}").into()
         } else {
@@ -1799,33 +1831,68 @@ impl CaptureApp {
     /// and the shared Team ID carries the grant to the daemon. (The daemon itself
     /// can't prompt — it aborts headless.)
     fn request_microphone(&mut self, cx: &mut Context<Self>) {
-        let spawned = std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(|d| d.join("CaptureBar")))
-            .map(|agent| {
-                std::process::Command::new(agent)
-                    .arg("--request-mic")
-                    .spawn()
-                    .is_ok()
-            })
-            .unwrap_or(false);
-        self.message = if spawned {
-            "approve the Microphone prompt…".into()
-        } else {
-            "could not start the mic request".into()
-        };
+        #[cfg(target_os = "macos")]
+        {
+            let spawned = std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(|d| d.join("CaptureBar")))
+                .map(|agent| {
+                    std::process::Command::new(agent)
+                        .arg("--request-mic")
+                        .spawn()
+                        .is_ok()
+                })
+                .unwrap_or(false);
+            self.message = if spawned {
+                "approve the Microphone prompt…".into()
+            } else {
+                "could not start the mic request".into()
+            };
+        }
+        #[cfg(target_os = "windows")]
+        {
+            // Windows has no per-app mic prompt to trigger programmatically; point the
+            // user at Settings → Privacy → Microphone.
+            let _ = std::process::Command::new("cmd")
+                .args(["/c", "start", "", "ms-settings:privacy-microphone"])
+                .spawn();
+            self.message = "allow microphone access in Settings → Privacy → Microphone".into();
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            self.message = "grant microphone access in your OS privacy settings".into();
+        }
         cx.notify();
     }
 
-    /// Open System Settings → Privacy & Security → `pane` (grant OR revoke happens
-    /// there — apps can't toggle a TCC right themselves).
+    /// Open the OS privacy settings for `pane` (grant OR revoke happens there — apps can't
+    /// toggle the right themselves). macOS deep-links the Security pane; Windows opens the
+    /// matching `ms-settings:` page.
     fn open_privacy_settings(&mut self, pane: &'static str, cx: &mut Context<Self>) {
-        let _ = std::process::Command::new("open")
-            .arg(format!(
-                "x-apple.systempreferences:com.apple.preference.security?{pane}"
-            ))
-            .spawn();
-        self.message = "opened System Settings — toggle Capture to grant or revoke".into();
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("open")
+                .arg(format!(
+                    "x-apple.systempreferences:com.apple.preference.security?{pane}"
+                ))
+                .spawn();
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let uri = if pane.to_lowercase().contains("microphone") {
+                "ms-settings:privacy-microphone"
+            } else {
+                "ms-settings:privacy"
+            };
+            let _ = std::process::Command::new("cmd")
+                .args(["/c", "start", "", uri])
+                .spawn();
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            let _ = pane;
+        }
+        self.message = "opened Settings — adjust the permission there".into();
         cx.notify();
     }
 
@@ -2482,7 +2549,12 @@ impl Render for CaptureApp {
                                 rgb(0xe0e0e0)
                             })
                             .child(if self.cmd_input.is_empty() {
-                                "command or URL — e.g. open https://…  (Enter to launch)".to_string()
+                                #[cfg(target_os = "macos")]
+                                { "command or URL — e.g. open https://…  (Enter to launch)".to_string() }
+                                #[cfg(target_os = "windows")]
+                                { "command or URL — e.g. cmd /c start https://…  (Enter to launch)".to_string() }
+                                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+                                { "command or URL — e.g. xdg-open https://…  (Enter to launch)".to_string() }
                             } else {
                                 format!("{}▏", self.cmd_input)
                             })

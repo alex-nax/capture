@@ -1,5 +1,30 @@
 # Progress Log
 
+## Session 58 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **Phase 2**: make the GPUI app
+**usable on Windows** (runtime macOS-isms → cross-platform). All `#[cfg]`-gated; macOS unchanged.
+- **gui/src/app.rs**: `pick_media_file` (osascript → **PowerShell `OpenFileDialog`** on Windows, no new
+  crate — `powershell.exe` is signed so SAC doesn't block it; `zenity` on Linux); `open_folder`
+  (`open` → `explorer` / `xdg-open`); `request_microphone` (CaptureBar one-shot → open
+  `ms-settings:privacy-microphone` + message; Windows has no per-app mic prompt to trigger);
+  `open_privacy_settings` (`x-apple.systempreferences:` → `ms-settings:` per pane); launch-field help
+  text per-OS (`open` / `cmd /c start` / `xdg-open`).
+- **gui/src/main.rs**: renderer creation no longer `unwrap()`s — on failure it logs (with a Windows
+  interactive-desktop hint) and `cx.quit()`s cleanly instead of panicking
+  (`DXGI_ERROR_NOT_CURRENTLY_AVAILABLE` from a non-interactive shell).
+- **No new dependencies** (deliberate: avoids fresh Cargo build-script probes that Smart App Control
+  blocks). Approach = Command spawns of already-signed OS tools.
+- **Verified**: `cargo build` clean (6.4s, gui crate only); GUI re-renders (`RENDERER_OK`, no panic) in
+  the interactive session via `run_interactive.ps1`. The file dialog itself is a manual visual check
+  (no GPUI/dialog test harness) — the PowerShell WinForms invocation is standard.
+- Specs synced: gui.md (cross-platform integrations note), windows-release.md (§Tests Phase 2 + the
+  GUI-compile invariant marked DONE for Phase 0+2).
+- **Next**: Phase 3 (Rust tray agent #36 + logon task) or Phase 4 (Inno Setup installer + signtool),
+  then Phase 5 (auto-update + release/CI). Remaining GUI polish: `.ico` tray glyph (native agent owns
+  the persistent tray).
+
+---
+
 ## Session 57 — 2026-06-17
 **Agent**: builder (**Windows box**, branch **windows-support**) — **Phase 1**: native **per-process**
 audio loopback helper (#34/#21 refinement). Built + verified end-to-end on real audio.
