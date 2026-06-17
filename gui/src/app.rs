@@ -126,6 +126,7 @@ pub struct CaptureApp {
     capture_screenshots: bool,             // off => audio-only capture (no screenshots)
     update_info: Option<update::UpdateInfo>, // a newer GitHub release than this build (#48), if any
     updating: bool,                        // an update download/install is in flight
+    update_progress: Option<(u64, u64)>,   // (downloaded, total) bytes while the update DMG/exe streams (#48); None = idle
     asr_language: String,                  // transcription language filter buffer (#45; searchable dropdown)
     asr_language_focus: FocusHandle,       // focus for the language field
     lang_dropdown_open: bool,              // the searchable language dropdown is expanded
@@ -495,6 +496,7 @@ impl CaptureApp {
             capture_screenshots,
             update_info: None,
             updating: false,
+            update_progress: None,
             asr_language: String::new(),
             asr_language_focus: cx.focus_handle(),
             lang_dropdown_open: false,
@@ -1194,20 +1196,46 @@ impl CaptureApp {
     /// Download + install a confirmed update; the detached updater quits + relaunches the app.
     fn start_update(&mut self, info: update::UpdateInfo, cx: &mut Context<Self>) {
         self.updating = true;
-        self.message = format!("downloading update v{}… the app will restart", info.version).into();
+        self.update_progress = Some((0, 0));
+        self.message = format!("downloading update v{}…", info.version).into();
         cx.notify();
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        use std::sync::Arc;
+        // The download is blocking, so it runs on the background executor while it bumps these shared
+        // atomics; a 150ms ticker mirrors them into `update_progress` and breaks on the done flag.
+        let dl = Arc::new(AtomicU64::new(0));
+        let tot = Arc::new(AtomicU64::new(0));
+        let done = Arc::new(AtomicBool::new(false));
+        let (dl2, tot2, done2) = (dl.clone(), tot.clone(), done.clone());
         cx.spawn(async move |this, cx| {
-            let r = cx
-                .background_executor()
-                .spawn(async move { update::download_and_install(&info) })
-                .await;
+            let task = cx.background_executor().spawn(async move {
+                let res = update::download_and_install(&info, move |d, t| {
+                    dl2.store(d, Ordering::Relaxed);
+                    tot2.store(t, Ordering::Relaxed);
+                });
+                done2.store(true, Ordering::Relaxed);
+                res
+            });
+            loop {
+                Timer::after(Duration::from_millis(150)).await;
+                let (d, t) = (dl.load(Ordering::Relaxed), tot.load(Ordering::Relaxed));
+                let _ = this.update(cx, |v, cx| {
+                    v.update_progress = Some((d, t));
+                    cx.notify();
+                });
+                if done.load(Ordering::Relaxed) {
+                    break;
+                }
+            }
+            let r = task.await;
             let _ = this.update(cx, |v, cx| {
+                v.update_progress = None;
                 if let Err(e) = r {
                     v.updating = false;
                     v.message = format!("update failed: {e}").into();
-                    cx.notify();
                 }
                 // On success the updater script quits this app shortly; nothing more to do.
+                cx.notify();
             });
         })
         .detach();
@@ -3075,7 +3103,41 @@ impl Render for CaptureApp {
                     .child(div().min_w(px(70.0)).text_color(rgb(0x9aa0a6)).child("App"));
                 match (&self.update_info, self.updating) {
                     (_, true) => {
-                        row = row.child(div().text_color(rgb(0x8ab4f8)).child("downloading update… the app will restart"));
+                        // The DMG/exe is ~175 MB, so show a real progress bar (#48). `t == 0` means the
+                        // server didn't send Content-Length yet → indeterminate (just downloaded MB).
+                        let (d, t) = self.update_progress.unwrap_or((0, 0));
+                        let dmb = d as f64 / 1_048_576.0;
+                        if t > 0 {
+                            let frac = (d as f32 / t as f32).clamp(0.0, 1.0);
+                            let tmb = t as f64 / 1_048_576.0;
+                            row = row
+                                .child(
+                                    div()
+                                        .w(px(160.0))
+                                        .h(px(6.0))
+                                        .rounded_sm()
+                                        .bg(rgb(0x3a3a3a))
+                                        .child(
+                                            div()
+                                                .h(px(6.0))
+                                                .w(px(160.0 * frac))
+                                                .rounded_sm()
+                                                .bg(rgb(0x4a90d9)),
+                                        ),
+                                )
+                                .child(div().text_color(rgb(0x8ab4f8)).child(format!(
+                                    "downloading update… {}%  ({:.0}/{:.0} MB)",
+                                    (frac * 100.0) as i32,
+                                    dmb,
+                                    tmb,
+                                )));
+                        } else {
+                            row = row.child(
+                                div()
+                                    .text_color(rgb(0x8ab4f8))
+                                    .child(format!("downloading update… ({:.0} MB)", dmb)),
+                            );
+                        }
                     }
                     (Some(info), false) => {
                         let info2 = info.clone();

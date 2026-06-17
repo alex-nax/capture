@@ -81,7 +81,12 @@ pub fn check() -> Option<UpdateInfo> {
 
 /// Download the OS asset and hand off to a detached updater that installs it + relaunches. Blocking
 /// (the download is large) — call on a background thread. The caller has already confirmed.
-pub fn download_and_install(info: &UpdateInfo) -> Result<(), String> {
+/// `progress(downloaded_bytes, total_bytes)` is called after each chunk so the UI can show a bar;
+/// `total` is 0 when the server doesn't send `Content-Length`.
+pub fn download_and_install<F: Fn(u64, u64) + Send>(
+    info: &UpdateInfo,
+    progress: F,
+) -> Result<(), String> {
     let resp = agent()
         .get(&info.asset_url)
         .set("User-Agent", "capture-gui")
@@ -89,26 +94,57 @@ pub fn download_and_install(info: &UpdateInfo) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
     {
-        install_macos(info, resp)
+        install_macos(info, resp, progress)
     }
     #[cfg(target_os = "windows")]
     {
-        install_windows(info, resp)
+        install_windows(info, resp, progress)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        let _ = (info, resp);
+        let _ = (info, resp, progress);
         Err("in-app update is not supported on this platform".into())
     }
 }
 
-#[cfg(target_os = "macos")]
-fn install_macos(info: &UpdateInfo, resp: ureq::Response) -> Result<(), String> {
-    let dmg = std::env::temp_dir().join(format!("Capture-update-{}.dmg", info.version));
-    {
-        let mut f = std::fs::File::create(&dmg).map_err(|e| e.to_string())?;
-        std::io::copy(&mut resp.into_reader(), &mut f).map_err(|e| e.to_string())?;
+/// Stream the response body into `path` in 64 KiB chunks, reporting `(downloaded, total)` after each.
+/// `total` comes from `Content-Length` (0 when absent). Shared by the per-OS installers.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn download_to<F: Fn(u64, u64)>(
+    resp: ureq::Response,
+    path: &std::path::Path,
+    progress: &F,
+) -> Result<(), String> {
+    use std::io::Read as _;
+    let total = resp
+        .header("Content-Length")
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
+    let mut reader = resp.into_reader();
+    let mut f = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    let mut buf = [0u8; 65536];
+    let mut downloaded: u64 = 0;
+    progress(0, total);
+    loop {
+        let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        f.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        downloaded += n as u64;
+        progress(downloaded, total);
     }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn install_macos<F: Fn(u64, u64)>(
+    info: &UpdateInfo,
+    resp: ureq::Response,
+    progress: F,
+) -> Result<(), String> {
+    let dmg = std::env::temp_dir().join(format!("Capture-update-{}.dmg", info.version));
+    download_to(resp, &dmg, &progress)?;
     // The downloaded .dmg is notarized + stapled, so Gatekeeper accepts it and the same Developer-ID
     // signature keeps the Screen Recording (TCC) grant.
     let script = std::env::temp_dir().join("capture-updater.sh");
@@ -128,13 +164,14 @@ fn install_macos(info: &UpdateInfo, resp: ureq::Response) -> Result<(), String> 
 }
 
 #[cfg(target_os = "windows")]
-fn install_windows(info: &UpdateInfo, resp: ureq::Response) -> Result<(), String> {
+fn install_windows<F: Fn(u64, u64)>(
+    info: &UpdateInfo,
+    resp: ureq::Response,
+    progress: F,
+) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     let exe = std::env::temp_dir().join(format!("CaptureSetup-update-{}.exe", info.version));
-    {
-        let mut f = std::fs::File::create(&exe).map_err(|e| e.to_string())?;
-        std::io::copy(&mut resp.into_reader(), &mut f).map_err(|e| e.to_string())?;
-    }
+    download_to(resp, &exe, &progress)?;
     let script = std::env::temp_dir().join("capture-updater.ps1");
     {
         let mut f = std::fs::File::create(&script).map_err(|e| e.to_string())?;
