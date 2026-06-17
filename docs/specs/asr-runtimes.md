@@ -1,9 +1,11 @@
 # Spec: ASR runtimes (user-chosen, installable runtime packs)
 
 _Status: **partially implemented**, 2026-06-17 — the **keystone is validated** (a lean frozen daemon
-imports an external runtime pack), the activation mechanism + runtime-aware catalog have landed; the
-install route, GUI flow, pack-build/hosting tooling, and the no-silent-fallback wiring are **[planned]**.
-Source of truth = the code; sections mark **[done]** vs **[planned]**. Tracked in `features.json` (#58)._
+imports an external runtime pack); the activation mechanism, runtime-aware catalog, the **daemon routes**
+(`GET /v1/asr/runtimes`, `POST /install`, `POST /v1/asr/runtime`, `GET /v1/asr/backend`), and the
+**no-silent-fallback** wiring have landed. The pack-build/hosting tooling, the lean-by-default build, and
+the GUI runtime picker are **[planned]**. Source of truth = the code; sections mark **[done]** vs
+**[planned]**. Tracked in `features.json` (#58)._
 
 ## Purpose
 
@@ -116,9 +118,13 @@ This replaces the earlier "bundle faster-whisper + auto-detect" approach. Decisi
 - **Dependency overlap:** a pack ships its own `numpy`/`huggingface_hub`; prepended on `sys.path` they
   shadow the lean daemon's copies. Build packs pinned compatible with the daemon's code (or keep the
   daemon's overlap minimal). Validate per pack.
-- **No-silent-fallback wiring [planned]:** remove `_auto_device`'s silent CPU pick + the CUDA→CPU
-  fallback in `FasterWhisper`; drive device from the runtime; add `GET /v1/asr/backend`.
-- **GUI runtime picker [planned].**
+- **No-silent-fallback — done 2026-06-17:** `FasterWhisper` takes its device from the active runtime
+  (`runtimes.active_device()`); a load failure **raises** (recording `runtimes.last_error()`, surfaced
+  via `GET /v1/asr/backend`) instead of silently switching to CPU. `_auto_device` remains only as the
+  no-runtime dev default.
+- **GUI runtime picker [planned]** — Settings → Voice recognition: list runtimes (`GET /v1/asr/runtimes`,
+  with the GPU hint) → install (`POST /install`, SSE progress) → select (`POST /v1/asr/runtime`) → the
+  (runtime-aware) model picker → download.
 - **AMD/Intel GPU deferred:** `whispercpp-vulkan` / `onnx-directml` registry slots + packs + model
   catalogs, later.
 - **macOS** keeps its bundled mlx for now (the pack model is the Windows/Linux answer); unifying later.
@@ -131,6 +137,11 @@ This replaces the earlier "bundle faster-whisper + auto-detect" approach. Decisi
   (`pip install --target faster-whisper`, 286 MB) via `CAPTURE_ASR_RUNTIME_DIR`, the same frozen
   `captured.exe --asr-selftest` prints `faster-whisper OK (ctranslate2=4.8.0, cuda_devices=1)` (rc=0) —
   i.e. the frozen daemon imported the external CTranslate2 C-extension + DLLs from `sys.path`.
-- **[planned]** install-route round-trip (download a hosted pack → activate → `runtime_available` True →
-  download a model → transcribe a clip); a `faster-cuda`-without-GPU run surfaces a clear error (no
-  silent CPU); smoke/contracts stay green.
+- **[done, 2026-06-17]** Engine/daemon routes verified on the box: `GET /v1/asr/runtimes` returns the
+  registry + `gpu:{nvidia:true}` + active; `install("faster-cpu", source=<local pack>)` → `set_active` →
+  `GET /v1/asr/backend` reports `runtime=faster-cpu, device=cpu, available=true, error=null`; `GET
+  /v1/asr/runtimes` + `/v1/asr/backend` dispatch live over HTTP. smoke 67/67, contracts 4/4. (Config +
+  pack dir restored after the test.)
+- **[planned]** full round-trip from a **hosted** pack (download → activate → download a model →
+  transcribe a clip) once the pack-build/hosting tooling exists; a `faster-cuda`-without-GPU run surfaces
+  a clear error (no silent CPU).

@@ -65,7 +65,11 @@ server's daemon-first mode are **[planned]** (see Known limitations).
 | GET  | `/v1/index/providers` | — | `{providers:[{id,label,…}], default}` — the index vision-LLM providers (lmstudio/ollama/openai/custom) for the GUI selector (#52) |
 | GET  | `/v1/index/models` | `?provider=&host=&port=&key=&url=` | `{models:[...], provider, reachable}` — a provider's available models (GETs its `/v1/models`); populates the GUI model dropdown (#53) |
 | GET  | `/v1/sessions/{id}/transcript` | `?tail=N` | `{session_id, segments:[...], count}` from `transcript.jsonl` |
-| GET  | `/v1/asr/models` | — | `{backend_available, active, models:[{repo,name,size_label,downloaded,active,downloading}]}` — Whisper model catalog |
+| GET  | `/v1/asr/runtimes` | — | `{active, gpu:{nvidia}, runtimes:[{id,label,kind,engine,device,requires,installed,active}]}` — selectable ASR runtimes (no engine bundled by default; user picks one by hardware). See [asr-runtimes.md](asr-runtimes.md) |
+| POST | `/v1/asr/runtimes/install` | `{id, source?}` | `{id, started}` (202); downloads + extracts the runtime pack in the background (progress over `/v1/events`: `asr_runtime_install`→`_done`/`_error`) then sets it active. `source` overrides the pack URL with a local zip/dir or URL. 400 for an unknown id |
+| POST | `/v1/asr/runtime` | `{id}` | `{active}` — set the active runtime (persisted; loaded into the running daemon). 400 if unknown / not installed |
+| GET  | `/v1/asr/backend` | — | `{runtime, engine, device, available, error}` — the active runtime + whether an engine is importable + the last load error (so the GUI shows why ASR is off; **no silent fallback**) |
+| GET  | `/v1/asr/models` | — | `{backend_available, active, models:[{repo,name,size_label,downloaded,active,downloading}]}` — Whisper model catalog (runtime-aware: faster-whisper repos vs mlx) |
 | POST | `/v1/asr/models/download` | `{repo}` | `{repo, started}` (202); downloads in background, progress over `/v1/events`; dup is `started:false` |
 | POST | `/v1/asr/models/delete` | `{repo}` | `{repo, deleted, freed_bytes}`; removes the model's weights from the HF cache. 400 if not in catalog, **409 if it's currently downloading** |
 | POST | `/v1/asr/model` | `{repo}` | `{active}` — set the active model (persisted to `~/.capture/config.json`); 400 if not in catalog |

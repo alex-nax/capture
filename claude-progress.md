@@ -1,5 +1,29 @@
 # Progress Log
 
+## Session 64 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **ASR runtimes: daemon routes +
+no-silent-fallback** (#58 engine/daemon slice).
+- **Routes (`core/asr/runtimes.py` + `daemon/server.py`):** `GET /v1/asr/runtimes`
+  (registry + installed/active + a `gpu:{nvidia}` hint via `nvidia-smi`), `POST /v1/asr/runtimes/install
+  {id, source?}` (background download/extract a pack → set active; SSE `asr_runtime_install`→done/error;
+  `source` = URL / local zip / local dir), `POST /v1/asr/runtime {id}` (set active), `GET
+  /v1/asr/backend` (`{runtime, engine, device, available, error}`). Added `runtimes.install()` (URL/zip/
+  dir), `set_active()`, `status_payload()`, `backend_report()`, `pack_url()` (`CAPTURE_ASR_PACK_BASE`/
+  `_URL_*`), `active_device()`, `last_error()`. `DaemonClient` got the 4 matching methods.
+- **No silent fallback (`whisper_local.FasterWhisper`):** device now comes from the active runtime
+  (`runtimes.active_device()`) → env → (legacy) auto; a `WhisperModel` load failure **raises** and is
+  recorded in `runtimes.last_error()` (surfaced by `/v1/asr/backend`) instead of the old quiet CUDA→CPU
+  switch.
+- **Verified on the box:** `install("faster-cpu", source=<local 286MB pack>)` → `is_installed` True →
+  `set_active` → `backend_report` = `{runtime:faster-cpu, device:cpu, available:true, error:null}`;
+  `GET /v1/asr/runtimes` (active=None, gpu.nvidia=true) + `GET /v1/asr/backend` dispatch live over HTTP;
+  config + the test pack dir restored after. smoke **67/67**, contracts **4/4**.
+- Specs synced: daemon.md (4 routes), asr-runtimes.md (routes + no-fallback → done; Tests), features.json
+  #58. **Remaining for #58:** pack build/hosting tooling (`build_runtime_packs.ps1` → release assets),
+  lean-by-default `build_windows.ps1`, the GUI runtime picker, then AMD runtimes.
+
+---
+
 ## Session 63 — 2026-06-17
 **Agent**: builder (**Windows box**, branch **windows-support**) — **ASR runtimes redesign** (owner
 directives): no runtime by default, user picks a runtime for their hardware → installs a **pack** →

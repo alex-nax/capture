@@ -135,7 +135,8 @@ def _add_nvidia_dll_dirs() -> None:
 
 
 def _auto_device() -> str:
-    """'cuda' if CTranslate2 sees a CUDA device, else 'cpu'."""
+    """'cuda' if CTranslate2 sees a CUDA device, else 'cpu'. (Legacy dev fallback used only when no
+    runtime is chosen and no device is configured.)"""
     try:
         import ctranslate2
 
@@ -144,6 +145,17 @@ def _auto_device() -> str:
     except Exception:
         log.debug("ctranslate2 CUDA probe failed", exc_info=True)
     return "cpu"
+
+
+def _runtime_device() -> "str | None":
+    """The explicit device of the active ASR runtime (``cpu``/``cuda``), or None. Drives the device
+    from the user's chosen runtime (runtimes.md) instead of auto-guessing."""
+    try:
+        from . import runtimes
+
+        return runtimes.active_device()
+    except Exception:
+        return None
 
 
 class FasterWhisper(ASRBackend):
@@ -168,24 +180,28 @@ class FasterWhisper(ASRBackend):
         if not (isinstance(cfg, str) and cfg.strip()) or cfg.strip().startswith("mlx-community/"):
             cfg = None
         model = model or os.environ.get("CAPTURE_WHISPER_MODEL") or cfg or _FW_DEFAULT
-        device = device or os.environ.get("CAPTURE_WHISPER_DEVICE") or _auto_device()
+        # Device is explicit: arg → env → the chosen runtime's device → (legacy) auto-detect.
+        device = device or os.environ.get("CAPTURE_WHISPER_DEVICE") or _runtime_device() or _auto_device()
         if compute_type is None:
             compute_type = os.environ.get("CAPTURE_WHISPER_COMPUTE") or (
                 "float16" if device == "cuda" else "int8"
             )
+        from . import runtimes as _rt
+
         try:
             self._model = WhisperModel(model, device=device, compute_type=compute_type)
-        except Exception:
-            # A CUDA/DLL/compute mismatch must not kill ASR; fall back to CPU int8.
-            if device == "cuda":
-                log.warning(
-                    "faster-whisper CUDA load failed (model=%s compute=%s); falling back to CPU/int8",
-                    model, compute_type, exc_info=True,
-                )
-                self._model = WhisperModel(model, device="cpu", compute_type="int8")
-                device, compute_type = "cpu", "int8"
-            else:
-                raise
+        except Exception as e:
+            # NO silent fallback (owner directive): a CUDA/DLL/compute failure must SURFACE — the GUI
+            # reports it (GET /v1/asr/backend) so the user can fix the runtime or pick another, rather
+            # than the transcript quietly switching to slow CPU.
+            msg = (
+                f"faster-whisper failed to load (model={model}, device={device}, "
+                f"compute={compute_type}): {type(e).__name__}: {e}"
+            )
+            _rt.set_last_error(msg)
+            log.error(msg)
+            raise
+        _rt.set_last_error(None)
         self.device = device
         self.compute_type = compute_type
         self._language_pin = language  # None => resolve per-call from the live setting

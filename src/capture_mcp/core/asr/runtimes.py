@@ -61,6 +61,7 @@ REGISTRY: list[dict] = [
 
 _REGISTRY_BY_ID = {r["id"]: r for r in REGISTRY}
 _activated: str | None = None
+_last_error: str | None = None
 
 
 def base_dir() -> Path:
@@ -147,3 +148,160 @@ def activate() -> str | None:
     _activated = rid
     log.info("ASR runtime activated: %s (%s)", rid, d)
     return rid
+
+
+def active_device() -> str | None:
+    """The explicit device for the active runtime (``cpu``/``cuda``), or None (remote / unset).
+    Used to drive the engine's device — no auto-pick, no silent fallback."""
+    r = _REGISTRY_BY_ID.get(active_runtime() or "")
+    return r.get("device") if r else None
+
+
+def set_last_error(msg: "str | None") -> None:
+    global _last_error
+    _last_error = msg
+
+
+def last_error() -> "str | None":
+    return _last_error
+
+
+def _detect_nvidia() -> bool:
+    """Cheap hint (no engine needed): is an NVIDIA GPU likely present? (nvidia-smi on PATH)."""
+    import shutil
+
+    return shutil.which("nvidia-smi") is not None
+
+
+def pack_url(rid: str) -> "str | None":
+    """The download URL for ``rid``'s pack: ``CAPTURE_ASR_PACK_URL_<RID>`` override, else composed
+    from ``CAPTURE_ASR_PACK_BASE`` + the runtime id + the daemon's Python tag. None if unconfigured
+    (hosting is set up by the release tooling)."""
+    env = os.environ.get(f"CAPTURE_ASR_PACK_URL_{rid.replace('-', '_').upper()}")
+    if env:
+        return env
+    base = os.environ.get("CAPTURE_ASR_PACK_BASE")
+    if base:
+        pytag = f"cp{sys.version_info.major}{sys.version_info.minor}-win_amd64"
+        return f"{base.rstrip('/')}/runtime-{rid}-{pytag}.zip"
+    return None
+
+
+def _download(url: str, dest: str, on_progress=None) -> None:
+    import urllib.request
+
+    req = urllib.request.Request(url, headers={"User-Agent": "capture"})
+    with urllib.request.urlopen(req) as r, open(dest, "wb") as f:
+        total = int(r.headers.get("Content-Length") or 0)
+        done = 0
+        while True:
+            chunk = r.read(262144)
+            if not chunk:
+                break
+            f.write(chunk)
+            done += len(chunk)
+            if on_progress:
+                on_progress(done, total, "")
+
+
+def install(rid: str, source: "str | None" = None, on_progress=None) -> dict:
+    """Install runtime ``rid`` from a pack. ``source`` may be an http(s) URL, a local ``.zip``, or a
+    local directory (dev); else falls back to :func:`pack_url`. Extracts into ``runtime_dir(rid)``.
+    Remote runtimes need no install. Does NOT change the active runtime (see :func:`set_active`)."""
+    import shutil
+    import tempfile
+    import zipfile
+
+    r = _REGISTRY_BY_ID.get(rid)
+    if r is None:
+        raise ValueError(f"unknown runtime {rid!r}")
+    if r["kind"] != "local":
+        return {"id": rid, "installed": True, "note": "remote runtime needs no install"}
+    dest = runtime_dir(rid)
+    src = source or pack_url(rid)
+    if not src:
+        raise RuntimeError(
+            f"no pack source for {rid!r} — set CAPTURE_ASR_PACK_BASE / CAPTURE_ASR_PACK_URL_* or pass a source"
+        )
+    # local directory pack (dev): copy it in
+    if Path(str(src)).is_dir():
+        if dest.exists():
+            shutil.rmtree(dest, ignore_errors=True)
+        shutil.copytree(src, dest)
+        log.info("installed runtime %s from dir %s", rid, src)
+        return {"id": rid, "installed": True}
+    tmp = None
+    try:
+        if str(src).lower().startswith(("http://", "https://")):
+            fd, tmp = tempfile.mkstemp(suffix=".zip")
+            os.close(fd)
+            _download(str(src), tmp, on_progress)
+            zpath = tmp
+        elif Path(str(src)).is_file() and str(src).lower().endswith(".zip"):
+            zpath = str(src)
+        else:
+            raise RuntimeError(f"unusable pack source: {src}")
+        if dest.exists():
+            shutil.rmtree(dest, ignore_errors=True)
+        dest.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(zpath) as z:
+            z.extractall(dest)
+        log.info("installed runtime %s -> %s", rid, dest)
+        return {"id": rid, "installed": True}
+    finally:
+        if tmp and os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
+def set_active(rid: str) -> str:
+    """Set ``rid`` as the active runtime (persisted) and load it into the running daemon. Switching
+    between two already-loaded runtimes cleanly needs a daemon restart; none→first works in-process."""
+    global _activated
+    r = _REGISTRY_BY_ID.get(rid)
+    if r is None:
+        raise ValueError(f"unknown runtime {rid!r}")
+    if r["kind"] == "local" and not is_installed(rid):
+        raise ValueError(f"runtime {rid!r} is not installed")
+    _config.set_(_CONFIG_KEY, rid)
+    log.info("active ASR runtime set: %s", rid)
+    _activated = None  # allow re-activation for a none→first install
+    activate()
+    return rid
+
+
+def status_payload() -> dict:
+    """Full payload for ``GET /v1/asr/runtimes``: each runtime + installed/active, plus a GPU hint."""
+    active = active_runtime()
+    runtimes = []
+    for r in REGISTRY:
+        runtimes.append(
+            {
+                **{k: r.get(k) for k in ("id", "label", "kind", "engine", "device", "requires")},
+                "installed": is_installed(r["id"]),
+                "active": r["id"] == active,
+            }
+        )
+    return {"active": active, "gpu": {"nvidia": _detect_nvidia()}, "runtimes": runtimes}
+
+
+def backend_report() -> dict:
+    """``GET /v1/asr/backend``: the active runtime/engine/device, whether an engine is importable,
+    and the last load error (so the GUI can show why ASR is off — never a silent fallback)."""
+    import importlib.util
+
+    rid = active_runtime()
+    r = _REGISTRY_BY_ID.get(rid or "")
+    available = (
+        importlib.util.find_spec("faster_whisper") is not None
+        or importlib.util.find_spec("mlx_whisper") is not None
+    )
+    return {
+        "runtime": rid,
+        "engine": r.get("engine") if r else None,
+        "device": r.get("device") if r else None,
+        "available": available,
+        "error": _last_error,
+    }
