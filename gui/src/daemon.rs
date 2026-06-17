@@ -146,6 +146,42 @@ fn default_chunk() -> f64 {
     30.0
 }
 
+/// A selectable ASR runtime (GET /v1/asr/runtimes) — engine + hardware requirement + state.
+#[derive(Deserialize, Clone, Default)]
+#[allow(dead_code)] // mirrors the wire shape; the UI reads a subset
+pub struct AsrRuntime {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub engine: String,
+    #[serde(default)]
+    pub device: Option<String>,
+    #[serde(default)]
+    pub requires: String,
+    #[serde(default)]
+    pub installed: bool,
+    #[serde(default)]
+    pub active: bool,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct AsrGpu {
+    #[serde(default)]
+    pub nvidia: bool,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct AsrRuntimes {
+    #[serde(default)]
+    pub active: Option<String>,
+    #[serde(default)]
+    pub gpu: AsrGpu,
+    #[serde(default)]
+    pub runtimes: Vec<AsrRuntime>,
+}
+
 #[derive(Deserialize, Clone, Default)]
 pub struct AudioDevice {
     pub id: String,
@@ -506,6 +542,39 @@ impl Daemon {
     /// Remove a downloaded model's weights from the HF cache (frees disk).
     pub fn asr_delete(&self, repo: &str) -> Result<(), String> {
         self.asr_post("/v1/asr/models/delete", repo)
+    }
+
+    /// The selectable ASR runtimes (registry + installed/active + a GPU hint).
+    pub fn asr_runtimes(&self) -> Result<AsrRuntimes, String> {
+        Self::agent()
+            .get(&format!("{}/v1/asr/runtimes", self.endpoint))
+            .set("Authorization", &self.auth())
+            .call()
+            .map_err(|e| e.to_string())?
+            .into_json()
+            .map_err(|e| e.to_string())
+    }
+
+    /// Install a runtime pack (background; progress over /v1/events as asr_runtime_install).
+    pub fn asr_runtime_install(&self, id: &str) -> Result<(), String> {
+        Self::ok_or_error(
+            Self::agent()
+                .post(&format!("{}/v1/asr/runtimes/install", self.endpoint))
+                .set("Authorization", &self.auth())
+                .send_json(serde_json::json!({ "id": id })),
+            "runtime install failed",
+        )
+    }
+
+    /// Set the active runtime (loaded into the running daemon; a switch may need a restart).
+    pub fn asr_set_runtime(&self, id: &str) -> Result<(), String> {
+        Self::ok_or_error(
+            Self::agent()
+                .post(&format!("{}/v1/asr/runtime", self.endpoint))
+                .set("Authorization", &self.auth())
+                .send_json(serde_json::json!({ "id": id })),
+            "set runtime failed",
+        )
     }
 
     /// Switch the microphone on a LIVE capture (empty = off). Appends to the mic track.

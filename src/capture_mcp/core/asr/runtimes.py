@@ -181,10 +181,17 @@ def pack_url(rid: str) -> "str | None":
     if env:
         return env
     base = os.environ.get("CAPTURE_ASR_PACK_BASE")
-    if base:
-        pytag = f"cp{sys.version_info.major}{sys.version_info.minor}-win_amd64"
-        return f"{base.rstrip('/')}/runtime-{rid}-{pytag}.zip"
-    return None
+    if not base:
+        # Default to the GitHub release assets for the running version, so a GUI install works
+        # out of the box once the release tooling has published the packs there.
+        try:
+            from ... import __version__
+
+            base = f"https://github.com/alex-nax/capture/releases/download/v{__version__}"
+        except Exception:
+            return None
+    pytag = f"cp{sys.version_info.major}{sys.version_info.minor}-win_amd64"
+    return f"{base.rstrip('/')}/runtime-{rid}-{pytag}.zip"
 
 
 def _download(url: str, dest: str, on_progress=None) -> None:

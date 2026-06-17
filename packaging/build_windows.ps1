@@ -58,11 +58,13 @@ foreach ($b in @("capture-gui.exe", "Capture.exe", "audiocap_win.exe")) {
 }
 
 # --- Freeze the daemon (PyInstaller onedir) --------------------------------------
-# Bundles faster-whisper + CTranslate2 (CPU); CUDA libs are NOT bundled. Excludes mlx.
+# LEAN by default (#58): NO ASR engine bundled — the user installs a runtime pack later
+# (docs/specs/asr-runtimes.md). Keeps huggingface_hub (model downloads) + the runtime activator.
+# Excludes faster-whisper/ctranslate2/mlx; the engine arrives via a pack on sys.path.
 if ($env:CAPTURE_SKIP_FREEZE -eq "1" -and (Test-Path (Join-Path $FREEZE "captured.exe"))) {
     Write-Output "==> CAPTURE_SKIP_FREEZE=1 - reusing freeze at $FREEZE"
 } else {
-    Write-Output "==> Freezing the daemon (PyInstaller onedir; faster-whisper CPU runtime)..."
+    Write-Output "==> Freezing the daemon (PyInstaller onedir; LEAN - no ASR engine bundled)..."
     & $VENVPY -m PyInstaller --noconfirm --onedir --name captured `
         --distpath (Join-Path $ROOT "packaging\build\dist") `
         --workpath (Join-Path $ROOT "packaging\build\work") `
@@ -74,7 +76,9 @@ if ($env:CAPTURE_SKIP_FREEZE -eq "1" -and (Test-Path (Join-Path $FREEZE "capture
         --hidden-import capture_mcp.core.frames `
         --hidden-import capture_mcp.core.asr.whisper_local `
         --hidden-import capture_mcp.core.asr.openai_compat `
-        --collect-all faster_whisper --collect-all ctranslate2 --collect-all huggingface_hub `
+        --hidden-import capture_mcp.core.asr.runtimes `
+        --collect-all huggingface_hub `
+        --exclude-module faster_whisper --exclude-module ctranslate2 `
         --exclude-module mlx --exclude-module mlx_whisper --exclude-module torch `
         (Join-Path $ROOT "packaging\captured_main.py")
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller freeze failed" }

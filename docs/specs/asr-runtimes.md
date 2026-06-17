@@ -3,8 +3,10 @@
 _Status: **partially implemented**, 2026-06-17 — the **keystone is validated** (a lean frozen daemon
 imports an external runtime pack); the activation mechanism, runtime-aware catalog, the **daemon routes**
 (`GET /v1/asr/runtimes`, `POST /install`, `POST /v1/asr/runtime`, `GET /v1/asr/backend`), and the
-**no-silent-fallback** wiring have landed. The pack-build/hosting tooling, the lean-by-default build, and
-the GUI runtime picker are **[planned]**. Source of truth = the code; sections mark **[done]** vs
+**no-silent-fallback** wiring, the **pack-build tooling** (`build_runtime_packs.ps1`), the
+**lean-by-default** Windows freeze, and the **GUI runtime picker** have all landed. What remains:
+**hosting** the packs as release assets, and the **AMD/Intel** runtimes. Source of truth = the code;
+sections mark **[done]** vs
 **[planned]**. Tracked in `features.json` (#58)._
 
 ## Purpose
@@ -36,17 +38,20 @@ This replaces the earlier "bundle faster-whisper + auto-detect" approach. Decisi
   `runtime_available()`): faster-whisper `Systran/*` repos when faster-whisper is importable, mlx repos
   on Apple Silicon (see [asr.md](asr.md)).
 
+- Daemon routes (`daemon/server.py` + `daemon/client.py`): `GET /v1/asr/runtimes`,
+  `POST /v1/asr/runtimes/install` (background + SSE), `POST /v1/asr/runtime`, `GET /v1/asr/backend`.
+- `whisper_local.FasterWhisper` — device from the active runtime; **no silent fallback** (raises +
+  records `runtimes.last_error()`).
+- `packaging/build_runtime_packs.ps1` — builds each local runtime's pack (`pip install --target` for the
+  daemon's Python tag, zipped to `dist/runtime-<id>-<pytag>.zip`).
+- `packaging/build_windows.ps1` — freezes the daemon **lean** by default (no engine bundled).
+- `gui/` — the runtime picker (Settings → Voice recognition): lists runtimes (GPU hint) → Install
+  (`POST /install`, SSE progress) → Use (`POST /v1/asr/runtime`) → the runtime-aware model picker.
+
 **[planned]**
-- A daemon route surface: `GET /v1/asr/runtimes` (registry + installed/active + a hardware hint) and
-  `POST /v1/asr/runtimes/install {id}` (download + extract the pack, set active) + progress over
-  `/v1/events`. Plus a `GET /v1/asr/backend` report (active runtime/device, last error).
-- `packaging/build_runtime_packs.ps1` — build the per-runtime packs (`pip install --target` for the
-  frozen daemon's Python tag, zip) and publish them as **GitHub release assets** alongside the installer.
-- `gui/` — the runtime picker (Settings → Voice recognition): list runtimes with hardware notes →
-  install → then the (runtime-aware) model picker → download → use.
-- `packaging/build_windows.ps1` — freeze the daemon **lean** by default (no faster-whisper bundled).
-- `whisper_local.FasterWhisper` — take its device from the **active runtime** (no `_auto_device` silent
-  CPU pick; no CUDA→CPU silent fallback) and surface the chosen device/error.
+- **Hosting** the packs: publish `runtime-*-<pytag>.zip` as **GitHub release assets** (the release
+  flow); `runtimes.pack_url()` already defaults to `…/releases/download/v<version>/…`.
+- AMD/Intel runtimes (whisper.cpp Vulkan / ONNX DirectML) as new registry entries + packs.
 
 ## Public contract
 
@@ -112,9 +117,11 @@ This replaces the earlier "bundle faster-whisper + auto-detect" approach. Decisi
 
 ## Known limitations / open items
 
-- **Pack build + hosting tooling [planned]:** a script to build each pack (`pip install --target`,
-  per pytag) + publish as release assets; the daemon's download/extract install route. CUDA pack is
-  large (~1–2 GB) — host as a release asset, download on demand.
+- **Pack build — done 2026-06-17:** `packaging/build_runtime_packs.ps1` builds each local runtime's pack
+  (`pip install --target` per pytag) → `dist/runtime-<id>-<pytag>.zip` (verified: faster-cpu = 86 MB
+  zip). The daemon's download/extract install route is in (`POST /v1/asr/runtimes/install`).
+  **[planned] Hosting:** publish those zips as **GitHub release assets** (`pack_url()` defaults to
+  `…/releases/download/v<version>/…`). The CUDA pack is large (~1–2 GB) — release asset, on-demand.
 - **Dependency overlap:** a pack ships its own `numpy`/`huggingface_hub`; prepended on `sys.path` they
   shadow the lean daemon's copies. Build packs pinned compatible with the daemon's code (or keep the
   daemon's overlap minimal). Validate per pack.
@@ -122,8 +129,9 @@ This replaces the earlier "bundle faster-whisper + auto-detect" approach. Decisi
   (`runtimes.active_device()`); a load failure **raises** (recording `runtimes.last_error()`, surfaced
   via `GET /v1/asr/backend`) instead of silently switching to CPU. `_auto_device` remains only as the
   no-runtime dev default.
-- **GUI runtime picker [planned]** — Settings → Voice recognition: list runtimes (`GET /v1/asr/runtimes`,
-  with the GPU hint) → install (`POST /install`, SSE progress) → select (`POST /v1/asr/runtime`) → the
+- **GUI runtime picker — done 2026-06-17** — Settings → Voice recognition: lists runtimes
+  (`GET /v1/asr/runtimes`, with the GPU hint) → Install (`POST /install`, SSE progress) → Use
+  (`POST /v1/asr/runtime`) → the
   (runtime-aware) model picker → download.
 - **AMD/Intel GPU deferred:** `whispercpp-vulkan` / `onnx-directml` registry slots + packs + model
   catalogs, later.

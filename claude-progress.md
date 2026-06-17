@@ -1,5 +1,30 @@
 # Progress Log
 
+## Session 65 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **ASR runtimes: pack tooling + lean
+build + GUI picker** (the rest of #58 except AMD + pack hosting).
+- **`packaging/build_runtime_packs.ps1`** — builds each local runtime's pack (`pip install --target` of
+  its registry `pip` list, for the daemon's Python tag) → `dist/runtime-<id>-<pytag>.zip`. Verified:
+  `faster-cpu` → `runtime-faster-cpu-cp312-win_amd64.zip` **(86 MB zip / 286 MB unpacked)**.
+- **`build_windows.ps1` now freezes LEAN** — drops `--collect-all faster_whisper/ctranslate2`, adds
+  `--exclude-module` for them + the `asr.runtimes` hidden-import (keeps huggingface_hub for downloads).
+  So the installer has **no ASR engine by default**; the user installs a pack.
+- **GUI runtime picker** (`gui/src/daemon.rs` + `app.rs`): Settings → "Voice recognition runtime" lists
+  the runtimes with a **GPU hint** (`nvidia` detected → recommend CUDA), an **Install** button (POST
+  install + SSE `asr_runtime_install` progress bar) for local runtimes, **Use** for installed/remote,
+  and the requires-note per runtime; the Whisper-model picker sits below (runtime-aware). Added
+  `daemon.rs` `AsrRuntimes`/`AsrRuntime`/`AsrGpu` + `asr_runtimes`/`asr_runtime_install`/
+  `asr_set_runtime`; `LiveState.runtime_install`; poll + SSE wiring; `install_runtime`/`set_runtime`.
+- **`runtimes.pack_url()` defaults** to `https://github.com/alex-nax/capture/releases/download/v<ver>/
+  runtime-<id>-<pytag>.zip`, so a GUI Install works out of the box once the release hosts the packs.
+- **Verified:** GUI `cargo build` clean + **renders (RENDERER_OK)** with the picker; `pack_url` resolves;
+  smoke 67/67. Specs synced (asr-runtimes.md, windows-release.md §2/CUDA note, daemon.md routes,
+  features.json #58).
+- **Remaining for #58:** host the packs as **release assets** (release flow) + a lean release
+  build/install verify; **AMD/Intel** runtimes (whisper.cpp/ONNX) — deferred per owner.
+
+---
+
 ## Session 64 — 2026-06-17
 **Agent**: builder (**Windows box**, branch **windows-support**) — **ASR runtimes: daemon routes +
 no-silent-fallback** (#58 engine/daemon slice).

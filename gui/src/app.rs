@@ -53,6 +53,7 @@ struct LiveState {
     import_progress: Option<(String, f32)>, // active import: (phase, fraction), one at a time
     import_result: Option<Result<String, String>>, // Ok(session_id) / Err(msg), drained by poll
     index_progress: HashMap<String, (String, f32)>, // session id -> (phase, fraction)
+    runtime_install: HashMap<String, f32>, // ASR runtime id -> install fraction (0..1)
     index_done: Vec<(String, Option<String>)>, // (session id, error?) — Some=failed; drained by poll
 }
 
@@ -110,6 +111,7 @@ pub struct CaptureApp {
     hotkey_id: u32,
     skill_status: Vec<skill::SkillStatus>, // per skill::AGENTS, cached
     asr: daemon::AsrModels,                // Whisper model catalog, polled
+    runtimes: daemon::AsrRuntimes,         // ASR runtime registry (install/select), polled
     perms: daemon::Permissions,            // macOS TCC status, polled
     cmd_input: String,                     // "launch a command/URL" field buffer
     cmd_focus: FocusHandle,                // focus for the command field
@@ -478,6 +480,7 @@ impl CaptureApp {
             hotkey_id: 0,
             skill_status: Vec::new(),
             asr: daemon::AsrModels::default(),
+            runtimes: daemon::AsrRuntimes::default(),
             perms: daemon::Permissions::default(),
             cmd_input: String::new(),
             cmd_focus: cx.focus_handle(),
@@ -630,6 +633,7 @@ impl CaptureApp {
                 self.windows = d.windows().unwrap_or_default();
             }
             self.asr = d.asr_models().unwrap_or_default();
+            self.runtimes = d.asr_runtimes().unwrap_or_default();
             self.perms = d.permissions().unwrap_or_default();
         }
     }
@@ -664,6 +668,22 @@ impl CaptureApp {
                         Some("asr_download_done") | Some("asr_download_error") => {
                             if let Some(repo) = ev.get("repo").and_then(|v| v.as_str()) {
                                 st.asr_progress.remove(repo);
+                            }
+                            continue;
+                        }
+                        // ASR runtime-pack installs are daemon-wide (no session_id).
+                        Some("asr_runtime_install") => {
+                            if let (Some(id), Some(frac)) = (
+                                ev.get("id").and_then(|v| v.as_str()),
+                                ev.get("fraction").and_then(|v| v.as_f64()),
+                            ) {
+                                st.runtime_install.insert(id.to_string(), frac as f32);
+                            }
+                            continue;
+                        }
+                        Some("asr_runtime_install_done") | Some("asr_runtime_install_error") => {
+                            if let Some(id) = ev.get("id").and_then(|v| v.as_str()) {
+                                st.runtime_install.remove(id);
                             }
                             continue;
                         }
@@ -1251,6 +1271,59 @@ impl CaptureApp {
                 v.message = match r {
                     Ok(()) => format!("active model: {short}").into(),
                     Err(e) => format!("set model failed: {e}").into(),
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Install an ASR runtime pack on the daemon (download/extract in the background; progress streams
+    /// over SSE into `live.runtime_install`; the daemon makes it active when done).
+    fn install_runtime(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(d) = self.daemon.clone() else {
+            self.message = "no daemon".into();
+            cx.notify();
+            return;
+        };
+        self.live.lock().unwrap().runtime_install.insert(id.clone(), 0.0);
+        self.message = format!("installing {id} runtime…").into();
+        cx.notify();
+        let live = self.live.clone();
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn({
+                    let id = id.clone();
+                    async move { d.asr_runtime_install(&id) }
+                })
+                .await;
+            let _ = this.update(cx, |v, cx| {
+                if let Err(e) = r {
+                    live.lock().unwrap().runtime_install.remove(&id);
+                    v.message = format!("runtime install failed: {e}").into();
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Select an installed ASR runtime (new captures transcribe with it).
+    fn set_runtime(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(d) = self.daemon.clone() else { return };
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn({
+                    let id = id.clone();
+                    async move { d.asr_set_runtime(&id) }
+                })
+                .await;
+            let _ = this.update(cx, |v, cx| {
+                v.message = match r {
+                    Ok(()) => format!("active runtime: {id}").into(),
+                    Err(e) => format!("set runtime failed: {e}").into(),
                 };
                 cx.notify();
             });
@@ -2621,6 +2694,86 @@ impl Render for CaptureApp {
         } else {
             "Whisper models  (runtime unavailable in this daemon — capture still works)".to_string()
         };
+        // Voice-recognition runtime picker (#58): no engine is bundled by default — the user installs
+        // a runtime pack matching their hardware, then picks a model (below). Install progress comes
+        // from the SSE-fed `runtime_install` map; a GPU hint suggests the right one.
+        let rt_install = self.live.lock().unwrap().runtime_install.clone();
+        let rt_rows: Vec<_> = self
+            .runtimes
+            .runtimes
+            .iter()
+            .map(|rt| {
+                let id = rt.id.clone();
+                let prog = rt_install.get(&id).copied();
+                let (status, color) = if rt.active {
+                    ("● active".to_string(), 0x66d9a0)
+                } else if let Some(f) = prog {
+                    (format!("↓ {:.0}%", (f * 100.0).clamp(0.0, 100.0)), 0x66d9a0)
+                } else if rt.installed {
+                    ("✓ installed".to_string(), 0x9aa0a6)
+                } else {
+                    (String::new(), 0x9aa0a6)
+                };
+                let busy = prog.is_some();
+                let mut header = div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(div().flex_1().child(rt.label.clone()))
+                    .child(div().text_color(rgb(color)).child(status));
+                // remote: "Use" (no install); local not-installed: "Install"; installed & inactive: "Use".
+                if rt.kind == "remote" && !rt.active {
+                    let i = id.clone();
+                    header = header.child(
+                        div().id(SharedString::from(format!("rt-use-{id}"))).px_2().py_1().rounded_md()
+                            .cursor_pointer().bg(rgb(0x2d4f67)).child("Use")
+                            .on_click(cx.listener(move |this, _, _, cx| this.set_runtime(i.clone(), cx))),
+                    );
+                } else if rt.kind != "remote" && !rt.installed && !busy {
+                    let i = id.clone();
+                    header = header.child(
+                        div().id(SharedString::from(format!("rt-inst-{id}"))).px_2().py_1().rounded_md()
+                            .cursor_pointer().bg(rgb(0x2d4f67)).child("Install")
+                            .on_click(cx.listener(move |this, _, _, cx| this.install_runtime(i.clone(), cx))),
+                    );
+                } else if rt.installed && !rt.active {
+                    let i = id.clone();
+                    header = header.child(
+                        div().id(SharedString::from(format!("rt-use-{id}"))).px_2().py_1().rounded_md()
+                            .cursor_pointer().bg(rgb(0x2d4f67)).child("Use")
+                            .on_click(cx.listener(move |this, _, _, cx| this.set_runtime(i.clone(), cx))),
+                    );
+                }
+                let mut row = div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(header)
+                    .child(div().text_color(rgb(0x6b7075)).child(rt.requires.clone()));
+                if busy {
+                    let frac = prog.unwrap_or(0.0).clamp(0.0, 1.0);
+                    row = row.child(
+                        div().w_full().h(px(4.0)).rounded_full().bg(rgb(0x2a2a2a)).child(
+                            div().h(px(4.0)).w(relative(frac)).rounded_full().bg(rgb(0x66d9a0)),
+                        ),
+                    );
+                }
+                row
+            })
+            .collect();
+        let rt_hint = if self.runtimes.gpu.nvidia {
+            "Voice recognition runtime  (NVIDIA GPU detected — the CUDA runtime is recommended)"
+        } else {
+            "Voice recognition runtime  (no NVIDIA GPU detected — use CPU or a remote endpoint)"
+        };
+        let runtime_panel = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(div().text_color(rgb(0x9aa0a6)).child(rt_hint.to_string()))
+            .children(rt_rows);
+
         let mut asr_panel = div()
             .flex()
             .flex_col()
@@ -3236,6 +3389,7 @@ impl Render for CaptureApp {
                             .children(session_rows),
                     )
             }))
+            .children(sett.then(|| runtime_panel))
             .children(sett.then(|| asr_panel))
             .children(playback.then(|| self.render_playback(window, cx))),
             )

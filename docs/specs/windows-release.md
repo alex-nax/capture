@@ -109,11 +109,13 @@ Already correct (no change): `audio.py` spawns the audio helper with `creationfl
 `packaging/build_windows.ps1` (parallel to `build_macos_dmg.sh`):
 1. `cargo build --release` the GUI (`gui/`) → `capture-gui.exe`.
 2. `cargo build --release` the tray agent (`agent/windows/`) → `Capture.exe`.
-3. PyInstaller **onedir** freeze of `packaging/captured_main.py` → `captured\captured.exe`, with
-   Windows hidden-imports (`capture_mcp.core.platform.windows`, `asr.whisper_local`,
-   `asr.openai_compat`, `indexer`, `frames`, `vision_client`, `import_media`) and
-   `--collect-all faster_whisper` + CTranslate2; **exclude `mlx`/`Quartz`/`AVFoundation`** (the macOS
-   freeze does the reverse). `freeze_support()` in `captured_main.py` is required (numba/multiprocessing).
+3. PyInstaller **onedir** freeze of `packaging/captured_main.py` → `captured\captured.exe`, **LEAN
+   (#58): NO ASR engine bundled** — Windows hidden-imports (`platform.windows`, `asr.whisper_local`,
+   `asr.openai_compat`, `asr.runtimes`, `indexer`, `frames`, `vision_client`, `import_media`),
+   `--collect-all huggingface_hub` (model downloads), and **`--exclude-module faster_whisper`/
+   `ctranslate2`/`mlx`**. The engine arrives later as a **runtime pack** the user installs (see
+   [asr-runtimes.md](asr-runtimes.md); built by `packaging/build_runtime_packs.ps1`). `freeze_support()`
+   in `captured_main.py` is required (multiprocessing).
 4. `cargo build --release` the native audio helper (`helper/audiocap_win_rs/`) → `audiocap_win.exe`;
    copy it **and** `helper/audiocap_win.py` (fallback) beside the frozen daemon; bundle the `skill/`;
    embed a `.ico` + an application manifest; assemble the install tree (§Public contract).
@@ -121,10 +123,11 @@ Already correct (no change): `audio.py` spawns the audio helper with `creationfl
 6. Compile `packaging/capture.iss` (Inno Setup) → `dist/CaptureSetup-<v>-x64.exe`; sign the installer.
 7. Best-effort ASR self-test (`captured.exe --asr-selftest`), non-fatal (like macOS).
 
-**CUDA is not frozen in.** The faster-whisper Python is bundled, but the cuBLAS/cuDNN runtime
-(`nvidia-*-cu12`) is **not** in the installer (keeps it small; product-architecture.md: "CUDA DLL
-pack on Windows is an on-demand download, not part of the installer"). At runtime the daemon picks
-CUDA if available, else CPU `int8`, else a configured remote endpoint — see [asr.md](asr.md).
+**No ASR engine is frozen in (#58).** The installer ships lean; the user installs a **runtime pack**
+matching their hardware (CPU / NVIDIA-CUDA / remote; AMD later) — see [asr-runtimes.md](asr-runtimes.md).
+Packs are built by `packaging/build_runtime_packs.ps1` and **hosted as GitHub release assets**; the
+daemon downloads + activates one (the keystone — a frozen daemon loading an external pack — is
+validated). No silent CPU fallback. (This supersedes the earlier "bundle faster-whisper" plan.)
 
 ### 3. Installer — Inno Setup [done 2026-06-17]
 
