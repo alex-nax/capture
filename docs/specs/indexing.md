@@ -103,6 +103,19 @@ transcript slice — so a consumer can prefer the *dictated* token over a garble
 `AGENTS.md` lists the flagged frames as "re-read these first." The **automated re-read** of flagged frames
 (higher-res / frontier re-extraction at build time) is the deferred second half — for now the flags steer the
 *consuming* agent's targeted re-read.
+
+### Live/online incremental indexing (#55)
+When a vision endpoint is reachable, a session is indexed **as it captures** instead of only after stop, so a
+navigable index exists in near-real-time. `core/live_index.py`'s `LiveIndex` is an incremental **binary
+merge-tree**: appending a frame extracts a leaf, then merges it with equal-sized right-edge subtrees (a binary
+counter), so each append is O(log n) NEW combines and never recomputes existing summaries; the forest of
+power-of-2 subtrees collapses into one root at `finalize()` (validated: 2N−1 nodes / single root across sizes).
+The daemon's `start_live_index(session)` (called after a successful start, **gated on a reachable endpoint**
+remembered from the GUI's `/v1/index/status` probe — `last_index_url`) runs a background worker
+(`live_index.run_worker`) that samples new frames off the capture hot path, checkpoints a partial
+`index.json`+`AGENTS.md` mid-capture, and finalizes on stop (`stop_live_index` sets the stop event). SSE:
+`live_index {leaves}` → `live_index_done`. No endpoint ⇒ unchanged post-capture `build_index`. Identical
+output shape to a batch index, so the GUI tree + the eval/tuning skills work unchanged.
 ### LM Studio structured output (the load-bearing constraint)
 LM Studio enforces `response_format: json_schema` with **llama.cpp grammar-constrained sampling**, which
 forbids a **reasoning model**'s `<think>` block → the model returns **empty `content`**. Neither `/no_think`

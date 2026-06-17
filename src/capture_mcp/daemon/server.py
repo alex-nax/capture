@@ -128,6 +128,58 @@ class CaptureDaemon(ThreadingHTTPServer):
         self._importing: set[str] = set()  # source paths being imported
         self._index_lock = threading.Lock()
         self._indexing: set[str] = set()  # session ids being indexed
+        # Live/online indexing (#55): the last index endpoint the GUI probed reachable (via
+        # /v1/index/status), and the per-session live workers (sid -> (thread, stop_event, live)).
+        self.last_index_url: str | None = None
+        self.last_index_model: str | None = None
+        self._live_workers: dict[str, tuple] = {}
+        self._live_lock = threading.Lock()
+
+    def start_live_index(self, session) -> None:
+        """#55: if a vision endpoint is reachable, build this session's index INCREMENTALLY while it
+        captures (a background worker driving live_index.run_worker off the capture hot path). No
+        endpoint ⇒ no-op (the session falls back to the post-capture build). Never raises."""
+        from ..core import live_index
+
+        url = self.last_index_url or os.environ.get(vision_client.ENV_URL) or None
+        if not url:
+            return
+        try:
+            client = vision_client.load(url, self.last_index_model)
+            if not client.available(timeout=3.0):
+                return
+        except Exception:
+            return
+        sid = session.id
+        stop = threading.Event()
+
+        def on_progress(n: int) -> None:
+            self.sse_broadcast({"type": "live_index", "session_id": sid, "leaves": n})
+
+        def run() -> None:
+            try:
+                live_index.run_worker(
+                    str(session.dir), client, preset=getattr(session, "index_preset", "auto") or "auto",
+                    sample_rate=0.5, model_label=client.model, stop_event=stop, on_progress=on_progress)
+                self.sse_broadcast({"type": "live_index_done", "session_id": sid})
+            except Exception as e:
+                log.warning("live index worker failed (%s): %s", sid, e)
+            finally:
+                with self._live_lock:
+                    self._live_workers.pop(sid, None)
+
+        t = threading.Thread(target=run, name=f"live-index-{sid}", daemon=True)
+        with self._live_lock:
+            self._live_workers[sid] = (t, stop)
+        t.start()
+        log.info("live indexing started for %s (endpoint %s)", sid, url)
+
+    def stop_live_index(self, sid: str) -> None:
+        """Signal a session's live-index worker to finalize (it writes the final index.json)."""
+        with self._live_lock:
+            entry = self._live_workers.get(sid)
+        if entry:
+            entry[1].set()  # stop_event → worker drains remaining frames + finalize()
 
     @property
     def endpoint(self) -> str:
@@ -661,14 +713,17 @@ class _Handler(BaseHTTPRequestHandler):
         self.server.registry.add(session)
         self.server.attach_stream(session)
         try:
-            return session.start()
+            result = session.start()
         except Exception as e:
             raise _ApiError(400, f"capture failed to start: {e}")
+        self.server.start_live_index(session)  # #55: incremental index if an endpoint is reachable
+        return result
 
     def _stop_session(self, sid: str) -> dict:
         reg = self.server.registry
         s = reg.get(sid)
         if s is not None:
+            self.server.stop_live_index(sid)  # #55: finalize the live index (no-op if none)
             return s.stop()
         rec = reg.history_record(sid)
         if rec is not None:
@@ -814,6 +869,9 @@ class _Handler(BaseHTTPRequestHandler):
             used_model = client.model
         except Exception:
             pass
+        if available:  # #55: remember the reachable endpoint so new captures can live-index
+            self.server.last_index_url = url or configured
+            self.server.last_index_model = used_model
         return {"available": available, "configured": True, "url": configured, "model": used_model}
 
     def _index_models(self, q: dict) -> dict:

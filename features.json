@@ -833,13 +833,13 @@
       "id": 55,
       "category": "engine",
       "priority": "high",
-      "description": "Live/online indexing during capture. The indexer currently runs offline (after capture). When an index endpoint is available, incrementally index frames as they arrive during a LIVE session (rolling leaf captions + periodic combine), so an index exists in near-real-time; fall back to the current post-capture build when no endpoint. Must not block capture or the daemon loop (background worker, SSE progress).",
+      "description": "Live/online incremental indexing during capture. core/live_index.py builds the index leaf-by-leaf via a binary MERGE-TREE (append → O(log n) new combines, never recomputes; validated 2N-1 nodes/single root across sizes). A daemon worker (start_live_index, gated on a reachable index endpoint remembered from the GUI's /v1/index/status probe) drives it off the capture hot path, checkpoints partial index.json+AGENTS.md mid-capture, and finalizes on stop; no endpoint → the existing post-capture build_index. SSE live_index/live_index_done. Integration-tested: worker captions frames incrementally + finalizes a valid tree.",
       "acceptance_criteria": [
         "With an endpoint configured, a live session accrues index nodes during capture (not only after stop).",
         "No endpoint -> unchanged post-capture behavior.",
         "Live indexing runs off the capture/daemon hot path; SSE reports progress; GUI<->MCP parity."
       ],
-      "passes": false,
+      "passes": true,
       "dependencies": [
         44,
         49

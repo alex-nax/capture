@@ -11,20 +11,20 @@ Each entry: `mic` (True force on / False force off / None leave as-is), `screens
 
 from __future__ import annotations
 
-#: preset id -> {label, mic, screenshots, index_preset, hint}
+#: preset id -> {label, mic, screenshots, index_preset, hint}. `auto` first — the most common choice.
 CAPTURE_PRESETS: dict[str, dict] = {
+    "auto": {"label": "Auto", "mic": None, "screenshots": True, "index_preset": "auto",
+             "hint": "Let the classifier decide per frame; adapts as the screen changes (used for live indexing)."},
     "meeting": {"label": "Meeting", "mic": True, "screenshots": True, "index_preset": "meeting",
                 "hint": "A video call/standup — mic on, captures participants, active speaker, task assignments."},
     "coding": {"label": "Coding / tutorial", "mic": False, "screenshots": True, "index_preset": "coding",
                "hint": "An IDE or a coding video — extracts verbatim code at high resolution."},
     "lecture": {"label": "Lecture / explainer", "mic": False, "screenshots": True, "index_preset": "lecture",
                 "hint": "A slide/explainer tutorial — topics, key points, code, and formulas."},
-    "auto": {"label": "Auto", "mic": None, "screenshots": True, "index_preset": "auto",
-             "hint": "Let the classifier decide per frame; adapts as the screen changes (used for live indexing)."},
     "general": {"label": "General", "mic": None, "screenshots": True, "index_preset": "auto",
                 "hint": "Plain capture with no opinionated wiring; index auto-classifies."},
-    "custom": {"label": "Custom (MCP)", "mic": None, "screenshots": True, "index_preset": "custom",
-               "hint": "Frontier-model-driven: a strong agent supplies tailored index prompts/schemas over MCP."},
+    "custom": {"label": "Custom", "mic": None, "screenshots": True, "index_preset": "custom",
+               "hint": "Tune the indexing parameters yourself in the session's playback view."},
 }
 DEFAULT_PRESET = "general"
 
