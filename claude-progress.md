@@ -1,5 +1,37 @@
 # Progress Log
 
+## Session 63 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **ASR runtimes redesign** (owner
+directives): no runtime by default, user picks a runtime for their hardware → installs a **pack** →
+picks a compatible model → downloads; **no silent fallback**; **frozen daemon + packs** (not a venv);
+NVIDIA+CPU+remote now, **AMD deferred** ("option 3 track").
+- **Keystone SPIKE — validated.** The risk in "frozen daemon + packs": can a PyInstaller-frozen daemon
+  import an external binary engine (ctranslate2 `.pyd` + DLLs) from `sys.path`? **Yes.** A **lean** freeze
+  (faster-whisper/ctranslate2 excluded) → `--asr-selftest` fails `ModuleNotFoundError: ctranslate2`
+  (rc=1, no runtime). Pointed at an external CPU pack (`pip install --target faster-whisper`, 286 MB) via
+  `CAPTURE_ASR_RUNTIME_DIR`, the same frozen `captured.exe --asr-selftest` → **`faster-whisper OK
+  (ctranslate2=4.8.0, cuda_devices=1)`** (rc=0). The frozen daemon loaded the external C-extension + its
+  DLLs from sys.path. So the owner's packs approach is viable.
+- **Landed (keystone mechanism):** `core/asr/runtimes.py` — runtime `REGISTRY` (faster-cpu / faster-cuda
+  / remote; AMD slots deferred) + `activate()` (prepends the active pack dir to `sys.path`, adds its DLL
+  dirs via `os.add_dll_directory`; `CAPTURE_ASR_RUNTIME_DIR` override; idempotent) + `base_dir()`/
+  `runtime_dir()`/`active_runtime()`/`is_installed()`. `packaging/captured_main.py` calls
+  `runtimes.activate()` before the daemon starts + in a runtime-aware `--asr-selftest`.
+- **Spec:** new `docs/specs/asr-runtimes.md` (the validated design — registry, pack format + hosting,
+  pick→install→model→download flow, no-silent-fallback, daemon routes, GUI). README row; features.json
+  **#58**; supersedes the "bundle faster-whisper" approach from Session 62 (manager runtime-awareness
+  from #62 stays — it reports whatever runtime a pack provides).
+- **Remaining [planned]:** daemon routes `GET /v1/asr/runtimes` + `POST .../install` (download/extract a
+  hosted pack) + `GET /v1/asr/backend`; `packaging/build_runtime_packs.ps1` (build + publish packs as
+  release assets per Python tag); lean-by-default `build_windows.ps1`; the GUI runtime picker; wire
+  `FasterWhisper` device from the runtime + drop `_auto_device`/CUDA→CPU silent fallback. Then AMD
+  (whisper.cpp/ONNX) as new registry entries + packs.
+- **Note:** the Session-62 RELEASE installer (bundled faster-whisper, no-console fix verified —
+  subsystem=2) exists for testing the console fix; it embodies the OLD ASR approach and will be rebuilt
+  lean once the runtime routes + GUI land.
+
+---
+
 ## Session 62 — 2026-06-17
 **Agent**: builder (**Windows box**, branch **windows-support**) — **fixed 2 issues from a real
 Windows install** of the Phase-4 installer.

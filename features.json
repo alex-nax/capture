@@ -879,6 +879,21 @@
         44,
         56
       ]
+    },
+    {
+      "id": 58,
+      "category": "asr",
+      "priority": "high",
+      "description": "User-chosen ASR runtimes via installable runtime packs (owner directives 2026-06-17). NO engine bundled by default; the user picks a runtime matching their hardware (faster-cpu / faster-cuda NVIDIA / remote OpenAI-compat+Riva; AMD/Intel via whisper.cpp-Vulkan or ONNX-DirectML DEFERRED as registry slots — 'option 3 track'), the app downloads a prebuilt ABI-matched pack into %LOCALAPPDATA%/Capture/runtimes/<id>, core/asr/runtimes.activate() prepends it to sys.path + adds its DLL dirs so the FROZEN daemon imports the engine, then the user picks a compatible model and downloads it. NO silent fallback: device is explicit per runtime; load failures surface (audio_status / GET /v1/asr/backend), never a quiet CPU degrade. KEYSTONE VALIDATED 2026-06-17: a lean frozen daemon (faster-whisper excluded) imported an external CPU pack (ctranslate2 4.8 + faster-whisper 1.2.1, 286MB) via sys.path -> 'faster-whisper OK'. Decisions: frozen daemon + packs (not an embeddable venv); NVIDIA+CPU+remote now, AMD deferred. SPEC: docs/specs/asr-runtimes.md.",
+      "acceptance_criteria": [
+        "A fresh install has no ASR runtime; the GUI shows 'choose a runtime' and capture still records screenshots+logs (audio_status reflects 'no runtime', not silent).",
+        "Selecting a runtime downloads+installs its pack; the frozen daemon then imports the engine (runtime_available true) and the model picker shows that runtime's compatible models to download.",
+        "A chosen GPU runtime that can't load (e.g. no NVIDIA GPU / missing CUDA) surfaces a clear error and does NOT silently fall back to CPU."
+      ],
+      "passes": false,
+      "dependencies": [
+        34
+      ]
     }
   ]
 }
