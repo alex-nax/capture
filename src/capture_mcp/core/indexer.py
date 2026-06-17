@@ -501,6 +501,10 @@ def _write_agents_md(d: Path, index: dict, model_label, nodes: dict) -> None:
             "  leading letter, `AActor`→`Actor`) or confabulate whole snippets. Before reproducing any code:",
             "  cross-check the transcript, and **re-read the frame at `repr_frame.path`** (full resolution) for the",
             "  exact tokens. Do not ship the index's `code` verbatim without verifying it against the frame.",
+            "- **Denoise by cross-frame consensus**: a token recurring across many reads of the same file is real; "
+            "use the majority. On a split, prefer the MORE-SPECIFIC variant (OCR drops chars, rarely adds — e.g. "
+            "`\\TFLog_` over `\\Log_`). Never NORMALIZE or 'fix' string literals / typos (`[*ERROR*]`, a `\": \"` "
+            "separator) — preserve them or treat as uncertain; silently correcting them corrupts the code.",
         ]
         if has_nv:
             out.append("- **`data.narration_values`** holds tokens (numbers/identifiers) SPOKEN over a code frame — "

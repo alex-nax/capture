@@ -57,10 +57,18 @@ Input:
 Do:
 1. Read the whole scaffold. Use `surface` to find the load-bearing frames for {{target}}.
 2. Reconstruct {{target}} as faithfully as the text allows.
-3. CRITICAL on verbatim content (code, notation, formulas): reproduce only what the text actually
-   contains. If a field is empty or looks like noisy OCR, mark it uncertain — do NOT "repair" it into
-   plausible-looking tokens, and do NOT synthesize tokens from cross-frame consensus. Hallucinated
-   confidence is the failure mode we are measuring.
+3. CRITICAL on verbatim content (code, notation, formulas):
+   - **Use cross-frame consensus to DENOISE** — a token that recurs across many reads of the same
+     persistent content (e.g. a file open for 100+ frames) is real; that majority vote is how a noisy
+     local-model index reconstructs cleanly. But NEVER invent a token no frame shows.
+   - **On split consensus, prefer the more-specific variant** — the one carrying a project/class/name
+     prefix or the longer form (e.g. `\TFLog_` over `\Log_`, `GetInstance` over `Instance`). OCR tends to
+     DROP characters, not add them.
+   - **Never "fix" typos or normalize string literals in `code`.** Preserve `[*ERROR*]`, a `": "`
+     separator, an on-screen `GetStatPerctile` typo, etc. exactly — or flag them `verbatim_uncertain`.
+     "Correcting" them to plausible forms is the silent-corruption failure we measure.
+   - If a field is empty or looks like pure noise, mark it uncertain — do NOT repair it into plausible
+     tokens. Hallucinated confidence is the failure mode.
 
 Write:
 - {{out_dir}}/extraction.md and {{out_dir}}/extraction.json (same shape as the baseline's, so they
