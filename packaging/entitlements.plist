@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the Developer-ID-signed, hardened-runtime bundle (#31).
+
+  The PyInstaller-frozen daemon bundles mlx (Metal JIT) + numba/llvmlite (LLVM JIT)
+  and loads many .so/.dylib, so it needs the JIT + library-validation relaxations
+  below or it crashes under the hardened runtime. The mic-fallback wants audio-input.
+  Screen Recording needs NO entitlement — it is TCC-prompted at runtime; what makes
+  the daemon share the app's grant is the shared Team ID (Developer ID), not an
+  entitlement.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+</dict>
+</plist>

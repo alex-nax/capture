@@ -2,11 +2,11 @@
 _Status: current as of 2026-06-07. Source of truth = the code; update this spec in the same change as the code._
 
 ## Purpose
-Launch a target process and tee its `stdout`/`stderr` to timestamped log files so a capture session has a durable record of process output. Implemented by `ProcessCapture` in `src/capture_mcp/proc.py`. This scope is **launch-mode only**: it spawns the child itself so it can attach to the child's pipes. When `capture_mcp` attaches to an already-running pid, log capture is skipped entirely because the kernel gives no handle on a pre-existing process's stdout/stderr (see Known limitations).
+Launch a target process and tee its `stdout`/`stderr` to timestamped log files so a capture session has a durable record of process output. Implemented by `ProcessCapture` in `src/capture_mcp/core/proc.py`. This scope is **launch-mode only**: it spawns the child itself so it can attach to the child's pipes. When `capture_mcp` attaches to an already-running pid, log capture is skipped entirely because the kernel gives no handle on a pre-existing process's stdout/stderr (see Known limitations).
 
 ## Files
-- `src/capture_mcp/proc.py` — the entire scope (`ProcessCapture` class).
-- Depends on `src/capture_mcp/util.py` for `iso` and `now` (timestamp helpers). `util.py` is owned by another scope and is only consumed here.
+- `src/capture_mcp/core/proc.py` — the entire scope (`ProcessCapture` class).
+- Depends on `src/capture_mcp/core/util.py` for `iso` and `now` (timestamp helpers). `util.py` is owned by another scope and is only consumed here.
 
 ## Public contract
 Class `ProcessCapture` (proc.py:27).
@@ -32,6 +32,14 @@ Return / type notes:
 - `stop()`/`poll()` return `None` when `self.proc` is falsy (never started).
 
 This scope writes no MCP/stdout protocol output of its own; all diagnostics go through the module logger `log = logging.getLogger(__name__)` (proc.py:24), consistent with the "stdout is sacred" constraint in docs/architecture.md.
+
+
+### Event hook (M0b, feature #26)
+
+`ProcessCapture` accepts an optional `emit=None` keyword (an `EventBus.publish`-shaped
+callable, normally `CaptureSession.events.publish`). When set, it emits
+`log_line` {stream,line} per merged line. Publishing never raises/blocks; with `emit=None` the component is
+silent and behaves exactly as before. See [events.md](events.md).
 
 ## Behavior
 1. **start() — prepare directory and args**: `out_dir.mkdir(parents=True, exist_ok=True)`. `command` is normalized to a list: `util.split_command(command)` if a string (POSIX `shlex.split` / Windows `CommandLineToArgvW`), else `list(command)`.

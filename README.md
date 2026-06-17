@@ -12,6 +12,8 @@ An MCP server that captures everything a target process produces, **on demand**:
 
 An agent calls `capture_start` to begin saving to a chosen location and
 `capture_stop` to end it and stop using disk. `capture_status` reports progress.
+Prefer to drive it yourself? There's also a `capture` **CLI** and a native
+menu-bar **GUI** — no agent needed (see **[Run it manually](#run-it-manually-without-an-agent--daemon-cli-gui)** below).
 
 > Platform: **macOS** (tested on 15.x, Apple Silicon) and **Windows** (10/11, NVIDIA box).
 > OS-specific capture (screenshots, window discovery, audio) lives behind a platform
@@ -91,7 +93,7 @@ Recording* — required for both screenshots and per-app audio.
 
 ## ASR backends
 
-The ASR layer is pluggable (`src/capture_mcp/asr/`):
+The ASR layer is pluggable (`src/capture_mcp/core/asr/`):
 
 - **Local (default).** `mlx-whisper` (Apple-Silicon-native) or `faster-whisper`.
   Runs entirely on this Mac; downloads model weights on first use.
@@ -116,6 +118,147 @@ Example `claude_desktop_config.json` / `.mcp.json` entry:
     }
   }
 }
+```
+
+## Run it manually (without an agent) — daemon, CLI, GUI
+
+Beyond the MCP tools, the engine is also driven by a local **daemon** (an HTTP `/v1`
+API), a **`capture` CLI**, and a native **menu-bar GUI** — all thin clients of the
+same capture engine and the same live session registry, so a capture started by one
+shows up in the others. (Design: [`docs/specs/product-architecture.md`](docs/specs/product-architecture.md);
+API: [`docs/specs/daemon.md`](docs/specs/daemon.md); GUI: [`docs/specs/gui.md`](docs/specs/gui.md).)
+
+After `uv pip install -e .` you get three console scripts: `capture-mcp` (MCP server),
+`captured` (daemon), `capture` (CLI). If your venv predates them, re-run the install —
+or use the `python -m capture_mcp.<daemon|cli|server>` forms shown below.
+
+### CLI (simplest)
+
+```bash
+# start the local daemon (spawns it in the background; writes ~/.capture/daemon.json)
+capture daemon start                 # or: python -m capture_mcp.cli daemon start
+
+capture windows                      # list on-screen windows (app, pid, title)
+
+# start a capture — pick ONE target: --app / --pid / --command
+capture start --out ~/.capture/runs --app "Safari"
+#   options: --pid N | --command "cmd" | --interval 2 | --no-audio | --no-screenshots
+#            --audio-source app|mic | --asr auto|local|openai|nemotron
+
+capture status                       # all sessions + live counters
+capture tail <session_id> -n 20      # last N transcript segments
+capture watch                        # stream live events (state/screenshots/transcript); Ctrl-C
+capture stop                         # stop the running capture (or pass a <session_id>)
+capture daemon stop                  # shut the daemon down
+```
+
+Output lands in `<out>/capture-<id>/` (layout above). The daemon keeps sessions alive
+across CLI calls; an MCP agent transparently uses the daemon when one is running
+(`CAPTURE_MCP_EMBEDDED=1` forces the in-process engine instead).
+
+### Daemon (run it in the foreground)
+
+`capture daemon start` spawns it for you; to run it yourself and watch its logs:
+
+```bash
+captured                             # or: python -m capture_mcp.daemon
+# serves http://127.0.0.1:<port>; endpoint + bearer token in ~/.capture/daemon.json (0600)
+```
+
+### GUI (native menu-bar app, macOS)
+
+```bash
+# build once (needs Rust — https://rustup.rs ; gpui's first compile is heavy)
+cargo build --manifest-path gui/Cargo.toml          # add --release for an optimized build
+# run it (a dev binary has no bundled daemon, so start one: `capture daemon start`)
+./gui/target/debug/capture-gui
+```
+
+> The **packaged** `Capture.app` (below) bundles its own frozen daemon and auto-spawns it; this
+> dev binary doesn't, so it needs a daemon already running.
+
+A window with a daemon-health header, a window picker, Start/Stop, a live session list,
+and a live **transcript + screenshot preview** (streamed over `/v1/events`). It also adds
+a **menu-bar item** (`● capture` idle, `⦿ N` while N capture) with an Open / Stop-all /
+Quit menu, a global hotkey **⌃⌘R** to toggle capture from anywhere, and an **Install skill →**
+row that drops the `capture` skill into a coding agent's home (see below). To ship it as a
+double-clickable app, see **[Installing the macOS app](#installing-the-macos-app-unsigned-test-build)**.
+
+### Screen Recording note
+
+Per-app audio + screenshots need the **Screen Recording** grant for whichever process
+launches the capture — your Terminal, the daemon, or your MCP client. Run from a terminal
+you've granted (System Settings ▸ Privacy & Security ▸ Screen Recording). If the helper
+prints `displays=0` / `no display available`, the launching process simply isn't granted.
+
+## Installing the macOS app (unsigned test build)
+
+Package the GUI as a double-clickable, **self-contained** `Capture.app` inside a `.dmg` — it
+bundles a frozen copy of the daemon, so there's no venv to set up and nothing to start by hand:
+
+```bash
+bash packaging/build_macos_dmg.sh        # -> dist/Capture-0.2.0.dmg  (needs Rust + Xcode CLT + ./init.sh venv)
+```
+
+The build PyInstaller-freezes the daemon into the app (`Contents/Resources/captured/`, with the
+signed `audiocap` helper beside it). Open the DMG and drag **Capture.app** to **Applications**.
+
+> ✅ The **official release `.dmg`** (GitHub Releases) is **Developer-ID signed + notarized** —
+> just open it and drag to Applications, no Gatekeeper bypass needed. Set
+> `CAPTURE_SIGN_IDENTITY` + `CAPTURE_NOTARIZE_PROFILE` to produce a notarized build yourself;
+> otherwise the local build is **ad-hoc** signed (dev only).
+
+> ⚠️ A **self-built ad-hoc** dmg is NOT notarized — macOS **Gatekeeper blocks it on first launch**
+> ("Apple could not verify 'Capture' is free of malware"). Bypassing means running an app Apple
+> hasn't checked — only do it for a build you trust (one you built yourself).
+
+**Bypass Gatekeeper (only for an ad-hoc / self-built dmg, first launch):**
+
+- **Easiest:** **Control-click** (right-click) `Capture.app` → **Open** → **Open** in the dialog.
+- **macOS 15 (Sequoia):** double-click → it's blocked → **System Settings ▸ Privacy & Security** →
+  scroll to the "'Capture' was blocked" line → **Open Anyway** → confirm with Touch ID/password.
+- **Terminal:** strip the download-quarantine flag, then open:
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/Capture.app
+  open /Applications/Capture.app
+  ```
+
+**What the app needs / does:**
+
+- Launching **Capture.app** runs a small **menu-bar agent** (`CaptureBar`) — it lives in the menu
+  bar (top-right, `● capture`), with **no Dock icon**. It is the persistent part: it spawns the
+  bundled daemon, shows capture status, and opens the window. **Closing the window keeps the agent
+  (and your captures) running** — re-open from the menu-bar **Open Window**. Use the menu-bar
+  **Quit Capture** to fully exit (it stops the daemon when idle, so the app isn't "in use" if you
+  want to delete/replace it).
+- It is **self-contained** — the agent auto-spawns its **bundled** frozen daemon (detached) if one
+  isn't already running. No repo, no venv, no `capture daemon start`. (If a daemon is already
+  running — e.g. from the repo — it attaches to that one instead.)
+- **On-device transcription works out of the box** — the app bundles the mlx Whisper runtime.
+  Whisper **model weights** are *not* bundled (they're large); download them from the app's
+  **Whisper models** panel (Download → pick a size; it shows live progress), then **Use** to make
+  one active. Weights cache in `~/.cache/huggingface` and are shared with the repo. The default
+  model is `whisper-large-v3-turbo`; `whisper-tiny`/`base` are great for quick tests. (You can still
+  point at a remote OpenAI-compatible ASR endpoint instead.)
+- Per-app audio still needs **Screen Recording** granted to the app (the daemon it launches is the
+  TCC-responsible process); the bundled `audiocap` helper keeps its stable signing identity so that
+  grant persists across rebuilds.
+- This makes the DMG large (~166 MB) — mlx's Metal kernel library is ~125 MB. That's the runtime,
+  not models; model weights are downloaded on demand.
+
+**Install the skill into your coding agent.** The app bundles the `capture` skill and can drop it
+into a coding agent's home so the agent can drive capture-mcp from any project. Each button shows
+its status and re-installs/updates on click (we ship skill updates this way):
+
+- **Claude Code** → `~/.claude/skills/capture/`
+- **Codex** → `~/.codex/skills/capture/`
+
+The button label reflects the state: `— install` (not present), `✓` (up to date), or `↑ update`
+(installed but the bundled skill is newer). Headless equivalents:
+
+```bash
+capture-gui --skill-status                 # report install/up-to-date/update for each agent
+capture-gui --install-skill "Claude Code"  # install/update for the named agent
 ```
 
 ## How per-app audio works

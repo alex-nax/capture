@@ -1,26 +1,31 @@
 # Spec: MCP Server
 
-_Status: current as of 2026-06-07. Source of truth = the code; update this spec in the same change as the code._
+_Status: current as of 2026-06-10. Source of truth = the code; update this spec in the same change as the code._
 
 ## Purpose
 
 The MCP server is the entrypoint and orchestration layer for capture-mcp. It exposes
-on-demand process capture to an MCP client over stdio as three tools
-(`capture_start`, `capture_stop`, `capture_status`). It validates arguments,
-constructs and tracks `CaptureSession` objects in a bounded in-memory registry, and
-offloads all blocking work to worker threads so the MCP event loop (and the stdio
-transport) stays responsive. Per `docs/architecture.md`, this layer **only
+on-demand process capture to an MCP client over stdio as twelve tools
+(`capture_start`, `capture_stop`, `capture_status`, `capture_prune`, `capture_retranscribe`,
+`capture_import`, `capture_index`, `index_models`, `transcription_settings`, `capture_set_mic`,
+`list_windows`, `list_audio_devices`). `capture_index` takes a structured provider/host/port (or a
+full endpoint) + `max_px`, and `index_models` lists a provider's models. It validates arguments,
+constructs `CaptureSession` objects and tracks them via the shared
+`core.registry.SessionRegistry` (bounded live tracking + disk-backed history — see
+[session-registry.md](session-registry.md)), and offloads all blocking work to worker
+threads so the MCP event loop (and the stdio transport) stays responsive. Per `docs/architecture.md`, this layer **only
 orchestrates** — it must not contain capture logic itself (that lives in `session.py`
 and the components).
 
 ## Files
 
 - `src/capture_mcp/server.py` — the entire scope (the `FastMCP` instance, the three
-  tool handlers, the session registry, `_prune_locked`, and `main`).
+  tool handlers, the module-level `registry = SessionRegistry()`, and `main`).
 
 Imported but out of scope here:
-- `src/capture_mcp/session.py` — `CaptureSession` (called via `.start()`, `.stop()`,
-  `.summary()`, and the `.id` / `.state` attributes).
+- `src/capture_mcp/core/session.py` — `CaptureSession` (called via `.start()`, `.stop()`).
+- `src/capture_mcp/core/registry.py` — `SessionRegistry` (the registry itself moved to
+  the engine in the M0a split; specced in [session-registry.md](session-registry.md)).
 
 ## Public contract
 
@@ -36,7 +41,7 @@ Imported but out of scope here:
   `logging.basicConfig(level=logging.INFO, stream=sys.stderr, ...)` (`server.py:26-30`),
   with logger name `"capture_mcp"`. There are no `print()` calls in the server path.
 
-### Tool: `capture_start` (`server.py:59-149`)
+### Tool: `capture_start` (`server.py:45-135`)
 
 Async handler returning a `dict` (the session summary produced by
 `session.start()`). Parameters (name : type = default):
@@ -45,6 +50,9 @@ Async handler returning a `dict` (the session summary produced by
 - `command: str | None = None` — shell command to launch and capture (the only mode
   that captures logs).
 - `pid: int | None = None` — PID of a running process to attach to.
+- `window_id: int | None = None` — pin screenshots to this exact window (a `window_id`
+  from `list_windows`); refines a `pid`/`app_name` target when one process owns several
+  windows (audio stays per-process).
 - `app_name: str | None = None` — case-insensitive substring of an app name to attach to.
 - `bundle_id: str | None = None` — bundle id for per-app audio (e.g. `"com.apple.Safari"`).
 - `screenshot_interval: float = 1.0` — seconds between screenshots.
@@ -55,6 +63,9 @@ Async handler returning a `dict` (the session summary produced by
 - `capture_screenshots: bool = True`.
 - `capture_audio: bool = True`.
 - `audio_source: str = "auto"` — `"auto"`, `"app"`, or `"mic"`.
+- `mic_device: str | None = None` — also record this input device as a SEPARATE mic track
+  (`mic.s16le`/`mic_transcript.jsonl`) in addition to the app audio; id from
+  `list_audio_devices`, or `"default"`. (No echo cancellation — see `helper-contract.md`, feature #38.)
 - `audio_chunk_seconds: float = 8.0`.
 - `asr_backend: str = "auto"` — `"auto"`, `"local"`/`"whisper"`, or `"nemotron"`/`"riva"`.
 - `cwd: str | None = None` — working directory for a launched command.
@@ -66,7 +77,7 @@ Return: the `dict` returned by `CaptureSession.start()` (a session summary that
 includes `session_id`). The exact shape is defined by `session.py` and is not fixed
 by this scope.
 
-### Tool: `capture_stop` (`server.py:152-180`)
+### Tool: `capture_stop` (`server.py:138-168`)
 
 Async handler. Parameter:
 
@@ -75,20 +86,100 @@ Async handler. Parameter:
 
 Returns a `dict`:
 - When `session_id is None` and **no** sessions are running:
-  `{"stopped": [], "note": "no running captures"}` (`server.py:168`).
-- Otherwise: the `dict` returned by the target session's `.stop()` (final summary).
+  `{"stopped": [], "note": "no running captures"}` (`server.py:152`).
+- For a session this server owns: the `dict` returned by its `.stop()` (final summary).
+- For a finished session recovered from the on-disk index (a previous server's
+  session): its recovered record, as-is — mirroring `stop()`'s idempotent
+  return-summary behavior on already-stopped sessions (`server.py:163-167`).
 
-### Tool: `capture_status` (`server.py:183-197`)
+### Tool: `capture_status` (`server.py:171-185`)
 
 Async handler. Parameter:
 
 - `session_id: str | None = None`.
 
 Returns a `dict`:
-- If `session_id` is given: `session.summary()` for that session.
-- If omitted: `{"sessions": [s.summary() for s in _sessions.values()]}` — a list of
-  summaries for **every** session this server has created (running and finished, up
-  to the registry bound).
+- If `session_id` is given: `registry.summary(session_id)` — the live summary for a
+  session this server owns, else the recovered history record.
+- If omitted: `{"sessions": registry.summaries()}` — every session this server has
+  created **plus** finished sessions recovered from the on-disk index at startup,
+  oldest first, up to the registry bound.
+
+### Tool: `list_windows` (`server.py:188-202`)
+
+Async handler (added in feature #29). Parameters:
+
+- `app_name: str | None = None` — case-insensitive substring filter.
+- `pid: int | None = None` — process id filter.
+
+Returns `{"windows": [...], "count": <len>}` where each entry is a JSON-ready
+dict with keys `window_id`, `pid`, `app_name`, `title`, `width`, `height`,
+ordered largest-area first (the first match is what `capture_start` would
+target). Backed by `core.list_windows()` -> `platform.current().window_finder
+.find()` (the same picker the daemon's `/v1/windows` and the GUI will use),
+offloaded via `anyio.to_thread.run_sync`. May be empty (no error). Note: on
+macOS without the Screen Recording grant, window titles can be empty
+strings — fields are stable, contents permission-dependent.
+
+### Tool: `list_audio_devices` (`server.py`)
+
+Async handler, no parameters. Returns `{"devices": [{id, name, default}]}` — the
+microphone/input devices for `capture_start`'s `mic_device`. Daemon-first
+(`GET /v1/audio/mics`); embedded fallback calls
+`platform.current().audio_source.list_input_devices()` (macOS: the bundled
+`audiocap --list-mics`; other platforms: empty list).
+
+### Tool: `capture_prune` (`server.py`)
+
+Free disk on a FINISHED capture. Params: `session_id`, `parts: list[str]` (subset of
+`screenshots` / `screenshots_halve` / `audio` — validated against `PRUNE_PARTS`). Returns
+`{pruned, freed_bytes, screenshots, <capability flags>}`. Daemon-first
+(`POST /v1/sessions/{id}/prune`); embedded calls `registry.prune_session`. Capability flags
+(`has_screenshots`/`has_audio`/`has_mic`/`can_retranscribe`) also appear in every
+`capture_status` summary, so an agent can decide what to prune / whether re-transcribe is possible.
+
+### Tool: `capture_retranscribe` (`server.py`)
+
+Re-run ASR over a saved capture's `audio.s16le` with the active (or a chosen) Whisper model,
+replacing its transcript (the old one is kept as `transcript.prev.*`). Params: `session_id`,
+`asr_backend?`, `model?`. Background on the daemon (progress over `/v1/events`); requires
+`can_retranscribe` (audio still present). **Daemon-only** — the embedded path raises (it
+doesn't run the background job).
+
+### Tool: `capture_set_mic` (`server.py`)
+
+Switch the microphone on a RUNNING capture, live (no restart). Params: `session_id`, `device`
+(an id from `list_audio_devices` / `"default"` = on/switch; `null`/`""` = off). The mic is a
+separate track (`mic.s16le`/`mic_transcript.*`); switching **appends** so it stays continuous.
+Returns the updated summary. **Daemon-only** (live state mutation).
+
+### Tool: `transcription_settings` (`server.py`)
+
+Get or set the persisted transcription settings shared by all new captures + re-transcribes.
+Params `language?` (ISO code, `""`/`auto` = auto-detect) + `chunk_seconds?` (1–120; default 30).
+No args = read current. Applies **on the fly** — a language change takes effect on a running
+capture's next chunk. Returns `{language, chunk_seconds, active_model, backend_available}`.
+**Daemon-only.** (Also surfaced as args on `capture_retranscribe`: `language`/`chunk_seconds` to fix
+a wrong-language or short-chunk transcript.)
+
+### Tool: `capture_import` (`server.py`)
+
+Import an existing audio/video file as a session. Params: `path`, `output_dir?`, `asr_backend?`.
+The daemon extracts the file's audio (and, for video, periodic frames) via the bundled helper
+(AVFoundation, no ffmpeg), runs ASR, and registers a finished session that shows up in
+`capture_status`/the GUI playback scrubber — `audio_source="import"` marks the origin. Audio-only
+files become audio-only sessions; silent videos become frames-only. Background on the daemon
+(progress over `/v1/events`: `import`→`import_done`/`_error`); returns `{path, started}`.
+**Daemon-only** — the embedded path raises.
+
+### Tool: `capture_index` (`server.py`)
+
+Build a multimodal index of a finished capture's screenshots with a remote vision LLM
+(LM Studio): caption the leaf frames, combine up to a whole-session root summary
+(`GET /v1/sessions/{id}/index` returns the tree). Params: `session_id`, `endpoint?`,
+`model?`, `sample_rate?`. Requires `can_index` (screenshots present) **and** a configured,
+reachable endpoint — disabled (503) otherwise. Background (progress over `/v1/events`:
+`index`→`index_done`/`_error`). **Daemon-only.**
 
 ### Errors
 
@@ -98,7 +189,26 @@ code raises (see Failure modes).
 
 ## Behavior
 
+### Daemon-first dispatch (the daemon-backed tools)
+
+`_daemon()` returns a live `DaemonClient` when a `captured` daemon is discoverable
+(`~/.capture/daemon.json`) and answers `/v1/health`, **unless** `CAPTURE_MCP_EMBEDDED`
+is set (forces embedded). The check is per-call and cheap (~2 s probe), so a daemon
+started/stopped mid-session is picked up. When a daemon is present, each tool proxies
+to it (the blocking client call is offloaded via `anyio.to_thread.run_sync`, and
+`DaemonError` is remapped to `ValueError` so the surfaced message matches the embedded
+path); otherwise the tool runs the embedded engine exactly as described below. Argument
+validation (exactly-one-target) happens in the tool **before** dispatch, so validation
+errors are identical regardless of backend. `capture_stop`'s "stop the unique running
+one" resolution is replicated against the daemon's `/v1/sessions` for the daemon path.
+This is what lets an MCP agent share one live registry — and, with the packaged signed
+daemon (#31/#30), one Screen Recording grant — with the CLI and GUI.
+
 ### `capture_start`
+
+Accepts an optional `preset` (#54: meeting/coding/lecture/auto/general/custom) recording the capture
+intent + the index preset a later `capture_index` defaults to; a frontier model picks `custom` and
+supplies its own `leaf_prompt`/`leaf_schema`.
 
 1. Defines a local `_present(v)` predicate (`server.py:113-120`): `None` is absent; a
    `str` is present only if it is non-blank after `.strip()`; any other non-`None`
@@ -111,54 +221,43 @@ code raises (see Failure modes).
 4. If `len(provided) > 1`: raise `ValueError(f"specify exactly one target, but got:
    {...}")` listing the provided names (`server.py:125-126`).
 5. Constructs a `CaptureSession` with all parameters forwarded verbatim
-   (`server.py:128-144`). Construction is synchronous and happens on the event loop
+   (`server.py:114-130`). Construction is synchronous and happens on the event loop
    (it is expected to be cheap; the heavy work is in `.start()`).
-6. Calls `summary = await anyio.to_thread.run_sync(session.start)` — the blocking
-   start (subprocess launch, ASR model load, etc.) runs on a worker thread
-   (`server.py:145`).
-7. Under `_lock`: inserts `_sessions[session.id] = session`, then calls
-   `_prune_locked()` (`server.py:146-148`).
-8. Returns `summary` (`server.py:149`).
+6. Calls `registry.add(session)` **before** starting (`server.py:131-134`), so
+   `capture_status` already lists the session in state `"starting"` while a slow
+   start (ASR model load) is in flight.
+7. Returns `await anyio.to_thread.run_sync(session.start)` — the blocking start runs
+   on a worker thread (`server.py:135`).
 
-Note: if `session.start()` raises, the exception propagates and the session is
-**never** added to `_sessions` (registry insertion happens only after a successful
-start). Rollback of partially started components is `CaptureSession.start()`'s
-responsibility (per `docs/architecture.md`).
+Note: if `session.start()` raises, the exception propagates and the session
+**remains registered** in state `"error"` (visible in `capture_status`, and recorded
+on disk via `session.json`) instead of vanishing as it did pre-M0a. Rollback of
+partially started components is `CaptureSession.start()`'s responsibility (per
+`docs/architecture.md`).
 
 ### `capture_stop`
 
-1. Under `_lock`, snapshots `running = [s for s in _sessions.values() if s.state ==
-   "running"]` (`server.py:163-164`).
-2. If `session_id is None`:
-   - If `running` is empty: return `{"stopped": [], "note": "no running captures"}`.
-   - If more than one is running: raise `ValueError("multiple captures running; pass
+1. If `session_id is None`: snapshot `running = registry.running()` (state
+   `"running"` only — a `"starting"` session is not yet stoppable):
+   - If empty: return `{"stopped": [], "note": "no running captures"}`.
+   - If more than one: raise `ValueError("multiple captures running; pass
      session_id. Running: " + <ids>)`.
    - Otherwise: return `await anyio.to_thread.run_sync(running[0].stop)`.
-3. If `session_id` is given: under `_lock`, look up `_sessions.get(session_id)`. If
-   missing, raise `ValueError(f"unknown session_id {session_id!r}")`. Otherwise
-   return `await anyio.to_thread.run_sync(session.stop)` (`server.py:176-180`).
+2. If `session_id` is given: `registry.get(session_id)` → live session → offloaded
+   `.stop()`. Else `registry.history_record(session_id)` → return the recovered
+   record (already finished). Else raise
+   `ValueError(f"unknown session_id {session_id!r}")` (`server.py:160-168`).
 
 ### `capture_status`
 
-1. Acquire `_lock` (`server.py:191`).
-2. If `session_id` given: return `session.summary()`, or raise `ValueError(f"unknown
-   session_id {session_id!r}")` if not found (`server.py:192-196`).
-3. Otherwise return `{"sessions": [...summaries...]}` (`server.py:197`).
+1. If `session_id` given: return `registry.summary(session_id)` (live summary or
+   recovered record), or raise `ValueError(f"unknown session_id {session_id!r}")` if
+   the registry knows nothing about it (`server.py:180-184`).
+2. Otherwise return `{"sessions": registry.summaries()}` (`server.py:185`).
 
-Note: `capture_status` calls `session.summary()` **while holding `_lock`**, unlike
-`capture_stop` which releases the lock before the offloaded `.stop()` call.
-`.summary()` is therefore assumed to be cheap and non-blocking. This is a potential
-concern if `summary()` ever does I/O (see Known limitations).
-
-### `_prune_locked` (`server.py:44-56`)
-
-1. Caller must already hold `_lock` (only `capture_start` calls it).
-2. If `len(_sessions) <= MAX_SESSIONS` (100), return immediately.
-3. Compute `finished = sorted(sid for sid, s in _sessions.items() if s.state !=
-   "running")` — finished session ids sorted lexically. Session ids are
-   timestamp-prefixed, so lexical order equals chronological order.
-4. Evict the oldest finished ids: `_sessions.pop(sid, None)` for the first
-   `len(_sessions) - MAX_SESSIONS` of them.
+Locking, pruning, and history recovery are the registry's concern now — see
+[session-registry.md](session-registry.md). `summary()` is still assumed cheap (it
+is called under the registry lock).
 
 ## Invariants & constraints
 
@@ -176,16 +275,14 @@ These map directly onto the "Hard constraints" in `docs/architecture.md`:
 - **Exactly-one-target.** `capture_start` requires precisely one of `command`, `pid`,
   `app_name`, using the `_present` semantics (blank strings don't count; `pid=0`
   counts and is later rejected by the session as invalid).
-- **Registry access is guarded.** All reads/writes of `_sessions` happen under
-  `_lock` (a `threading.Lock`), because session objects are mutated from worker
-  threads while the registry is read/written from the event-loop thread.
-- **Bounded retained history.** `_prune_locked` keeps the registry from growing
-  without bound by evicting oldest **finished** sessions. Running sessions are never
-  evicted, so the bound is on retained finished history, not absolute size (assumes
-  few concurrent live captures — documented at `server.py:45-50`).
-- **Registry insertion is post-start.** A session enters `_sessions` only after
-  `session.start()` succeeds, so the registry never contains sessions that failed to
-  start.
+- **Registry access is thread-safe** inside `SessionRegistry` (its own lock); the
+  server holds no registry lock itself (see [session-registry.md](session-registry.md)).
+- **Bounded retained history.** The registry evicts oldest **finished** sessions
+  (live ones never), same tradeoff as pre-M0a; the bound now covers recovered
+  history records too.
+- **Registry insertion is PRE-start** (changed in M0a). A session is registered
+  before `session.start()` runs, so `capture_status` sees `"starting"` sessions and
+  failed starts remain visible as `"error"` records.
 
 ## Failure modes & handling
 
@@ -195,10 +292,14 @@ These map directly onto the "Hard constraints" in `docs/architecture.md`:
   check, but is rejected downstream as invalid by `CaptureSession` (per the comment at
   `server.py:113-115`). The server itself does not validate the pid value.
 - **`session.start()` raises** (e.g. command fails to launch, ASR load fails): the
-  exception propagates out of `capture_start`; the session is not registered. Cleanup
-  of partially started components is owned by `CaptureSession.start()`.
+  exception propagates out of `capture_start`; the session stays registered in state
+  `"error"`. Cleanup of partially started components is owned by
+  `CaptureSession.start()`.
 - **Unknown `session_id`** (`capture_stop`, `capture_status`): raises
-  `ValueError(f"unknown session_id {session_id!r}")`.
+  `ValueError(f"unknown session_id {session_id!r}")` — "unknown" now means unknown
+  to live tracking AND to recovered history.
+- **`capture_stop` on a recovered (already finished) session**: returns the recovered
+  record; not an error.
 - **`capture_stop` with no `session_id` and nothing running**: returns
   `{"stopped": [], "note": "no running captures"}` (not an error).
 - **`capture_stop` with no `session_id` and multiple running**: raises `ValueError`
@@ -221,48 +322,41 @@ This scope writes **no files of its own**. All on-disk artifacts (screenshots,
 
 ## Configuration
 
-- **Module constants:**
-  - `MAX_SESSIONS = 100` (`server.py:41`) — registry bound used by `_prune_locked`.
-  - Logging level `INFO`, stream `sys.stderr` (`server.py:26-30`).
-- **No environment variables** are read by `server.py` itself. (ASR backends and the
-  Swift helper may consult their own env/config, but that is out of this scope.)
+- **Module constants:** logging level `INFO`, stream `sys.stderr` (`server.py:26-30`).
+  The registry bound (`MAX_SESSIONS = 100`) moved to `core/registry.py`.
+- **Environment:** `CAPTURE_MCP_EMBEDDED` (any non-empty value) forces the embedded
+  engine and disables daemon-first dispatch (use in headless/CI). `CAPTURE_DAEMON_JSON`
+  (read via the daemon client) locates the daemon discovery file. Constructing
+  `SessionRegistry()` at import time resolves the session-index path from
+  `CAPTURE_SESSION_INDEX` (default `~/.capture/sessions.jsonl`) — set it before
+  importing the module (tests do). ASR backends / the Swift helper consult their own
+  env, out of scope here.
 - **Per-call configuration** is entirely via tool parameters (see Public contract for
   names, types, and defaults).
 
 ## Known limitations / open items
 
-- `_prune_locked` bounds **finished** sessions only; a pathological scenario with many
-  simultaneous *running* sessions could exceed `MAX_SESSIONS` (acknowledged as
-  acceptable in the code comment, `server.py:45-50`).
-- `MAX_SESSIONS` and the logging level are hard-coded; there is no env/config override.
-- `capture_status` calls `session.summary()` while holding `_lock`; if `summary()`
-  ever performs blocking I/O this would briefly serialize against other registry
-  operations. Currently assumed cheap — not independently verified in this scope.
+- `MAX_SESSIONS` and the logging level are hard-coded; there is no env/config
+  override beyond `CAPTURE_SESSION_INDEX`.
 - The exact shape of the summary `dict` (keys/types returned by `start`, `stop`,
   `summary`) is defined by `session.py` and not pinned here.
-- Sessions are kept only in memory; restarting the server loses all session history.
-- macOS-only, per `docs/architecture.md` (inherited via the components).
+- A `"starting"` session cannot be stopped; callers must wait for `"running"` (or the
+  error). Acceptable for MCP polling; revisit for the daemon API (M2,
+  [product-architecture.md](product-architecture.md)).
+- macOS + Windows via the platform abstraction (inherited via the components).
 
 ## Tests
 
-- `tests/smoke.py` is the referenced verification entry point for the project. (Its
-  current coverage of this scope was not inspected while writing this spec — verify
-  before relying on it.)
-- Suggested coverage specific to this scope, all exercisable without real capture by
-  stubbing `CaptureSession`:
-  - **Exactly-one-target validation**: zero targets and >1 target each raise the
-    expected `ValueError`; each single target (incl. `pid=0` reaching the session
-    layer) is accepted by the validation step.
-  - **`_present` semantics**: blank/whitespace `command`/`app_name` are treated as
-    absent; `pid=0` is treated as present.
-  - **Registry + `_prune_locked`**: with `MAX_SESSIONS` reachable, inserting beyond
-    the bound evicts oldest *finished* sessions and never evicts *running* ones;
-    lexical/chronological ordering holds for timestamp-prefixed ids.
-  - **`capture_stop` dispatch**: no-id + none running → `{"stopped": [], "note": ...}`;
-    no-id + exactly one running → stops it; no-id + multiple running → `ValueError`
-    listing ids; explicit unknown id → `ValueError`.
-  - **`capture_status` dispatch**: known id → `summary()`; unknown id → `ValueError`;
-    no id → `{"sessions": [...]}`.
-  - **Async/offload contract**: handlers are `async def` and route blocking work
-    through `anyio.to_thread.run_sync` (assert `start`/`stop` are invoked off the loop
-    thread; assert no `print`/stdout writes occur in the server path).
+- `tests/smoke.py` (hermetic, 28 checks as of M0a) covers this scope's happy paths:
+  launch-mode start/status/stop round-trip, exactly-one-target validation (0 and 2
+  targets), **status responsiveness during a slow start** (session visible as
+  `"starting"`, status returns while start is in flight), and the disk-backed
+  history rebuild (see [session-registry.md](session-registry.md) Tests). The suite
+  sets `CAPTURE_SESSION_INDEX` to a temp path before importing `server`.
+- `tests/contract/run_contracts.py` pins the tools/list contract (tool names +
+  input schemas, descriptions excluded) against `tests/contract/golden/`; it
+  fails on drift and regenerates with `--regen` after an intentional change
+  (done for the `list_windows` addition, feature #29).
+- Still uncovered here: `_present` blank-string semantics, multiple-running stop
+  dispatch, prune-at-bound behavior, and the async/offload contract (no stdout
+  writes) — open items.

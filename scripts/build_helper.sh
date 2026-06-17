@@ -17,7 +17,9 @@ echo "Building $out ..."
 swiftc -O -o "$out" "$src" \
   -framework ScreenCaptureKit \
   -framework AVFoundation \
-  -framework CoreMedia
+  -framework CoreMedia \
+  -framework ImageIO \
+  -framework UniformTypeIdentifiers
 
 # Sign with a stable identifier. Ad-hoc (-s -) is the baseline; for a TCC grant
 # that PERSISTS across rebuilds, set CODESIGN_IDENTITY to a real signing identity

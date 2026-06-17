@@ -18,7 +18,7 @@ Runs natively on Windows on the 4070 Ti; this is what the capture currently uses
 - Install: `faster-whisper` + `nvidia-cublas-cu12` + `nvidia-cudnn-cu12` (CTranslate2 CUDA 12
   engine; cuDNN 9). On Windows the cuBLAS/cuDNN DLLs ship in the `nvidia/*/bin` pip dirs and
   must be on the DLL search path — `whisper_local._add_nvidia_dll_dirs()` handles that.
-- Backend: `capture_mcp.asr.whisper_local.FasterWhisper`, device auto-detected via
+- Backend: `capture_mcp.core.asr.whisper_local.FasterWhisper`, device auto-detected via
   `ctranslate2.get_cuda_device_count()`; `CAPTURE_WHISPER_MODEL` / `CAPTURE_WHISPER_DEVICE` /
   `CAPTURE_WHISPER_COMPUTE` override (default `cuda`+`float16` when a GPU is present, else `cpu`+`int8`).
 - Verified: large-v3 loads on CUDA and transcribes real captured speech with segment timestamps.
@@ -44,7 +44,7 @@ FastConformer-RNNT, English) — or the multilingual **`nvidia/nemotron-3.5-asr-
 ### Path B1 — NeMo container exposing a tiny localhost ASR service (recommended)
 Run NeMo in a CUDA Linux container, load the model once, and expose a minimal HTTP/gRPC ASR
 endpoint on `localhost` that takes 16 kHz mono PCM and returns text + word timestamps. A new
-`capture_mcp.asr` backend (e.g. `nemo_local`) POSTs each chunk to it.
+`capture_mcp.core.asr` backend (e.g. `nemo_local`) POSTs each chunk to it.
 
 ```bash
 # In WSL2 (or as a Dockerfile). Pin a NeMo 25.11+ CUDA base image.
@@ -60,7 +60,7 @@ Capture side: a `NemoLocal` backend calling `http://localhost:8088/transcribe`. 
 
 ### Path B2 — NVIDIA Riva / NIM ASR container (fits the EXISTING adapter)
 Run a local **Riva** ASR server (Riva Skills quickstart, or an ASR NIM) in Docker/WSL2 GPU,
-exposing gRPC on `localhost:50051`. Then the **existing** `capture_mcp.asr.nemotron.NemotronRiva`
+exposing gRPC on `localhost:50051`. Then the **existing** `capture_mcp.core.asr.nemotron.NemotronRiva`
 adapter works unchanged with `CAPTURE_RIVA_SERVER=localhost:50051` (no API key / function-id for
 a local server). Heavier (NGC pulls, multi-GB images, model deployment) but zero new Python code.
 

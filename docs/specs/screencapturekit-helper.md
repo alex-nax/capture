@@ -66,7 +66,12 @@ Human-readable status lines via `logErr` (lines 42-44), each newline-terminated.
 2. Ignore `SIGPIPE` (`signal(SIGPIPE, SIG_IGN)`, line 171) so a closed stdout surfaces as a throwing write instead of killing the process with a signal.
 3. Create the audio dispatch queue (`audiocap.audio`), the global `signalSources` array, and the global `captureStream` holder (lines 173-175).
 4. Construct the shutdown guard (`shutdownLock`, `didShutdown`, `shutdown(_:)`, lines 179-190) and the `AudioSink` with the requested output rate (line 192).
-5. In an async `Task` (lines 237-295): fetch `SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)`; log the content counts; take the first display (else log + `exit(4)`).
+5. In an async `Task`: fetch shareable content via `enumerateShareableContent()` — a **bounded
+   retry** (5 attempts, 0.5 s backoff) around `SCShareableContent.excludingDesktopWindows(false,
+   onScreenWindowsOnly: false)`, added after the #30 spike saw the first call fail intermittently
+   on macOS 26. If all attempts fail → log + `exit(5)`. Then log the content counts and take the
+   first display (else log + `exit(4)` — `displays=0` is the signature of a **missing/lapsed Screen
+   Recording grant** for the launching process).
 6. Build the `SCContentFilter` and `capLabel` (lines 246-257):
    - `--system`: `SCContentFilter(display:excludingWindows: [])`, label `"system"`.
    - app target: resolve the app via `findApp` (PID match first, then bundle id); if none, log + `exit(3)`. Build `SCContentFilter(display:including: [app], exceptingWindows: [])`, label `"<appName> pid=<pid>"`.
@@ -113,7 +118,13 @@ File persistence (session.json, transcripts, recordings) is the parent process's
 - **Hardcoded stream config:** `channelCount = 1`, `excludesCurrentProcessAudio = true`, `width = 128`, `height = 128`, `minimumFrameInterval = 1/1`, `queueDepth = 6`.
 - **Hardcoded reconnect tuning:** backoff `0.25 * reconnects` capped at `2.0s`; give-up threshold `reconnects > 20` while `!everGotData`.
 
-## Known limitations / open items
+- **`displays=0` means the LAUNCHING process lacks Screen Recording** — not a helper bug. The
+  grant attaches to the responsible process (the GUI terminal/app that spawns the helper, or the
+  signed launchd daemon in the packaged product). A same-identity rebuild does NOT lose the grant
+  when launched from a granted Terminal (verified macOS 15.7.3, 2026-06-15: `displays=2`, READY).
+  A *non-granted* shell (e.g. a headless/agent execution context) gets `displays=0` even though a
+  granted Terminal on the same machine works — so test the helper from the terminal that actually
+  holds the grant.
 - **Resampler tail loss:** the converter is retained across callbacks, so only the final buffer's tail at stream end can be lost (described as negligible, lines 67-72).
 - **READY is not literally the first stderr line:** the header comment says "first line is READY" but `content:` and `target=...` lines are emitted before it. Parents should scan for the READY token rather than read line 1. (Documentation/code discrepancy.)
 - **Output endianness** is native host order (little-endian on supported Apple hardware) rather than explicitly byte-swapped; correct in practice but implicit.

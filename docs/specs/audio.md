@@ -3,12 +3,14 @@
 _Status: current as of 2026-06-07. Source of truth = the code; update this spec in the same change as the code._
 
 ## Purpose
-Capture a single audio stream for a session, slice it into fixed-length windows, run each window through an ASR backend, and write timestamped transcripts plus the raw PCM. The scope owns: source selection (per-app helper vs. microphone via `ffmpeg`), the 16 kHz mono s16le byte contract, chunking and offset accounting, anchoring timestamps to first-byte wall-clock arrival, and keeping audio/ASR failures visible in the session status surface. It deliberately knows nothing about other capture components or the MCP layer (see `docs/architecture.md` dependency rules).
+Capture an audio stream for a session, slice it into fixed-length windows, run each window through an ASR backend, and write timestamped transcripts plus the raw PCM. The scope owns: source selection (app audio vs. microphone — **both via the bundled `audiocap` helper, no ffmpeg** on macOS), the 16 kHz mono s16le byte contract, chunking and offset accounting, anchoring timestamps to first-byte wall-clock arrival, and keeping audio/ASR failures visible in the session status surface. It deliberately knows nothing about other capture components or the MCP layer (see `docs/architecture.md` dependency rules).
+
+One `AudioCapture` instance = one source/track. A session runs the app-audio instance (`track="audio"` → `audio.s16le`/`transcript.*`), and **optionally a second instance for a microphone** (`track="mic"`, `source="mic"`, `mic_device=<id>` → `mic.s16le`/`mic_transcript.*`) — the mic is a SEPARATE track, never mixed with the app audio (`session.py` owns starting both; see `gui.md` for the per-app mic assignment).
 
 ## Files
-- `src/capture_mcp/audio.py` — the entire scope: `AudioCapture` class, reader/transcribe loop, lifecycle (`start`/`stop`), and teardown. The **source command** (which subprocess emits the PCM) is built per-OS by the platform abstraction, not here.
+- `src/capture_mcp/core/audio.py` — the entire scope: `AudioCapture` class, reader/transcribe loop, lifecycle (`start`/`stop`), and teardown. The **source command** (which subprocess emits the PCM) is built per-OS by the platform abstraction, not here.
 
-Collaborators referenced but out of scope: `src/capture_mcp/platform/` (the `AudioSource.command(...)` that selects the helper/ffmpeg; see [platform-abstraction.md](platform-abstraction.md) — `helper_path()` now lives in `platform/macos.py`), `src/capture_mcp/asr/` (the `ASRBackend`/`Segment` interface and `create()` factory), `src/capture_mcp/util.py` (`now`, `iso`), `helper/audiocap` (compiled Swift helper, a process boundary).
+Collaborators referenced but out of scope: `src/capture_mcp/core/platform/` (the `AudioSource.command(...)` that selects the helper/ffmpeg; see [platform-abstraction.md](platform-abstraction.md) — `helper_path()` now lives in `platform/macos.py`), `src/capture_mcp/core/asr/` (the `ASRBackend`/`Segment` interface and `create()` factory), `src/capture_mcp/core/util.py` (`now`, `iso`), `helper/audiocap` (compiled Swift helper, a process boundary).
 
 ## Public contract
 Module constants (`audio.py:35-37`):
@@ -22,6 +24,8 @@ Module constants (`audio.py:35-37`):
 - `out_dir: Path` — directory the artifacts are written into (created on `start`).
 - `pid: int | None`, `bundle_id: str | None` — target for per-app audio; at least one is required to select the `app` source.
 - `source: str` — `"auto"` | `"app"` | `"mic"` (not validated; any other value behaves like the non-`app` path, i.e. falls through to mic).
+- `mic_device: str | None` — input-device id used when `source == "mic"` (`None` = default input).
+- `track: str` — output naming. `"audio"` → `audio.s16le`/`transcript.*` (default). Any other value (e.g. `"mic"`) → `<track>.s16le`/`<track>_transcript.*`, so a second instance writes alongside the app's without clobbering it.
 - `chunk_seconds: float` — window length, clamped to `max(1.0, float(chunk_seconds))`.
 - `asr_backend: str` — passed to `asr.create()`; stored as `self.asr_name`.
 - `t0: float | None` — session-start epoch fallback; defaults to `now()`.
@@ -36,11 +40,19 @@ Methods: `start() -> None` and `stop() -> None`. Both are synchronous and blocki
 
 stdout/stderr contract of the audio *source* (consumed, not produced, by this scope): the source emits raw signed-16-bit little-endian mono PCM at 16 kHz on stdout; human-readable status on stderr. The Swift helper additionally prints `READY rate=<n> channels=1 fmt=s16le ...` then bytes (see `docs/architecture.md`); `audio.py` does not parse the READY line — it treats stdout as an opaque PCM byte stream.
 
+
+### Event hook (M0b, feature #26)
+
+`AudioCapture` accepts an optional `emit=None` keyword (an `EventBus.publish`-shaped
+callable, normally `CaptureSession.events.publish`). When set, it emits
+`transcript_segment` (the jsonl record + count) and `audio_status` {status,mode} at start / no-data failure / stop. Publishing never raises/blocks; with `emit=None` the component is
+silent and behaves exactly as before. See [events.md](events.md).
+
 ## Behavior
 1. `start()` creates `out_dir` (`mkdir parents/exist_ok`).
 2. It calls `asr_pkg.create(self.asr_name)`. On exception it records `self._asr_error`, logs a warning, and sets `self._asr = None` (capture continues without transcription) (`audio.py:90-95`).
 3. `_build_command()` delegates to `platform.current().audio_source.command(pid, bundle_id, source, rate=SAMPLE_RATE)` and returns `(None, "none")` when that yields `None`, else the `(argv, mode)` it returns. The per-OS selection lives in the platform backends:
-   - **macOS** (`MacAudioSource`): if `source` is `"auto"`/`"app"`, the `audiocap` helper exists, and (`pid` or `bundle_id`) is set → `[<helper>, "--rate", "16000"]` plus `--pid <pid>` (preferred) or `--bundle <bundle_id>`; `mode="app"`. Else if `source == "app"` → `None` (unsatisfiable). Else if `ffmpeg` is on `PATH` → the `avfoundation :default` argv; `mode="mic"`. Else `None`.
+   - **macOS** (`MacAudioSource`): if `source` is `"auto"`/`"app"`, the `audiocap` helper exists, and (`pid` or `bundle_id`) is set → `[<helper>, "--rate", "16000"]` plus `--pid <pid>` (preferred) or `--bundle <bundle_id>`; `mode="app"`. Else if `source == "app"` → `None` (unsatisfiable). Else (mic) → `[<helper>, "--rate", "16000", "--mic", <mic_device or "default">]`; `mode="mic"`. **No ffmpeg** — the helper captures the mic via AVFoundation `AVCaptureSession`. **No echo cancellation** (a laptop's built-in mic picks up its own speakers — use headphones; proper AEC without breaking playback is feature #38). `MacAudioSource.list_input_devices()` shells `audiocap --list-mics` (JSON lines) for the selector.
    - **Windows** (`Win32AudioSource`): `source=="auto"/"app"` → `[python, helper/audiocap_win.py, --rate 16000]` with `mode="loopback"` (WASAPI **system loopback** of the default output, auto-reconnecting on device change), when `pyaudiowpatch` + the helper are present; else `app`→`None`. `source=="mic"` → an `ffmpeg` `dshow` argv only when `ffmpeg` is present **and** `CAPTURE_DSHOW_AUDIO` names a device; else `None`. `mode="loopback"` captures the full output mix (the target app plus anything else playing), not a single process.
    The 16 kHz mono s16le stdout contract is identical regardless of which backend/source is chosen.
 4. If the command is `None`, `status = "no-audio-source"` and `start()` returns without opening files or a process (`audio.py:98-101`).
@@ -69,7 +81,7 @@ stdout/stderr contract of the audio *source* (consumed, not produced, by this sc
     - Sets terminal status: unless `status` already contains `"failed"`, `"unavailable"`, or `"no-audio-source"`, it becomes `"stopped (asr-errors=N)"` if `asr_errors`, else `"stopped"`.
 
 ## Invariants & constraints
-- 16 kHz mono signed-16-bit-LE PCM end to end (`SAMPLE_RATE`, `BYTES_PER_SAMPLE`); matches the `docs/architecture.md` "Audio is always 16 kHz mono s16le" constraint. The helper is invoked with `--rate 16000`; ffmpeg is forced to `-ac 1 -ar 16000 -f s16le`.
+- 16 kHz mono signed-16-bit-LE PCM end to end (`SAMPLE_RATE`, `BYTES_PER_SAMPLE`); matches the `docs/architecture.md` "Audio is always 16 kHz mono s16le" constraint. The helper is invoked with `--rate 16000` for both app and `--mic` paths (each emits the same s16le contract, resampling internally as needed).
 - Reader-before-files on shutdown: the source is killed and the reader joined BEFORE flushing/closing transcript files (`docs/architecture.md` hard constraint; implemented in `stop()`). Files are closed only when the reader is provably gone.
 - Surface failures, don't swallow them: terminal status preservation in `stop()` never overwrites a `failed`/`unavailable`/`no-audio-source` status with `stopped`/`running`; `asr_errors` is exposed and carried into the stopped status (`docs/architecture.md` hard constraint).
 - Roll back on partial start: a failure during file-open/Popen tears down the child and closes files before returning (`docs/architecture.md`).
@@ -80,7 +92,7 @@ stdout/stderr contract of the audio *source* (consumed, not produced, by this sc
 - Platform: the source command is OS-specific and selected by `platform.current().audio_source` (macOS: ScreenCaptureKit helper / avfoundation; Windows: ffmpeg dshow, with per-app WASAPI loopback still TODO). The chunking/ASR/transcript logic in this scope is OS-neutral. macOS arm64 venv is required for mlx-whisper (the ASR side).
 
 ## Failure modes & handling
-- No source available (no helper + no ffmpeg, or `source="app"` unsatisfiable): `status = "no-audio-source"`, no files/process created (`audio.py:98-101`).
+- No source available (no helper, or `source="app"` unsatisfiable): `status = "no-audio-source"`, no files/process created (`audio.py`).
 - File-open or Popen failure during `start()`: `status = "audio-start-failed: <exception>"`; proc torn down, files closed; `start()` returns (`audio.py:111-116`).
 - ASR backend fails to load: `_asr = None`, capture continues; `status = "running (asr-unavailable: <err>)"`; transcripts will have no segments but `audio.s16le` is still written (`audio.py:90-95, 122`).
 - Source exits abnormally before emitting any bytes (and not via `stop()`): `status = "<mode>-audio-failed (rc=<code>): <last stderr or 'no output'>"`. For `mode == "app"` it appends guidance about Screen Recording permission / `-3805` (`audio.py:260-269`).
@@ -109,6 +121,7 @@ Constructor parameters (no env vars read in this module):
   reads `CAPTURE_DSHOW_AUDIO` for the ffmpeg dshow device. See [platform-abstraction.md](platform-abstraction.md).
 
 ## Known limitations / open items
+- **Audio is per-APPLICATION, not per-window** (macOS hard limit). The `audiocap` helper builds an `SCContentFilter(display:, including:[app], exceptingWindows:[])` — ScreenCaptureKit (and Core Audio process taps) scope audio to a process/app, with no per-window API. So two sessions targeting two windows of the **same** process (e.g. two browser windows, two YouTube tabs) capture the **identical** app-wide stream; their transcripts will match. The daemon (`server._start_session`) detects this — when a new app-audio session's `pid` matches a live session already capturing that pid's audio, it appends a session **note** so the duplication is visible rather than looking like a bug. To get distinct audio, capture from distinct processes (different apps). Screenshots, by contrast, ARE per-window (`window_id`).
 - Offline windowing, not true streaming: recognition runs on fixed `chunk_seconds` windows, so segment boundaries and latency are coarse; timestamps can drift if the source inserts silence gaps (noted in the module docstring / README).
 - `source` is not validated; an unrecognized value silently behaves like the mic path.
 - Mic device is hard-coded to avfoundation `:default`; no device selection.

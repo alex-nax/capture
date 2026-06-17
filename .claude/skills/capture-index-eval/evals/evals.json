@@ -1,0 +1,27 @@
+{
+  "skill_name": "capture-index-eval",
+  "_note": "Prompts only; assertions TBD in the next step. These need a LIVE captured daemon + an LM Studio vision endpoint (CAPTURE_INDEX_URL serving e.g. qwen/qwen3.5-9b) and real sessions in ~/.capture/runs/ — see SKILL 'Setup'. The eval-viewer/quantitative loop is intentionally NOT run here; it needs the user to drive the daemon + GPU.",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I just screen-recorded a YouTube coding tutorial with capture-mcp — session ends in d4d2f4. How well can the cheap local index reconstruct the code vs an agent that actually looks at every frame, and how many tokens does it save? Run the full eval and give me the scores.",
+      "expected_output": "Resolves the full session_id by suffix; reports the basic-auto content_type (expect mis-classified 'video'); builds a custom code-tuned leaf_prompt+schema; runs baseline (views frames), text-only reconstruction, and a frame-spot-checking judge; writes judge/scores.json + verdict.md + cost_summary.json; states a regime prediction (verbatim code = low error-tolerance) and the recommended_schema_change.",
+      "files": [],
+      "expectations": []
+    },
+    {
+      "id": 2,
+      "prompt": "Before I spend GPU time on it: I captured a Google Meet standup (the one ending 432498, lots of narration and a shared Linear board). Predict whether the cheap text-index path will reconstruct the minutes well, then actually run the eval and tell me if your prediction held.",
+      "expected_output": "Predicts the regime from narration_richness x error_tolerance BEFORE running (rich narration + paraphrasable minutes -> cheap path likely wins; small-font board is the verbatim-risk surface), then runs the 5 stages with a meeting-tuned custom prompt (active_speaker/participants/task_assignments/decisions) and compares prediction vs judge scores.",
+      "files": [],
+      "expectations": []
+    },
+    {
+      "id": 3,
+      "prompt": "Is qwen3.5-9b actually good enough to be our default index model, or is it confabulating? Evaluate session 88fe12 (a Strudel live-coding music capture) and tell me where the cheap index breaks and what we should change in the extractor.",
+      "expected_output": "Identifies the thin-narration + zero-error-tolerant regime (predicts low custom fidelity despite large font), runs the eval, shows the hallucination failure mode (consensus laundering OCR noise into confident-wrong mini-notation), and produces a concrete recommended_schema_change (code_legible/verbatim_uncertain flag + targeted frontier image-fetch) for capture-index-tuning to ingest.",
+      "files": [],
+      "expectations": []
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # Spec: Session
 
-_Status: current as of 2026-06-07. Source of truth = the code; update this spec in the same change as the code._
+_Status: current as of 2026-06-10. Source of truth = the code; update this spec in the same change as the code._
 
 ## Purpose
 
@@ -8,11 +8,20 @@ The session scope defines `CaptureSession`, the orchestrator for a single captur
 
 ## Files
 
-- `src/capture_mcp/session.py` — the `CaptureSession` class (the entire scope).
+- `src/capture_mcp/core/session.py` — the `CaptureSession` class (the entire scope).
 
-Dependencies it imports (owned by other scopes, not specced here): `capture_mcp.platform` (for `current().window_finder`, see [platform-abstraction.md](platform-abstraction.md)), `capture_mcp.audio.AudioCapture`, `capture_mcp.proc.ProcessCapture`, `capture_mcp.screenshots.Screenshotter` / `parse_resolution`, and `capture_mcp.util` (`fs_stamp`, `iso`, `now`).
+Dependencies it imports (owned by other scopes, not specced here): `capture_mcp.core.platform` (for `current().window_finder`, see [platform-abstraction.md](platform-abstraction.md)), `capture_mcp.core.audio.AudioCapture`, `capture_mcp.core.proc.ProcessCapture`, `capture_mcp.core.screenshots.Screenshotter` / `parse_resolution`, and `capture_mcp.core.util` (`fs_stamp`, `iso`, `now`), and `capture_mcp.core.events` (`EventBus` / `EventsFileWriter`, see [events.md](events.md)).
 
 ## Public contract
+
+### `set_mic_device(device)` (#46)
+
+Switch the microphone on a **running** session: `device` = an input-device id / `"default"` turns
+the mic on or switches it; `None`/`""` turns it off. Stops the current `_mic` `AudioCapture` and starts
+a new one with `append=True` (when `mic.s16le` already exists) so the mic track stays continuous — each
+`AudioCapture`'s epoch is real wall-clock, so iso timestamps line up across the switch. Updates
+`self.mic_device` (surfaced in `summary()`), rewrites `session.json`, emits a `mic_device` event. Raises
+`RuntimeError` if the session isn't running. Heavy teardown/start runs outside `self._lock`.
 
 ### Constructor: `CaptureSession(output_dir, *, ...)` (lines 34–85)
 
@@ -45,15 +54,15 @@ The constructor does NOT create directories, start anything, or write files.
 
 ### Methods
 
-- `start() -> dict` (lines 89–115) — starts the session, returns `summary()`. Raises `RuntimeError` if not in `created` state, or if launch mode fails to start the process. On any component-start failure, rolls back and re-raises.
-- `stop() -> dict` (lines 117–134) — stops the session, returns `summary()`. Idempotent for non-`running` states (returns current summary without changing state).
+- `start() -> dict` (lines 97–142) — starts the session, returns `summary()`. Raises `RuntimeError` if not in `created` state, or if launch mode fails to start the process. On any component-start failure, rolls back and re-raises. Sets state `"starting"` (and writes `session.json`) before component startup, which runs OUTSIDE the lock.
+- `stop() -> dict` (lines 144–164) — stops the session, returns `summary()`. Idempotent for non-`running` states (returns current summary without changing state).
 - `summary() -> dict` (lines 208–226) — see "Outputs / artifacts" for exact fields.
 - `_stop_components() -> int | None` (lines 136–153) — internal best-effort teardown; returns process exit code or `None`. (Not part of external API but documented in focus notes.)
 - `_resolve_target()`, `_start_screenshots()`, `_start_audio()`, `_write_metadata()` — internal helpers.
 
 ### States
 
-`self.state` is one of the string literals: `"created"`, `"running"`, `"stopping"`, `"stopped"`, `"error"`. There is no enum; states are bare strings compared directly in code.
+`self.state` is one of the string literals: `"created"`, `"starting"`, `"running"`, `"stopping"`, `"stopped"`, `"error"`. There is no enum; states are bare strings compared directly in code.
 
 ## Behavior
 
@@ -62,7 +71,7 @@ The constructor does NOT create directories, start anything, or write files.
 
 ### `start()` (lines 89–115)
 1. Acquire `self._lock`.
-2. If `self.state != "created"`, raise `RuntimeError(f"session already {self.state}")` (line 91–92).
+2. If `self.state != "created"`, raise `RuntimeError(f"session already {self.state}")` (line 91–92). (A concurrent second `start()` therefore raises `"session already starting"`.)
 3. Create the session directory: `self.dir.mkdir(parents=True, exist_ok=True)` (line 93).
 4. Set `self.t0 = now()` (line 94).
 5. In a `try` block:
@@ -70,10 +79,12 @@ The constructor does NOT create directories, start anything, or write files.
    b. Launch-mode guard: if `self.command` is set but `self._proc is None`, raise `RuntimeError` with the last note (or `"could not launch command"`) — a launch session whose command never started has captured nothing and must fail loudly rather than report a phantom `running` (lines 98–101).
    c. If `capture_screenshots`, call `_start_screenshots()` (lines 102–103).
    d. If `capture_audio`, call `_start_audio()` (lines 104–105).
-6. On ANY exception in the try (lines 106–110): call `_stop_components()`, set `state = "error"`, write metadata (`_write_metadata()`), and re-raise. This is the partial-start rollback.
-7. On success: set `state = "running"`, write metadata, log an info line, return `summary()` (lines 112–115).
+6. On ANY exception in the try: call `_stop_components()`, then under the lock set `state = "error"` and write metadata, and re-raise. This is the partial-start rollback.
+7. On success: under the lock set `state = "running"` and write metadata; publish the `"running"` state event; log an info line; return `summary()`.
 
-All of `start()` runs while holding `self._lock`, including component startup.
+Each state transition also publishes a `state` event on `self.events` (an `EventBus`, public attribute) and the error/stopped paths close the `events.jsonl` writer (final snapshot) — see [events.md](events.md). Components receive `emit=self.events.publish`.
+
+Only the `created`-check / `mkdir` / `t0` / `"starting"` transition runs under `self._lock` (with a `session.json` write recording `"starting"`, the `events.jsonl` writer start, and the `"starting"` state event publish). Component startup — `_resolve_target`, screenshots, audio/ASR load — runs OUTSIDE the lock, mirroring `stop()`'s teardown, so concurrent `stop()`/state reads return immediately observing `"starting"`. The `"error"` and `"running"` transitions re-take the lock.
 
 ### `_resolve_target()` (lines 157–176)
 1. If `command` is set: create `ProcessCapture(command, dir, cwd=cwd)`, attempt `self.pid = self._proc.start()`. On exception, set `self._proc = None`, append `f"launch failed: {e}"` to notes, log the exception, and return (lines 158–166). (The launch-mode guard in `start()` then converts this into a raised error.)
@@ -107,15 +118,15 @@ Teardown order is screenshots, then audio, then process. Each component is wrapp
 
 ## Invariants & constraints
 
-- **State machine is linear/forward-only.** Valid transitions in code: `created -> running` (start success), `created -> error` (start failure), `running -> stopping -> stopped` (stop). `start()` is only valid from `created`; calling it otherwise raises. `stop()` only acts from `running`; from any other state it is a no-op returning the current summary.
+- **State machine is linear/forward-only.** Valid transitions in code: `created -> starting -> running` (start success), `created -> starting -> error` (start failure), `running -> stopping -> stopped` (stop). `start()` is only valid from `created`; calling it otherwise raises. `stop()` only acts from `running`; from any other state — including `starting` — it is a no-op returning the current summary (a session cannot be stopped until it reaches `running`).
 - **Roll back on partial start** (`docs/architecture.md` hard constraint). `start()` calls `_stop_components()` on any failure, transitions to `error`, persists metadata, and re-raises. This guarantees no half-started components are left running.
 - **Launch mode must produce a process.** A `command` session with `_proc is None` is treated as a hard failure (lines 100–101).
 - **Surface failures, don't swallow them** (`docs/architecture.md`). Audio/ASR start problems are recorded as notes; component-level failure statuses live in `audio_status`/`asr_errors` (owned by `AudioCapture`), not overwritten here.
-- **Locking discipline.** `self._lock` guards state transitions and metadata writes. Heavy teardown in `stop()` runs outside the lock so `summary()`/status queries are never blocked by component shutdown. Note: `start()` holds the lock for its entire duration (including component startup), so a status query concurrent with a slow `start()` will block until start completes — this is a known tradeoff (see Known limitations).
+- **Locking discipline.** `self._lock` guards state transitions and metadata writes only. Both heavy paths run outside the lock: component teardown in `stop()` AND component startup in `start()` (since M0a), so status/stop calls concurrent with a slow start return immediately (observing `"starting"`).
 - **Components are isolated.** `CaptureSession` is the only object that holds all three components; it never lets them reference each other (`docs/architecture.md`, Dependency rules).
 - **Audio format/timestamp conventions** are delegated: `t0` (from `util.now()`) is passed to `AudioCapture` for offset computation; `util.iso`/`util.fs_stamp` are used for content vs. filename timestamps (`docs/architecture.md`, Naming/conventions).
 - **Cross-platform** (macOS + Windows): the session orchestration is OS-neutral; the OS-specific
-  capture it drives lives behind `capture_mcp.platform` (see [platform-abstraction.md](platform-abstraction.md)).
+  capture it drives lives behind `capture_mcp.core.platform` (see [platform-abstraction.md](platform-abstraction.md)).
 
 ## Failure modes & handling
 
@@ -172,7 +183,7 @@ A JSON object (indented 2, `ensure_ascii=False`) with two top-level keys:
 - `config` — echoes the constructor inputs: `command`, `pid` (the requested `req_pid`), `app_name`, `bundle_id`, `screenshot_interval`, `screenshot_format` (the resolved/lowercased format), `screenshot_resolution` (the original spec string `screenshot_resolution_spec`), `screenshot_jpeg_quality`, `capture_screenshots`, `capture_audio`, `audio_source`, `audio_chunk_seconds`, `asr_backend`, `cwd`.
 - `summary` — the full `summary()` dict at write time.
 
-`session.json` is (re)written on every state transition: at end of successful `start()` (state `running`), on the error path of `start()` (state `error`), and at end of `stop()` (state `stopped`). So the persisted summary reflects the latest transition.
+`session.json` is (re)written on every state transition: when `start()` begins (state `starting` — this is what lets a crashed/killed process be recovered as `interrupted` by the registry, see [session-registry.md](session-registry.md)), at end of successful `start()` (state `running`), on the error path of `start()` (state `error`), and at end of `stop()` (state `stopped`). So the persisted summary reflects the latest transition.
 
 ## Configuration
 
@@ -199,7 +210,7 @@ Target-selection precedence in `_resolve_target` is: `command` (launch mode) > `
 
 ## Known limitations / open items
 
-- **`start()` holds the lock during the whole startup**, including potentially slow component starts (`ProcessCapture.start`, ASR backend load). A concurrent `summary()`/status call will block until `start()` finishes. By contrast, `stop()` deliberately runs teardown outside the lock. This asymmetry is intentional per the code comment but means startup is not concurrency-friendly.
+- **`stop()` during `"starting"` is a silent no-op** returning the current summary; the caller must re-issue the stop once the session is `"running"`. Defined behavior, but a stop-requested-during-start flag (auto-stop on start completion) would be friendlier — open item for the daemon work (M2).
 - **No `pause`/`resume` or restart.** A session is single-use: once `stopped`/`error`, it cannot be restarted (`start()` only works from `created`).
 - **`error` state is terminal and unrecoverable** from within the object; the caller must create a new session.
 - **Notes are appended from capture loops/threads** while `summary()` reads them; `summary()` snapshots via `list(...)` but there is no lock around individual `notes.append` calls in helpers, so the snapshot is best-effort (acceptable for a list of strings under CPython, but not formally synchronized).

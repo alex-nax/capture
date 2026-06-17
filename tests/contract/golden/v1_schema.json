@@ -1,0 +1,1172 @@
+{
+  "api_version": "1.0",
+  "models": {
+    "AsrModelInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "active": {
+          "title": "Active",
+          "type": "boolean"
+        },
+        "downloaded": {
+          "title": "Downloaded",
+          "type": "boolean"
+        },
+        "downloading": {
+          "default": false,
+          "title": "Downloading",
+          "type": "boolean"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "repo": {
+          "title": "Repo",
+          "type": "string"
+        },
+        "size_label": {
+          "title": "Size Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repo",
+        "name",
+        "size_label",
+        "downloaded",
+        "active"
+      ],
+      "title": "AsrModelInfo",
+      "type": "object"
+    },
+    "AsrModelRequest": {
+      "additionalProperties": false,
+      "description": "Body of POST /v1/asr/model and POST /v1/asr/models/download.",
+      "properties": {
+        "repo": {
+          "title": "Repo",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repo"
+      ],
+      "title": "AsrModelRequest",
+      "type": "object"
+    },
+    "AsrModelsResponse": {
+      "$defs": {
+        "AsrModelInfo": {
+          "additionalProperties": false,
+          "properties": {
+            "active": {
+              "title": "Active",
+              "type": "boolean"
+            },
+            "downloaded": {
+              "title": "Downloaded",
+              "type": "boolean"
+            },
+            "downloading": {
+              "default": false,
+              "title": "Downloading",
+              "type": "boolean"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "repo": {
+              "title": "Repo",
+              "type": "string"
+            },
+            "size_label": {
+              "title": "Size Label",
+              "type": "string"
+            }
+          },
+          "required": [
+            "repo",
+            "name",
+            "size_label",
+            "downloaded",
+            "active"
+          ],
+          "title": "AsrModelInfo",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "active": {
+          "title": "Active",
+          "type": "string"
+        },
+        "backend_available": {
+          "title": "Backend Available",
+          "type": "boolean"
+        },
+        "chunk_seconds": {
+          "default": 30.0,
+          "title": "Chunk Seconds",
+          "type": "number"
+        },
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Language"
+        },
+        "models": {
+          "items": {
+            "$ref": "#/$defs/AsrModelInfo"
+          },
+          "title": "Models",
+          "type": "array"
+        }
+      },
+      "required": [
+        "backend_available",
+        "active",
+        "models"
+      ],
+      "title": "AsrModelsResponse",
+      "type": "object"
+    },
+    "ErrorResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "title": "Error",
+          "type": "string"
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "title": "ErrorResponse",
+      "type": "object"
+    },
+    "HealthResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "title": "Api Version",
+          "type": "string"
+        },
+        "ok": {
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "pid": {
+          "title": "Pid",
+          "type": "integer"
+        },
+        "platform": {
+          "title": "Platform",
+          "type": "string"
+        },
+        "sessions": {
+          "additionalProperties": true,
+          "title": "Sessions",
+          "type": "object"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ok",
+        "version",
+        "api_version",
+        "pid",
+        "platform",
+        "sessions"
+      ],
+      "title": "HealthResponse",
+      "type": "object"
+    },
+    "ImportMediaRequest": {
+      "additionalProperties": false,
+      "description": "Body of POST /v1/sessions/import \u2014 turn an existing audio/video file into a session.\n\nThe daemon extracts the file's audio (and, for video, frames) via the bundled helper,\nthen runs ASR, registering the result as a finished session. ``output_dir`` defaults to\nthe daemon's runs dir when omitted.",
+      "properties": {
+        "asr_backend": {
+          "default": "auto",
+          "title": "Asr Backend",
+          "type": "string"
+        },
+        "output_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Dir"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "screenshot_interval": {
+          "default": 2.0,
+          "title": "Screenshot Interval",
+          "type": "number"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "ImportMediaRequest",
+      "type": "object"
+    },
+    "IndexRequest": {
+      "additionalProperties": false,
+      "description": "Body of POST /v1/sessions/{id}/index \u2014 build the multimodal index (#44).\n\nCaption the session's screenshots with a remote vision LLM and summarize the timeline\nas a binary tree. ``endpoint``/``model`` override the daemon's ``CAPTURE_INDEX_*`` env\nconfig (so the GUI can carry the LM Studio URL). ``sample_rate`` (0<rate\u22641) decimates\nthe frames to the leaf set; ``max_leaves`` caps it; ``fuse_transcript`` folds the\ntime-aligned transcript into each combine.",
+      "properties": {
+        "classify_prompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Classify Prompt"
+        },
+        "endpoint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint"
+        },
+        "fuse_transcript": {
+          "default": true,
+          "title": "Fuse Transcript",
+          "type": "boolean"
+        },
+        "host": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Host"
+        },
+        "leaf_prompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Leaf Prompt"
+        },
+        "leaf_schema": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Leaf Schema"
+        },
+        "max_leaves": {
+          "default": 512,
+          "title": "Max Leaves",
+          "type": "integer"
+        },
+        "max_px": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Px"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "port": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Port"
+        },
+        "prompt_preset": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt Preset"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider"
+        },
+        "sample_rate": {
+          "default": 0.5,
+          "title": "Sample Rate",
+          "type": "number"
+        }
+      },
+      "title": "IndexRequest",
+      "type": "object"
+    },
+    "SessionSummary": {
+      "additionalProperties": false,
+      "description": "The session summary returned by start/stop/status (mirrors `session.py`).",
+      "properties": {
+        "asr_errors": {
+          "title": "Asr Errors",
+          "type": "integer"
+        },
+        "audio_mode": {
+          "title": "Audio Mode",
+          "type": "string"
+        },
+        "audio_status": {
+          "title": "Audio Status",
+          "type": "string"
+        },
+        "can_index": {
+          "default": true,
+          "title": "Can Index",
+          "type": "boolean"
+        },
+        "can_retranscribe": {
+          "default": true,
+          "title": "Can Retranscribe",
+          "type": "boolean"
+        },
+        "capture_preset": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Capture Preset"
+        },
+        "dir": {
+          "title": "Dir",
+          "type": "string"
+        },
+        "has_audio": {
+          "default": true,
+          "title": "Has Audio",
+          "type": "boolean"
+        },
+        "has_mic": {
+          "default": false,
+          "title": "Has Mic",
+          "type": "boolean"
+        },
+        "has_screenshots": {
+          "default": true,
+          "title": "Has Screenshots",
+          "type": "boolean"
+        },
+        "index_preset": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Index Preset"
+        },
+        "log_lines": {
+          "title": "Log Lines",
+          "type": "integer"
+        },
+        "mic_device": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mic Device"
+        },
+        "mic_segments": {
+          "default": 0,
+          "title": "Mic Segments",
+          "type": "integer"
+        },
+        "mic_status": {
+          "default": "off",
+          "title": "Mic Status",
+          "type": "string"
+        },
+        "notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Notes",
+          "type": "array"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pid"
+        },
+        "process_running": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Process Running"
+        },
+        "screenshot_errors": {
+          "title": "Screenshot Errors",
+          "type": "integer"
+        },
+        "screenshots": {
+          "title": "Screenshots",
+          "type": "integer"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started At"
+        },
+        "state": {
+          "title": "State",
+          "type": "string"
+        },
+        "stopped_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stopped At"
+        },
+        "transcript_segments": {
+          "title": "Transcript Segments",
+          "type": "integer"
+        },
+        "window_title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Window Title"
+        }
+      },
+      "required": [
+        "session_id",
+        "state",
+        "dir",
+        "screenshots",
+        "screenshot_errors",
+        "log_lines",
+        "audio_mode",
+        "audio_status",
+        "transcript_segments",
+        "asr_errors",
+        "notes"
+      ],
+      "title": "SessionSummary",
+      "type": "object"
+    },
+    "SessionsResponse": {
+      "$defs": {
+        "SessionSummary": {
+          "additionalProperties": false,
+          "description": "The session summary returned by start/stop/status (mirrors `session.py`).",
+          "properties": {
+            "asr_errors": {
+              "title": "Asr Errors",
+              "type": "integer"
+            },
+            "audio_mode": {
+              "title": "Audio Mode",
+              "type": "string"
+            },
+            "audio_status": {
+              "title": "Audio Status",
+              "type": "string"
+            },
+            "can_index": {
+              "default": true,
+              "title": "Can Index",
+              "type": "boolean"
+            },
+            "can_retranscribe": {
+              "default": true,
+              "title": "Can Retranscribe",
+              "type": "boolean"
+            },
+            "capture_preset": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Capture Preset"
+            },
+            "dir": {
+              "title": "Dir",
+              "type": "string"
+            },
+            "has_audio": {
+              "default": true,
+              "title": "Has Audio",
+              "type": "boolean"
+            },
+            "has_mic": {
+              "default": false,
+              "title": "Has Mic",
+              "type": "boolean"
+            },
+            "has_screenshots": {
+              "default": true,
+              "title": "Has Screenshots",
+              "type": "boolean"
+            },
+            "index_preset": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Index Preset"
+            },
+            "log_lines": {
+              "title": "Log Lines",
+              "type": "integer"
+            },
+            "mic_device": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Mic Device"
+            },
+            "mic_segments": {
+              "default": 0,
+              "title": "Mic Segments",
+              "type": "integer"
+            },
+            "mic_status": {
+              "default": "off",
+              "title": "Mic Status",
+              "type": "string"
+            },
+            "notes": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Notes",
+              "type": "array"
+            },
+            "pid": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Pid"
+            },
+            "process_running": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Process Running"
+            },
+            "screenshot_errors": {
+              "title": "Screenshot Errors",
+              "type": "integer"
+            },
+            "screenshots": {
+              "title": "Screenshots",
+              "type": "integer"
+            },
+            "session_id": {
+              "title": "Session Id",
+              "type": "string"
+            },
+            "started_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Started At"
+            },
+            "state": {
+              "title": "State",
+              "type": "string"
+            },
+            "stopped_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Stopped At"
+            },
+            "transcript_segments": {
+              "title": "Transcript Segments",
+              "type": "integer"
+            },
+            "window_title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Window Title"
+            }
+          },
+          "required": [
+            "session_id",
+            "state",
+            "dir",
+            "screenshots",
+            "screenshot_errors",
+            "log_lines",
+            "audio_mode",
+            "audio_status",
+            "transcript_segments",
+            "asr_errors",
+            "notes"
+          ],
+          "title": "SessionSummary",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "sessions": {
+          "items": {
+            "$ref": "#/$defs/SessionSummary"
+          },
+          "title": "Sessions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "sessions"
+      ],
+      "title": "SessionsResponse",
+      "type": "object"
+    },
+    "StartSessionRequest": {
+      "additionalProperties": false,
+      "description": "Body of POST /v1/sessions (mirrors the MCP `capture_start` args).",
+      "properties": {
+        "app_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "App Name"
+        },
+        "asr_backend": {
+          "default": "auto",
+          "title": "Asr Backend",
+          "type": "string"
+        },
+        "audio_chunk_seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audio Chunk Seconds"
+        },
+        "audio_source": {
+          "default": "auto",
+          "title": "Audio Source",
+          "type": "string"
+        },
+        "bundle_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bundle Id"
+        },
+        "capture_audio": {
+          "default": true,
+          "title": "Capture Audio",
+          "type": "boolean"
+        },
+        "capture_screenshots": {
+          "default": true,
+          "title": "Capture Screenshots",
+          "type": "boolean"
+        },
+        "command": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Command"
+        },
+        "cwd": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cwd"
+        },
+        "mic_device": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mic Device"
+        },
+        "output_dir": {
+          "title": "Output Dir",
+          "type": "string"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pid"
+        },
+        "preset": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preset"
+        },
+        "screenshot_format": {
+          "default": "png",
+          "title": "Screenshot Format",
+          "type": "string"
+        },
+        "screenshot_interval": {
+          "default": 1.0,
+          "title": "Screenshot Interval",
+          "type": "number"
+        },
+        "screenshot_jpeg_quality": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Screenshot Jpeg Quality"
+        },
+        "screenshot_resolution": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Screenshot Resolution"
+        },
+        "window_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Window Id"
+        }
+      },
+      "required": [
+        "output_dir"
+      ],
+      "title": "StartSessionRequest",
+      "type": "object"
+    },
+    "TranscriptResponse": {
+      "$defs": {
+        "TranscriptSegment": {
+          "additionalProperties": false,
+          "properties": {
+            "end": {
+              "title": "End",
+              "type": "string"
+            },
+            "end_offset": {
+              "title": "End Offset",
+              "type": "number"
+            },
+            "start": {
+              "title": "Start",
+              "type": "string"
+            },
+            "start_offset": {
+              "title": "Start Offset",
+              "type": "number"
+            },
+            "text": {
+              "title": "Text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "start",
+            "end",
+            "start_offset",
+            "end_offset",
+            "text"
+          ],
+          "title": "TranscriptSegment",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "title": "Count",
+          "type": "integer"
+        },
+        "segments": {
+          "items": {
+            "$ref": "#/$defs/TranscriptSegment"
+          },
+          "title": "Segments",
+          "type": "array"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "segments",
+        "count"
+      ],
+      "title": "TranscriptResponse",
+      "type": "object"
+    },
+    "TranscriptSegment": {
+      "additionalProperties": false,
+      "properties": {
+        "end": {
+          "title": "End",
+          "type": "string"
+        },
+        "end_offset": {
+          "title": "End Offset",
+          "type": "number"
+        },
+        "start": {
+          "title": "Start",
+          "type": "string"
+        },
+        "start_offset": {
+          "title": "Start Offset",
+          "type": "number"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "start_offset",
+        "end_offset",
+        "text"
+      ],
+      "title": "TranscriptSegment",
+      "type": "object"
+    },
+    "WindowInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "app_name": {
+          "title": "App Name",
+          "type": "string"
+        },
+        "height": {
+          "title": "Height",
+          "type": "integer"
+        },
+        "pid": {
+          "title": "Pid",
+          "type": "integer"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "width": {
+          "title": "Width",
+          "type": "integer"
+        },
+        "window_id": {
+          "title": "Window Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "window_id",
+        "pid",
+        "app_name",
+        "title",
+        "width",
+        "height"
+      ],
+      "title": "WindowInfo",
+      "type": "object"
+    },
+    "WindowsResponse": {
+      "$defs": {
+        "WindowInfo": {
+          "additionalProperties": false,
+          "properties": {
+            "app_name": {
+              "title": "App Name",
+              "type": "string"
+            },
+            "height": {
+              "title": "Height",
+              "type": "integer"
+            },
+            "pid": {
+              "title": "Pid",
+              "type": "integer"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "width": {
+              "title": "Width",
+              "type": "integer"
+            },
+            "window_id": {
+              "title": "Window Id",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "window_id",
+            "pid",
+            "app_name",
+            "title",
+            "width",
+            "height"
+          ],
+          "title": "WindowInfo",
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "title": "Count",
+          "type": "integer"
+        },
+        "windows": {
+          "items": {
+            "$ref": "#/$defs/WindowInfo"
+          },
+          "title": "Windows",
+          "type": "array"
+        }
+      },
+      "required": [
+        "windows",
+        "count"
+      ],
+      "title": "WindowsResponse",
+      "type": "object"
+    }
+  }
+}

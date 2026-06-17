@@ -54,6 +54,7 @@ repo-local so it travels to other machines with the code.
 
 ## Testing
 - Hermetic: `python tests/smoke.py` (no permissions/GPU).
+- Contracts: `python tests/contract/run_contracts.py` (frozen interfaces; `--regen` only after an intentional change + spec update).
 - Real ASR: transcribe a `say`→16k s16le clip via `MlxWhisper(model="mlx-community/whisper-tiny")`.
 - Helper: `bash scripts/build_helper.sh` then `./helper/audiocap --system` → expect `READY` + PCM.
 - End-to-end: attach to a real app by `pid`; confirm `screenshots/` fills and (with permission)

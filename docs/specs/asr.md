@@ -11,10 +11,12 @@ rules, all ASR access goes through this interface and no other module imports a 
 directly.
 
 ## Files
-- `src/capture_mcp/asr/__init__.py` — registry / factory (`create`, `available_backends`); re-exports `ASRBackend`, `Segment`.
-- `src/capture_mcp/asr/base.py` — interface + `Segment` dataclass.
-- `src/capture_mcp/asr/whisper_local.py` — local Whisper backends (`MlxWhisper`, `FasterWhisper`) and their `load()`.
-- `src/capture_mcp/asr/nemotron.py` — remote Riva / Nemotron adapter (`NemotronRiva`) and its `load()`.
+- `src/capture_mcp/core/asr/__init__.py` — registry / factory (`create`, `available_backends`); re-exports `ASRBackend`, `Segment`.
+- `src/capture_mcp/core/asr/openai_compat.py` — stdlib-only remote backend: POSTs WAV-wrapped
+  chunks to any OpenAI-compatible `/v1/audio/transcriptions` endpoint (feature #28).
+- `src/capture_mcp/core/asr/base.py` — interface + `Segment` dataclass.
+- `src/capture_mcp/core/asr/whisper_local.py` — local Whisper backends (`MlxWhisper`, `FasterWhisper`) and their `load()`.
+- `src/capture_mcp/core/asr/nemotron.py` — remote Riva / Nemotron adapter (`NemotronRiva`) and its `load()`.
 
 ## Public contract
 
@@ -41,20 +43,40 @@ Methods:
 Factory. `name` is lowercased (None/empty coerced to `"auto"`). Mapping:
 - `"local"` or `"whisper"` → `whisper_local.load()`.
 - `"nemotron"` or `"riva"` → `nemotron.load()`.
-- `"auto"` (default) → try `whisper_local.load()`; on any `Exception`, log a warning and fall back to `nemotron.load()`.
+- `"openai"` / `"openai-compat"` / `"openai_compat"` → `openai_compat.load()` (requires `CAPTURE_OPENAI_ASR_URL`).
+- `"auto"` (default) → try `whisper_local.load()`; on any `Exception`, log a warning, then —
+  if `CAPTURE_OPENAI_ASR_URL` is set (non-blank) — try `openai_compat.load()`; finally fall back
+  to `nemotron.load()`. Local stays preferred even when the URL is set; force the remote with an
+  explicit `asr_backend="openai"`.
 - Anything else → raises `ValueError(f"unknown ASR backend {name!r}; choose from {available_backends}")`.
 
 Backends are imported lazily inside each branch so a missing optional dependency only fails the
 backend it belongs to.
 
 ### `available_backends` (`__init__.py`:19)
-Tuple `("auto", "local", "whisper", "nemotron", "riva")`. Note `"auto"` is the only name not also a
+Tuple `("auto", "local", "whisper", "openai", "openai-compat", "nemotron", "riva")`. Note `"auto"` is the only name not also a
 concrete backend selector.
 
 ### `whisper_local.load() -> ASRBackend` (whisper_local.py:91–105)
 Tries constructors in order `(MlxWhisper, FasterWhisper)`; returns the first that constructs
 successfully (logging `ASR backend loaded: <name>`). If both fail, raises `RuntimeError` with install
 hints and the accumulated per-constructor error strings.
+
+### `openai_compat.load() -> OpenAICompat`
+Reads env: `CAPTURE_OPENAI_ASR_URL` (required — full endpoint URL, e.g.
+`http://localhost:8000/v1/audio/transcriptions`; blank/missing → `RuntimeError`),
+`CAPTURE_OPENAI_ASR_MODEL` (optional `model` form field), `CAPTURE_OPENAI_ASR_KEY`
+(optional; sent as `Authorization: Bearer`), `CAPTURE_OPENAI_ASR_LANGUAGE` (optional),
+`CAPTURE_OPENAI_ASR_TIMEOUT` (seconds, default 120). `transcribe()` converts the float32
+chunk to an in-memory 16-bit WAV, POSTs multipart/form-data with
+`response_format=verbose_json`, and maps the response: a `segments` list → one `Segment`
+per non-blank entry (start clamped ≥0, end clamped to chunk duration); a plain `text`
+response → a single full-chunk `Segment` (empty text → no segments); anything else →
+`RuntimeError` (counted as an asr_error by AudioCapture, capture continues). HTTP errors
+raise with the response body's first 500 bytes for diagnosis. stdlib-only (urllib + wave):
+works from a `minimal` install with zero ASR deps — this is what turns a Nemotron
+WSL2/Docker lab (or whisper.cpp server / faster-whisper-server / api.openai.com) into a
+plain configured endpoint.
 
 ### `nemotron.load() -> ASRBackend` (nemotron.py:94–95)
 Returns `NemotronRiva()` (constructed from env vars). No internal try/fallback.
@@ -151,6 +173,32 @@ Runtime steps for the common `create("auto")` path:
   in the temp dir, then deletes it. The file descriptor from `mkstemp` is closed immediately and the
   file is reopened by path through the `wave` module (whisper_local.py:32–43).
 
+## Transcription settings + hallucination guards (#45)
+
+Whisper hallucinates phantom phrases on out-of-window audio: **short chunks** (the old 8 s
+default) and **silence**. A Russian capture transcribed as 18× "Thank you."; a dead mic looped
+"RSSSS…". Three mitigations, plus two persisted settings:
+
+- **Backend guards** (both `MlxWhisper` + `FasterWhisper`): `condition_on_previous_text=False`
+  (no cross-chunk priming → no repetition loops) + `no_speech_threshold=0.6`, `logprob_threshold=-1.0`,
+  `compression_ratio_threshold=2.4` (drop low-confidence / degenerate decodes). FasterWhisper also keeps
+  `vad_filter=True`.
+- **Silence gate** (`asr.is_silent`, `SILENCE_RMS16` default 70, env `CAPTURE_ASR_SILENCE_RMS`): chunks
+  whose int16-RMS is below the threshold are SKIPPED (not sent to Whisper) in `audio.py` + `retranscribe.py`.
+  Offsets still advance, so the timeline holds.
+- **Language** (`manager.active_language`/`set_active_language`, config key `whisper_language`): pin an
+  ISO code (`ru`, `en`) so a short chunk isn't mis-detected as English. Resolved **per `transcribe()` call**
+  from the setting, so a change applies to a running capture's NEXT chunk (on the fly). `None`/`""`/`auto`
+  = auto-detect. A `language` arg to a backend constructor pins it for that instance (e.g. a re-transcribe).
+- **Chunk length** (`manager.active_chunk_seconds`/`set_chunk_seconds`, config key `audio_chunk_seconds`,
+  default **30 s**, bounds 1–120): Whisper's native window is 30 s; shorter = lower latency but more
+  hallucination on pauses. `CaptureSession` + `retranscribe_session` resolve `None` from this setting;
+  re-transcribe uses the CURRENT setting (not the old session's 8 s).
+
+Surfaces (parity): daemon `POST /v1/asr/language` / `POST /v1/asr/chunk` + both in `GET /v1/asr/models`;
+`capture_retranscribe(language?, chunk_seconds?)` + the MCP `transcription_settings` tool; the GUI's
+Settings → Transcription panel + a language field in the playback pane.
+
 ## Configuration
 
 Local Whisper (whisper_local.py):
@@ -192,6 +240,26 @@ Factory:
 - **faster-whisper now supports CUDA** (device/compute auto-detected + env-overridable, with a Windows
   cuBLAS/cuDNN DLL-path fix and a CPU fallback). Used as benchmark "Backend A" in
   [`../asr-benchmark.md`](../asr-benchmark.md) vs local Nemotron (#23). Riva/Nemotron remains unverified.
+- **Windows / non-NVIDIA ASR.** The Windows release ([windows-release.md](windows-release.md))
+  **doesn't bundle CUDA** but always has a working ASR path without an NVIDIA GPU: `FasterWhisper`
+  falls back to **CPU `int8`** (above); `openai_compat` is a stdlib-only remote backend
+  (`CAPTURE_OPENAI_ASR_URL`); `nemotron`/Riva is a remote option; and the `minimal` extra is
+  screenshots-only. So a non-NVIDIA Windows box never hard-fails.
+- **Runtime-aware model manager (done 2026-06-17).** `manager.runtime_available()` now reports True for
+  **either** mlx-whisper **or** faster-whisper (it was mlx-only → on Windows the frozen daemon reported
+  "ASR runtime unavailable" despite bundling faster-whisper). The catalog is **platform-aware**:
+  `manager.catalog()` returns the `mlx-community/whisper-*` repos on Apple Silicon and
+  `Systran/faster-whisper-*` repos (tiny→large-v3) on the faster-whisper build; `default_repo()` and the
+  catalog validation follow suit, and `is_downloaded` recognizes the CT2 `model.bin` weight. A stale
+  cross-platform `whisper_model` config (e.g. an mlx repo synced onto Windows) is ignored in favour of
+  the default so the backend never gets a model it can't load. `FasterWhisper.__init__` now also reads
+  the GUI-persisted `whisper_model` config (it previously read only env→default, so a GUI model pick
+  didn't reach it), skipping mlx-only repos.
+- **[planned] CUDA fallback is silent.** A failed CUDA load logs a generic warning and drops to CPU
+  `int8` without saying which DLL/version failed, and nothing reports the chosen device to the GUI.
+  Planned: a **CUDA preflight** (verify `nvidia-cublas-cu12` + `nvidia-cudnn-cu12` are present, with a
+  clear install hint) and a `GET /v1/asr/backend` report (`{backend, device, compute_type,
+  fallback_reason}`) the GUI can show.
 
 ## Tests
 - `tests/smoke.py` is the project smoke harness; ASR coverage here should be verified through it where

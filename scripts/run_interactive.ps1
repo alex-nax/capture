@@ -26,7 +26,7 @@
 
 .EXAMPLE
   # Capture a real app window from a headless/service context:
-  ./scripts/run_interactive.ps1 -Exe "$PWD\.venv\Scripts\python.exe" -Arguments "-c ""from capture_mcp import platform as P; P.current().screen_grabber.capture(None, r'C:\tmp\shot.png', fmt='png')"""
+  ./scripts/run_interactive.ps1 -Exe "$PWD\.venv\Scripts\python.exe" -Arguments "-c ""from capture_mcp.core import platform as P; P.current().screen_grabber.capture(None, r'C:\tmp\shot.png', fmt='png')"""
 #>
 [CmdletBinding()]
 param(
