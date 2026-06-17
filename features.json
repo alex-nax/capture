@@ -775,13 +775,13 @@
       "id": 51,
       "category": "indexing",
       "priority": "medium",
-      "description": "Hybrid OCR-escalation for zero-error-tolerant code. Study finding: the local model's code_legible SELF-flag is untrustworthy (rated 38/65 frames 'high' yet confabulated); the reliable trigger is CROSS-FRAME OCR DISAGREEMENT (token instability) on persistent code, plus a prefer-dictated-tokens narration<->OCR reconciliation (1c0c0d: narrated note values recovered tokens OCR garbled). On flagged frames, do a targeted high-res/frontier re-read instead of trusting consensus.",
+      "description": "Hybrid OCR-escalation, v1 (flag-now half — auto-re-read deferred per user). _flag_code_reliability post-processes code leaves: sets data.ocr_uncertain where the OCR'd file name is a singleton amid several differently-named code leaves (the local model's confabulation signature; validated to flag exactly the fake names on a real index, leaving real recurring files alone), and attaches data.narration_values (numbers/identifiers spoken in the frame's transcript) so the consumer prefers DICTATED tokens over garbled OCR (1c0c0d finding). AGENTS.md (#57) lists the flagged frames as 're-read these first'. DEFERRED: automated higher-res/frontier re-read of flagged frames at build time.",
       "acceptance_criteria": [
         "Detect cross-frame token instability for code content and mark those frames for re-read.",
         "Narration-dictated tokens deterministically win over conflicting OCR.",
         "Does not regress non-code content."
       ],
-      "passes": false,
+      "passes": true,
       "dependencies": [
         49
       ]
@@ -790,13 +790,13 @@
       "id": 52,
       "category": "gui",
       "priority": "medium",
-      "description": "Index endpoint config as HOST:PORT, not a full chat-completions URL. The GUI/Settings index field should take an IP/hostname + port; the daemon builds the OpenAI-compatible path (/v1/chat/completions). Keep a single default provider (LM Studio, OpenAI-compatible) for now — a provider selector is DEFERRED (user undecided) but the host:port split must not preclude adding one later. GUI<->MCP parity (daemon /v1 shared).",
+      "description": "Index endpoint config as a structured PROVIDER + host:port (not a raw chat URL). Built a provider selector (LM Studio / Ollama / OpenAI / Custom) with per-provider default port + auth (key field only for providers that need one); the daemon composes the endpoint from provider+host+port (a full endpoint URL still works, back-compat). core/providers.py is the shared source of truth; GET /v1/index/providers; GUI Settings persists provider/host/port/key to gui-settings.json (legacy index_url migrated). GUI<->MCP parity via capture_index(provider/host/port).",
       "acceptance_criteria": [
         "Settings accepts host:port; daemon composes the endpoint path; existing full-URL config still works (back-compat).",
         "No provider selector yet, but the model is structured so one can be added.",
         "Parity: same config reachable from MCP/daemon."
       ],
-      "passes": false,
+      "passes": true,
       "dependencies": [
         44
       ]
@@ -805,13 +805,13 @@
       "id": 53,
       "category": "gui",
       "priority": "medium",
-      "description": "Model selector as a DROPDOWN of the provider's available models, not a text input. Add a daemon route that GETs the provider's /v1/models (via the configured host:port) and returns the list; the GUI populates a dropdown and persists the choice. MCP exposes the same listing for parity.",
+      "description": "Model selector as a DROPDOWN of the provider's available models. GET /v1/index/models lists the provider's /v1/models (providers.list_models); the GUI populates a dropdown (refreshed on provider/host/port change or a Refresh chip) and persists the choice; MCP index_models tool for parity; graceful empty list + reachable:false when unreachable.",
       "acceptance_criteria": [
         "Daemon route lists models from the configured provider; GUI shows a dropdown populated from it.",
         "Reachable from MCP/daemon (parity).",
         "Graceful when the endpoint is unreachable (empty list + hint)."
       ],
-      "passes": false,
+      "passes": true,
       "dependencies": [
         52
       ]
@@ -826,7 +826,7 @@
         "The chosen preset is recorded on the session and used as the index default.",
         "MCP capture_start accepts the same preset for parity."
       ],
-      "passes": false,
+      "passes": true,
       "dependencies": [
         49,
         50
@@ -836,16 +836,48 @@
       "id": 55,
       "category": "engine",
       "priority": "high",
-      "description": "Live/online indexing during capture. The indexer currently runs offline (after capture). When an index endpoint is available, incrementally index frames as they arrive during a LIVE session (rolling leaf captions + periodic combine), so an index exists in near-real-time; fall back to the current post-capture build when no endpoint. Must not block capture or the daemon loop (background worker, SSE progress).",
+      "description": "Live/online incremental indexing during capture. core/live_index.py builds the index leaf-by-leaf via a binary MERGE-TREE (append → O(log n) new combines, never recomputes; validated 2N-1 nodes/single root across sizes). A daemon worker (start_live_index, gated on a reachable index endpoint remembered from the GUI's /v1/index/status probe) drives it off the capture hot path, checkpoints partial index.json+AGENTS.md mid-capture, and finalizes on stop; no endpoint → the existing post-capture build_index. SSE live_index/live_index_done. Integration-tested: worker captions frames incrementally + finalizes a valid tree.",
       "acceptance_criteria": [
         "With an endpoint configured, a live session accrues index nodes during capture (not only after stop).",
         "No endpoint -> unchanged post-capture behavior.",
         "Live indexing runs off the capture/daemon hot path; SSE reports progress; GUI<->MCP parity."
       ],
-      "passes": false,
+      "passes": true,
       "dependencies": [
         44,
         49
+      ]
+    },
+    {
+      "id": 56,
+      "category": "indexing",
+      "priority": "high",
+      "description": "Fold the 6-eval research into the BUILT-IN classifier + extractors (was only partly done via #49/#50). CLASSIFY_PROMPT now classifies by the CONTENT shown, not the window chrome — the #1 recurring finding was that every screen-recorded YouTube/Twitch capture mis-routed to `video` and lost all code/algorithm detail; now a recording OF an IDE is `coding`, OF a tutorial is `lecture`, OF a call is `meeting`, and `video` is reserved for entertainment media. The `coding` extractor gained a verbatim `code` field (legible now that #49 extracts code frames at 2048) and `lecture` gained `code`+`formulas`.",
+      "acceptance_criteria": [
+        "A screen-recorded coding tutorial classifies as coding/lecture (not video) on the auto path.",
+        "coding/lecture extractors return verbatim code (+ formulas for lecture).",
+        "Hermetic/smoke/contracts green; indexing spec updated."
+      ],
+      "passes": true,
+      "dependencies": [
+        44,
+        49
+      ]
+    },
+    {
+      "id": 57,
+      "category": "indexing",
+      "priority": "high",
+      "description": "Generate a per-capture AGENTS.md after indexing — a trust-calibration + usage guide for the agent that later receives the capture artifact. The eval study proved the local 9B confabulates verbatim code (invented class names on UE5, fake fns on Strudel), so structured `data` fields (esp. `code`) are SCAFFOLDING not ground truth. The AGENTS.md (written by build_index into <session>/) states: what the capture is (root summary, duration, content-type mix); the artifact map (index.json tree, transcript.jsonl, screenshots/, index_prompts.json); and content-aware reliability rules grounded in the research — verbatim `code` is OCR-hallucination-prone (cross-check the transcript, RE-READ the high-res frame at repr_frame.path for exact tokens); narration is reliable and DICTATED values beat OCR; cross-frame disagreement flags unreliable regions; small-font shared-board text (ticket IDs) may be misread. Makes the cheap verbatim extraction safe to consume.",
+      "acceptance_criteria": [
+        "build_index writes <session>/AGENTS.md with the artifact map + reliability rules.",
+        "The guidance is content-aware (code captures emphasize verbatim-code caution + re-read; meetings emphasize transcript-authoritative).",
+        "A downstream agent reading only AGENTS.md + index.json knows which fields to trust vs verify."
+      ],
+      "passes": true,
+      "dependencies": [
+        44,
+        56
       ]
     }
   ]

@@ -5,10 +5,11 @@ _Status: current as of 2026-06-10. Source of truth = the code; update this spec 
 ## Purpose
 
 The MCP server is the entrypoint and orchestration layer for capture-mcp. It exposes
-on-demand process capture to an MCP client over stdio as eleven tools
+on-demand process capture to an MCP client over stdio as twelve tools
 (`capture_start`, `capture_stop`, `capture_status`, `capture_prune`, `capture_retranscribe`,
-`capture_import`, `capture_index`, `transcription_settings`, `capture_set_mic`, `list_windows`,
-`list_audio_devices`). It validates arguments,
+`capture_import`, `capture_index`, `index_models`, `transcription_settings`, `capture_set_mic`,
+`list_windows`, `list_audio_devices`). `capture_index` takes a structured provider/host/port (or a
+full endpoint) + `max_px`, and `index_models` lists a provider's models. It validates arguments,
 constructs `CaptureSession` objects and tracks them via the shared
 `core.registry.SessionRegistry` (bounded live tracking + disk-backed history — see
 [session-registry.md](session-registry.md)), and offloads all blocking work to worker
@@ -204,6 +205,10 @@ This is what lets an MCP agent share one live registry — and, with the package
 daemon (#31/#30), one Screen Recording grant — with the CLI and GUI.
 
 ### `capture_start`
+
+Accepts an optional `preset` (#54: meeting/coding/lecture/auto/general/custom) recording the capture
+intent + the index preset a later `capture_index` defaults to; a frontier model picks `custom` and
+supplies its own `leaf_prompt`/`leaf_schema`.
 
 1. Defines a local `_present(v)` predicate (`server.py:113-120`): `None` is absent; a
    `str` is present only if it is non-blank after `.strip()`; any other non-`None`

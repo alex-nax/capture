@@ -12,6 +12,14 @@ Common options: `output_dir` (required), `window_id` (pin screenshots to one win
 input device as a separate mic track), `audio_chunk_seconds`, `asr_backend` (`auto`|`local`|`nemotron`),
 `bundle_id`, `cwd`. Returns a `session_id`. Stop with `capture_stop(session_id)`. Full tool set: §7.
 
+`preset` (#54) records the capture intent + the index preset a later `capture_index` defaults to:
+`meeting` (mic on; participants/active-speaker/task-assignments), `coding` (verbatim code at high-res),
+`lecture` (slides/explainer), `auto` (classify per frame), `general`, or `custom`. **As a frontier model
+you can pass `preset="custom"`** to mark the session for your own tailored indexing, then call
+`capture_index(session_id, leaf_prompt=…, leaf_schema=…)` with a prompt/schema you craft for that content
+(the cheap local model executes it; raise `max_px` for small-font code). Good prompts are saved to
+`<session>/index_prompts.json` so they can be folded into the defaults.
+
 Outputs land in `<output_dir>/capture-<id>/`: `screenshots/<iso>.png|jpg`, `stdout.log`/
 `stderr.log`/`output.log` (launch mode), `audio.s16le`, `transcript.jsonl` + `transcript.txt`,
 `session.json`.

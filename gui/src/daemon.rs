@@ -77,6 +77,13 @@ struct Sessions {
     sessions: Vec<Session>,
 }
 
+/// Model list from GET /v1/index/models (empty if the provider is unreachable).
+#[derive(Deserialize, Default)]
+struct IndexModels {
+    #[serde(default)]
+    models: Vec<String>,
+}
+
 #[derive(Deserialize, Clone)]
 #[allow(dead_code)] // mirrors the /v1 WindowInfo wire shape (window_id/width/height for slice 2)
 pub struct WindowInfo {
@@ -291,7 +298,12 @@ impl Daemon {
         Ok(Box::new(std::io::BufReader::new(resp.into_reader())))
     }
 
-    pub fn start(&self, body: serde_json::Value) -> Result<Session, String> {
+    /// Start a capture (POST /v1/sessions). A non-empty `preset` (meeting/coding/
+    /// lecture/auto/general/custom) is recorded on the session and steers a later index.
+    pub fn start(&self, mut body: serde_json::Value, preset: &str) -> Result<Session, String> {
+        if !preset.trim().is_empty() {
+            body["preset"] = serde_json::json!(preset.trim());
+        }
         let resp = Self::agent()
             .post(&format!("{}/v1/sessions", self.endpoint))
             .set("Authorization", &self.auth())
@@ -362,11 +374,27 @@ impl Daemon {
     }
 
     /// Build a session's multimodal index (background; progress over /v1/events). The
-    /// `endpoint`/`model` overrides carry the GUI-configured LM Studio URL + model id.
-    pub fn index(&self, id: &str, endpoint: &str, model: &str, sample_rate: f64, preset: &str) -> Result<(), String> {
+    /// `provider`/`host`/`port`/`model` overrides carry the GUI-configured endpoint config;
+    /// the daemon composes the chat URL from provider+host (+port) when present.
+    pub fn index(
+        &self,
+        id: &str,
+        provider: &str,
+        host: &str,
+        port: &str,
+        model: &str,
+        sample_rate: f64,
+        preset: &str,
+    ) -> Result<(), String> {
         let mut body = serde_json::json!({ "sample_rate": sample_rate });
-        if !endpoint.trim().is_empty() {
-            body["endpoint"] = serde_json::json!(endpoint.trim());
+        if !provider.trim().is_empty() {
+            body["provider"] = serde_json::json!(provider.trim());
+        }
+        if !host.trim().is_empty() {
+            body["host"] = serde_json::json!(host.trim());
+        }
+        if let Ok(p) = port.trim().parse::<u32>() {
+            body["port"] = serde_json::json!(p);
         }
         if !model.trim().is_empty() {
             body["model"] = serde_json::json!(model.trim());
@@ -381,6 +409,31 @@ impl Daemon {
                 .send_json(body),
             "index failed",
         )
+    }
+
+    /// The models a provider exposes (GET /v1/index/models). Empty if unreachable.
+    pub fn index_models(&self, provider: &str, host: &str, port: &str, key: &str) -> Result<Vec<String>, String> {
+        let mut req = Self::agent()
+            .get(&format!("{}/v1/index/models", self.endpoint))
+            .set("Authorization", &self.auth());
+        if !provider.trim().is_empty() {
+            req = req.query("provider", provider.trim());
+        }
+        if !host.trim().is_empty() {
+            req = req.query("host", host.trim());
+        }
+        if !port.trim().is_empty() {
+            req = req.query("port", port.trim());
+        }
+        if !key.trim().is_empty() {
+            req = req.query("key", key.trim());
+        }
+        let r: IndexModels = req
+            .call()
+            .map_err(|e| e.to_string())?
+            .into_json()
+            .map_err(|e| e.to_string())?;
+        Ok(r.models)
     }
 
     /// Whether indexing is available against `url` (configured + a reachable preflight).

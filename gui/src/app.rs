@@ -64,6 +64,14 @@ enum ConfirmKind {
     Update(update::UpdateInfo),               // a newer GitHub release to install (#48)
 }
 
+/// Which index-endpoint text field a key event targets (#52), for the shared key handler.
+#[derive(Clone, Copy)]
+enum IndexField {
+    Host,
+    Port,
+    Key,
+}
+
 /// The session "playback" screen state (loaded from the session's on-disk artifacts).
 #[derive(Default)]
 struct PlaybackState {
@@ -106,8 +114,10 @@ pub struct CaptureApp {
     cmd_input: String,                     // "launch a command/URL" field buffer
     cmd_focus: FocusHandle,                // focus for the command field
     root_scroll: ScrollHandle,             // the single page scroll (drives the scrollbar)
+    preset_scroll: ScrollHandle,           // the preset-picker card scroll (caps to the viewport)
     sb_drag: Option<(Pixels, Pixels)>,     // scrollbar drag: (mouse-down y, offset at down)
     show_settings: bool,                   // Settings screen vs. the capture dashboard
+    show_preset_picker: bool,              // the start-capture preset popup is open
     shot_format: String,                   // "png" | "jpeg" — applied to new captures
     shot_res_ix: usize,                    // index into RES_PRESETS (0 = native)
     jpeg_quality: u32,                     // 1..100, only for jpeg
@@ -117,12 +127,18 @@ pub struct CaptureApp {
     asr_language: String,                  // transcription language filter buffer (#45; searchable dropdown)
     asr_language_focus: FocusHandle,       // focus for the language field
     lang_dropdown_open: bool,              // the searchable language dropdown is expanded
-    index_url: String,                     // LM Studio chat endpoint for the multimodal index (#44)
-    index_model: String,                   // LM Studio model id (e.g. "qwen/qwen3.5-9b"); blank = server default
+    index_provider: String,                // index endpoint provider id ("lmstudio"|"ollama"|"openai"|"custom") (#52)
+    index_host: String,                    // index endpoint host (or full base URL for the "custom" provider)
+    index_port: String,                    // index endpoint port (string for easy editing; blank for "custom")
+    index_key: String,                     // index endpoint API key (only used when the provider needs one)
+    index_model: String,                   // chosen model id (e.g. "qwen/qwen3.5-9b"); blank = server default
+    index_models: Vec<String>,             // models the current provider exposes (#53; fetched, drives the dropdown)
     index_sample_rate: f64,                // leaf sampling rate for indexing (caption every round(1/rate)-th frame)
     index_preset: String,                  // index prompt preset: "general" | "meeting" | "lecture"
-    index_focus: FocusHandle,              // focus for the index-URL field
-    index_model_focus: FocusHandle,        // focus for the index-model field
+    index_host_focus: FocusHandle,         // focus for the host / base-URL field
+    index_port_focus: FocusHandle,         // focus for the port field
+    index_key_focus: FocusHandle,          // focus for the API-key field
+    model_dropdown_open: bool,             // the model dropdown is expanded (#53)
     index_status: daemon::IndexStatus,     // polled: is the index endpoint configured + reachable
     indexing: HashSet<String>,             // session ids with an index build in flight (SSE-tracked)
     message: SharedString,
@@ -157,6 +173,38 @@ const RES_PRESETS: [(&str, Option<&str>); 4] = [
     ("1080p", Some("1920x1080")),
     ("720p", Some("1280x720")),
 ];
+
+/// Start-capture presets for the picker popup: `(id, label, hint)`. The `id` is sent to
+/// the daemon (which records it + defaults a later index to it); see `start_with_preset`
+/// for how each maps to the mic / screenshots toggles. Mirrors the backend contract.
+const CAPTURE_PRESETS: &[(&str, &str, &str)] = &[
+    ("auto", "Auto", "Classify per frame; adapts as the screen changes."),
+    ("meeting", "Meeting", "Video call/standup — mic on; captures participants, active speaker, task assignments."),
+    ("coding", "Coding / tutorial", "An IDE or coding video — extracts verbatim code at high resolution."),
+    ("lecture", "Lecture / explainer", "A slide/explainer tutorial — topics, key points, formulas."),
+    ("general", "General", "Plain capture; index auto-classifies."),
+    ("custom", "Custom", "Use your current capture settings — set resolution, mic, and language in Settings."),
+];
+
+/// Index-endpoint providers for the Settings selector (#52): `(id, label, default_port, needs_key, is_base_url)`.
+/// Mirrors the daemon's GET /v1/index/providers list — hardcoded here (simpler than a fetch + the
+/// daemon composes the URL from provider+host either way). `is_base_url` providers (custom) carry a
+/// full base URL in the host field and hide the port.
+const INDEX_PROVIDERS: &[(&str, &str, &str, bool, bool)] = &[
+    ("lmstudio", "LM Studio", "1234", false, false),
+    ("ollama", "Ollama", "11434", false, false),
+    ("openai", "OpenAI", "", true, false),
+    ("custom", "Custom (base URL)", "", false, true),
+];
+
+/// Look up a provider's `(default_port, needs_key, is_base_url)` (defaults for an unknown id).
+fn index_provider_meta(id: &str) -> (&'static str, bool, bool) {
+    INDEX_PROVIDERS
+        .iter()
+        .find(|(pid, _, _, _, _)| *pid == id)
+        .map(|(_, _, port, needs_key, is_base)| (*port, *needs_key, *is_base))
+        .unwrap_or(("", false, false))
+}
 
 fn default_out_dir() -> String {
     dirs::home_dir()
@@ -208,16 +256,60 @@ fn pick_media_file() -> Option<String> {
     }
 }
 
-/// `(shot_format, shot_res_ix, jpeg_quality)` loaded from `gui-settings.json`, or
-/// the defaults if the file is missing/unreadable. So a chosen quality survives a
-/// GUI relaunch (the settings live in the window process, not the daemon).
-fn load_settings() -> (String, usize, u32, Option<String>, bool, String, String, f64, String) {
+/// The persisted index-endpoint config (#52): `(provider, host, port, key)`. Migrated from the
+/// legacy free-text `index_url` (`http://HOST:PORT/…`) when the structured keys are absent.
+struct IndexCfg {
+    provider: String,
+    host: String,
+    port: String,
+    key: String,
+}
+
+/// Parse a legacy `http://HOST:PORT/…` index URL into `(host, port)` (lmstudio-shaped). Returns
+/// None if it doesn't look like an `http(s)://host:port` URL (then the URL is just ignored).
+fn migrate_index_url(url: &str) -> Option<(String, String)> {
+    let rest = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://"))?;
+    let authority = rest.split('/').next().unwrap_or(rest); // host[:port]
+    let (host, port) = authority.split_once(':')?;
+    if host.is_empty() || port.parse::<u32>().is_err() {
+        return None;
+    }
+    Some((host.to_string(), port.to_string()))
+}
+
+/// `(shot_format, shot_res_ix, jpeg_quality, …, index_cfg, model, sample_rate, preset)` loaded from
+/// `gui-settings.json`, or the defaults if the file is missing/unreadable. So a chosen quality
+/// survives a GUI relaunch (the settings live in the window process, not the daemon).
+fn load_settings() -> (String, usize, u32, Option<String>, bool, IndexCfg, String, f64, String) {
     let def = ("png".to_string(), 0usize, 80u32);
+    let def_cfg = || IndexCfg {
+        provider: "lmstudio".into(),
+        host: String::new(),
+        port: index_provider_meta("lmstudio").0.to_string(),
+        key: String::new(),
+    };
     let Some(v) = settings_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
     else {
-        return (def.0, def.1, def.2, None, true, String::new(), String::new(), 0.25, "auto".into());
+        return (def.0, def.1, def.2, None, true, def_cfg(), String::new(), 0.25, "auto".into());
+    };
+    let str_of = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    // Structured config if present, else migrate the legacy `index_url` (host:port → lmstudio).
+    let cfg = if v.get("index_provider").is_some() || v.get("index_host").is_some() {
+        let provider = {
+            let p = str_of("index_provider");
+            if p.is_empty() { "lmstudio".to_string() } else { p }
+        };
+        let port = {
+            let p = str_of("index_port");
+            if p.is_empty() { index_provider_meta(&provider).0.to_string() } else { p }
+        };
+        IndexCfg { provider, host: str_of("index_host"), port, key: str_of("index_key") }
+    } else if let Some((host, port)) = migrate_index_url(&str_of("index_url")) {
+        IndexCfg { provider: "lmstudio".into(), host, port, key: String::new() }
+    } else {
+        def_cfg()
     };
     (
         v.get("shot_format").and_then(|x| x.as_str()).unwrap_or(&def.0).to_string(),
@@ -225,7 +317,7 @@ fn load_settings() -> (String, usize, u32, Option<String>, bool, String, String,
         v.get("jpeg_quality").and_then(|x| x.as_u64()).map_or(def.2, |n| n as u32),
         v.get("mic_device").and_then(|x| x.as_str()).map(String::from),
         v.get("capture_screenshots").and_then(|x| x.as_bool()).unwrap_or(true),
-        v.get("index_url").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        cfg,
         v.get("index_model").and_then(|x| x.as_str()).unwrap_or("").to_string(),
         v.get("index_sample_rate").and_then(|x| x.as_f64()).unwrap_or(0.25),
         v.get("index_preset").and_then(|x| x.as_str()).unwrap_or("auto").to_string(),
@@ -356,8 +448,14 @@ impl CaptureApp {
                 }
             }
         }
-        let (shot_format, shot_res_ix, jpeg_quality, mic_device, capture_screenshots, index_url, index_model, index_sample_rate, index_preset) =
+        let (shot_format, shot_res_ix, jpeg_quality, mic_device, capture_screenshots, index_cfg, index_model, index_sample_rate, index_preset) =
             load_settings();
+        let IndexCfg {
+            provider: index_provider,
+            host: index_host,
+            port: index_port,
+            key: index_key,
+        } = index_cfg;
         let mut app = Self {
             daemon: daemon::discover(),
             health: None,
@@ -384,8 +482,10 @@ impl CaptureApp {
             cmd_input: String::new(),
             cmd_focus: cx.focus_handle(),
             root_scroll: ScrollHandle::new(),
+            preset_scroll: ScrollHandle::new(),
             sb_drag: None,
             show_settings: false,
+            show_preset_picker: false,
             shot_format,
             shot_res_ix,
             jpeg_quality,
@@ -395,12 +495,18 @@ impl CaptureApp {
             asr_language: String::new(),
             asr_language_focus: cx.focus_handle(),
             lang_dropdown_open: false,
-            index_url,
+            index_provider,
+            index_host,
+            index_port,
+            index_key,
             index_model,
+            index_models: Vec::new(),
             index_sample_rate,
             index_preset,
-            index_focus: cx.focus_handle(),
-            index_model_focus: cx.focus_handle(),
+            index_host_focus: cx.focus_handle(),
+            index_port_focus: cx.focus_handle(),
+            index_key_focus: cx.focus_handle(),
+            model_dropdown_open: false,
             index_status: daemon::IndexStatus::default(),
             indexing: HashSet::new(),
             message: "".into(),
@@ -415,6 +521,7 @@ impl CaptureApp {
         app.refresh_blocking();
         app.check_for_update(cx);
         app.start_poll(cx);
+        app.fetch_index_models(cx);
         app.start_index_status_poll(cx);
         app.spawn_sse();
         app.start_tray_loop(cx);
@@ -425,7 +532,7 @@ impl CaptureApp {
         if self.sessions.iter().any(|s| s.state == "running") {
             self.stop_all(cx);
         } else {
-            self.start_capture(cx);
+            self.open_preset_picker(cx);
         }
     }
 
@@ -653,7 +760,7 @@ impl CaptureApp {
     fn start_index_status_poll(&self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| loop {
             Timer::after(Duration::from_millis(8000)).await;
-            let Ok(url) = this.update(cx, |v, _| v.index_url.clone()) else { break };
+            let Ok(url) = this.update(cx, |v, _| v.index_chat_url()) else { break };
             let status = cx
                 .background_executor()
                 .spawn(async move { daemon::discover().and_then(|d| d.index_status(&url).ok()) })
@@ -911,11 +1018,47 @@ impl CaptureApp {
         serde_json::Value::Object(m)
     }
 
-    fn start_capture(&mut self, cx: &mut Context<Self>) {
+    /// Open the preset picker — the dashboard "Start capture" entry point. Picking a
+    /// preset (or hitting a hotkey path via meeting-default) runs `start_with_preset`.
+    fn open_preset_picker(&mut self, cx: &mut Context<Self>) {
+        self.show_preset_picker = true;
+        cx.notify();
+    }
+
+    /// Apply a preset's capture toggles to the GUI state, persist them, close the
+    /// picker, then start the capture threading `preset` through to the daemon.
+    /// Mapping (mirrors the backend contract):
+    ///   meeting → screenshots on + mic on (defaults to the first input device if none);
+    ///   coding/lecture → screenshots on, mic off;
+    ///   auto/general/custom → screenshots on, mic left as-is.
+    fn start_with_preset(&mut self, preset: &str, cx: &mut Context<Self>) {
+        self.capture_screenshots = true;
+        match preset {
+            "meeting" => {
+                if self.mic_device.is_none() {
+                    // Pick the default input if known, else the first available device.
+                    self.mic_device = self
+                        .mics
+                        .iter()
+                        .find(|d| d.default)
+                        .or_else(|| self.mics.first())
+                        .map(|d| d.id.clone());
+                }
+            }
+            "coding" | "lecture" => self.mic_device = None,
+            _ => {} // auto / general / custom: leave the mic as the user set it
+        }
+        self.save_settings();
+        self.show_preset_picker = false;
+        self.start_capture(preset, cx);
+    }
+
+    fn start_capture(&mut self, preset: &str, cx: &mut Context<Self>) {
         let Some(d) = self.daemon.clone() else {
             self.message = "no daemon — run: capture daemon start".into();
             return;
         };
+        let preset = preset.to_string();
         // One session per CHECKED window, in picker order. Per app (pid): only the
         // first window records the app audio (macOS audio is per-app); the rest are
         // screenshots-only. The mic attaches to the first window of the chosen app.
@@ -961,9 +1104,10 @@ impl CaptureApp {
             let mut err: Option<String> = None;
             for body in bodies {
                 let d2 = d.clone();
+                let preset = preset.clone();
                 match cx
                     .background_executor()
-                    .spawn(async move { d2.start(body) })
+                    .spawn(async move { d2.start(body, &preset) })
                     .await
                 {
                     Ok(s) => {
@@ -1127,7 +1271,10 @@ impl CaptureApp {
             "jpeg_quality": self.jpeg_quality,
             "mic_device": self.mic_device,
             "capture_screenshots": self.capture_screenshots,
-            "index_url": self.index_url,
+            "index_provider": self.index_provider,
+            "index_host": self.index_host,
+            "index_port": self.index_port,
+            "index_key": self.index_key,
             "index_model": self.index_model,
             "index_sample_rate": self.index_sample_rate,
             "index_preset": self.index_preset,
@@ -1431,6 +1578,110 @@ impl CaptureApp {
             }))
     }
 
+    /// The index model picker (#53): a clickable field showing the chosen `index_model` that
+    /// expands the fetched `index_models` as selectable rows, plus a Refresh affordance that
+    /// re-fetches from the provider. Reuses the language-dropdown layout/idioms.
+    fn index_model_field(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let field_text = if self.index_model.is_empty() {
+            "server default ▾".to_string()
+        } else {
+            format!("{} ▾", self.index_model)
+        };
+        let dim = self.index_model.is_empty();
+
+        let mut col = div().flex().flex_col().gap_1().child(
+            div()
+                .flex()
+                .gap_2()
+                .items_center()
+                .child(div().min_w(px(60.0)).text_color(rgb(0x9aa0a6)).child("model"))
+                .child(
+                    div()
+                        .id("index-model-dropdown")
+                        .flex_1()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(if self.model_dropdown_open { rgb(0x3d6a87) } else { rgb(0x2a2a2a) })
+                        .bg(rgb(0x1e1e1e))
+                        .cursor_pointer()
+                        .text_color(if dim { rgb(0x666b6f) } else { rgb(0xe0e0e0) })
+                        .child(field_text)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.model_dropdown_open = !this.model_dropdown_open;
+                            // Lazily refresh on first open if we have nothing yet.
+                            if this.model_dropdown_open && this.index_models.is_empty() {
+                                this.fetch_index_models(cx);
+                            }
+                            cx.notify();
+                        })),
+                )
+                .child(chip(
+                    "idx-model-refresh",
+                    "Refresh",
+                    false,
+                    cx.listener(|this, _, _, cx| this.fetch_index_models(cx)),
+                )),
+        );
+
+        if self.model_dropdown_open {
+            let mut list = div()
+                .flex()
+                .flex_col()
+                .ml(px(68.0))
+                .w(px(280.0))
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(0x3a3a3a))
+                .bg(rgb(0x16181c));
+            // A "server default" row (blank model) plus each fetched model.
+            let default_active = self.index_model.is_empty();
+            list = list.child(
+                div()
+                    .id("idx-model-row-default")
+                    .flex()
+                    .px_2()
+                    .py_1()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(rgb(0x23262b)))
+                    .when(default_active, |s| s.bg(rgb(0x1d2733)))
+                    .text_color(rgb(0x9aa0a6))
+                    .child("server default")
+                    .on_click(cx.listener(|this, _, _, cx| this.set_index_model(String::new(), cx))),
+            );
+            if self.index_models.is_empty() {
+                list = list.child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_color(rgb(0x6a6a6a))
+                        .child("no models — set host/port, then Refresh"),
+                );
+            } else {
+                for (i, model) in self.index_models.iter().take(40).enumerate() {
+                    let m = model.clone();
+                    let is_active = *model == self.index_model;
+                    list = list.child(
+                        div()
+                            .id(("idx-model-row", i))
+                            .flex()
+                            .px_2()
+                            .py_1()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgb(0x23262b)))
+                            .when(is_active, |s| s.bg(rgb(0x1d2733)))
+                            .text_color(rgb(0xc8ccd0))
+                            .child(model.clone())
+                            .on_click(cx.listener(move |this, _, _, cx| this.set_index_model(m.clone(), cx))),
+                    );
+                }
+            }
+            col = col.child(list);
+        }
+        col
+    }
+
     // -- launch a process/URL ---------------------------------------------------
 
     /// Key handling for the single-line "launch a command/URL" field. Minimal:
@@ -1468,14 +1719,87 @@ impl CaptureApp {
         cx.notify();
     }
 
-    /// Key handling for the index-endpoint URL field (Settings → Indexing). Same minimal
-    /// editing as the launch field; Enter persists + re-probes availability.
-    fn on_index_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    /// Compose the index chat-completions URL from the structured provider config (#52), for the
+    /// `/v1/index/status?url=` availability probe. openai is fixed; custom carries a full base URL.
+    fn index_chat_url(&self) -> String {
+        let host = self.index_host.trim();
+        let port = self.index_port.trim();
+        match self.index_provider.as_str() {
+            "openai" => "https://api.openai.com/v1/chat/completions".to_string(),
+            "custom" => {
+                if host.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}/chat/completions", host.trim_end_matches('/'))
+                }
+            }
+            _ => {
+                // lmstudio / ollama (and any future host:port provider).
+                if host.is_empty() {
+                    String::new()
+                } else if port.is_empty() {
+                    format!("http://{host}/v1/chat/completions")
+                } else {
+                    format!("http://{host}:{port}/v1/chat/completions")
+                }
+            }
+        }
+    }
+
+    /// Whether the selected provider needs an API key (only `openai`), to gate the key field.
+    fn index_needs_key(&self) -> bool {
+        index_provider_meta(&self.index_provider).1
+    }
+
+    /// Whether the selected provider carries a full base URL (custom): host field is the base, no port.
+    fn index_is_base_url(&self) -> bool {
+        index_provider_meta(&self.index_provider).2
+    }
+
+    /// Pick a provider (#52): set it, prefill the default port when empty, clear the stale model
+    /// list, persist, and re-fetch this provider's models.
+    fn set_index_provider(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.index_provider == id {
+            return;
+        }
+        self.index_provider = id.to_string();
+        let (default_port, _needs_key, _is_base) = index_provider_meta(id);
+        if self.index_port.trim().is_empty() {
+            self.index_port = default_port.to_string();
+        }
+        self.index_models.clear();
+        self.model_dropdown_open = false;
+        self.save_settings();
+        cx.notify();
+        self.fetch_index_models(cx);
+    }
+
+    /// Choose a model from the dropdown (#53): set it, close the dropdown, persist.
+    fn set_index_model(&mut self, model: String, cx: &mut Context<Self>) {
+        self.index_model = model;
+        self.model_dropdown_open = false;
+        self.save_settings();
+        cx.notify();
+    }
+
+    /// Generic key handling for a focusable index text field (host / port / key), mirroring the
+    /// launch field: printable chars (`key_char`), backspace, ⌘V paste. Enter persists + acts.
+    fn on_index_field_key(
+        &mut self,
+        field: IndexField,
+        ev: &KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) {
         let ks = &ev.keystroke;
         let m = &ks.modifiers;
+        let buf = match field {
+            IndexField::Host => &mut self.index_host,
+            IndexField::Port => &mut self.index_port,
+            IndexField::Key => &mut self.index_key,
+        };
         if m.platform && ks.key == "v" {
             if let Some(t) = cx.read_from_clipboard().and_then(|i| i.text()) {
-                self.index_url.push_str(t.trim());
+                buf.push_str(t.trim());
                 cx.notify();
             }
             return;
@@ -1485,17 +1809,23 @@ impl CaptureApp {
         }
         match ks.key.as_str() {
             "backspace" => {
-                self.index_url.pop();
+                buf.pop();
             }
             "enter" => {
+                // Persist, re-probe reachability, and refresh the model list for the new endpoint.
                 self.save_settings();
                 self.probe_index_status(cx);
+                self.fetch_index_models(cx);
                 return;
             }
             _ => {
                 if let Some(c) = ks.key_char.as_deref() {
                     if !c.is_empty() && !c.chars().any(char::is_control) {
-                        self.index_url.push_str(c);
+                        // The port field is digits-only.
+                        if matches!(field, IndexField::Port) && !c.chars().all(|ch| ch.is_ascii_digit()) {
+                            return;
+                        }
+                        buf.push_str(c);
                     }
                 }
             }
@@ -1503,44 +1833,34 @@ impl CaptureApp {
         cx.notify();
     }
 
-    /// Key handling for the index model-id field (Settings → Indexing). Enter persists.
-    fn on_index_model_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        let ks = &ev.keystroke;
-        let m = &ks.modifiers;
-        if m.platform && ks.key == "v" {
-            if let Some(t) = cx.read_from_clipboard().and_then(|i| i.text()) {
-                self.index_model.push_str(t.trim());
-                cx.notify();
-            }
-            return;
-        }
-        if m.platform || m.control || m.function {
-            return;
-        }
-        match ks.key.as_str() {
-            "backspace" => {
-                self.index_model.pop();
-            }
-            "enter" => {
-                self.save_settings();
-                cx.notify();
-                return;
-            }
-            _ => {
-                if let Some(c) = ks.key_char.as_deref() {
-                    if !c.is_empty() && !c.chars().any(char::is_control) {
-                        self.index_model.push_str(c);
-                    }
+    /// Fetch the current provider's model list (#53) off the UI thread; fills `index_models` and
+    /// flips the status dot via `reachable`. Triggered on launch, provider/host/port edits, and Refresh.
+    fn fetch_index_models(&mut self, cx: &mut Context<Self>) {
+        let provider = self.index_provider.clone();
+        let host = self.index_host.clone();
+        let port = self.index_port.clone();
+        let key = self.index_key.clone();
+        cx.spawn(async move |this, cx| {
+            let models = cx
+                .background_executor()
+                .spawn(async move {
+                    daemon::discover().and_then(|d| d.index_models(&provider, &host, &port, &key).ok())
+                })
+                .await;
+            let _ = this.update(cx, |v, cx| {
+                if let Some(models) = models {
+                    v.index_models = models;
                 }
-            }
-        }
-        cx.notify();
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
-    /// Re-probe index-endpoint availability now (after editing the URL), off the UI thread.
+    /// Re-probe index-endpoint availability now (after editing the config), off the UI thread.
     fn probe_index_status(&mut self, cx: &mut Context<Self>) {
         self.save_settings();
-        let url = self.index_url.clone();
+        let url = self.index_chat_url();
         self.message = "checking index endpoint…".into();
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -1592,7 +1912,7 @@ impl CaptureApp {
                     body[k.as_str()] = v.clone();
                 }
             }
-            let r = cx.background_executor().spawn(async move { d.start(body) }).await;
+            let r = cx.background_executor().spawn(async move { d.start(body, "") }).await;
             let _ = this.update(cx, |v, cx| {
                 match r {
                     Ok(s) => {
@@ -1774,7 +2094,9 @@ impl CaptureApp {
     /// SSE into `LiveState.index_progress`). Uses the GUI-configured LM Studio endpoint.
     fn index_session(&mut self, id: String, cx: &mut Context<Self>) {
         let Some(d) = self.daemon.clone() else { return };
-        let endpoint = self.index_url.clone();
+        let provider = self.index_provider.clone();
+        let host = self.index_host.clone();
+        let port = self.index_port.clone();
         let model = self.index_model.clone();
         let rate = self.index_sample_rate;
         let preset = self.index_preset.clone();
@@ -1786,7 +2108,7 @@ impl CaptureApp {
             let id2 = id.clone();
             let r = cx
                 .background_executor()
-                .spawn(async move { d.index(&id2, &endpoint, &model, rate, &preset) })
+                .spawn(async move { d.index(&id2, &provider, &host, &port, &model, rate, &preset) })
                 .await;
             let _ = this.update(cx, |v, cx| {
                 if let Err(e) = r {
@@ -2309,8 +2631,9 @@ impl Render for CaptureApp {
         }
 
         let cmd_focused = self.cmd_focus.is_focused(window);
-        let index_focused = self.index_focus.is_focused(window);
-        let index_model_focused = self.index_model_focus.is_focused(window);
+        let index_host_focused = self.index_host_focus.is_focused(window);
+        let index_port_focused = self.index_port_focus.is_focused(window);
+        let index_key_focused = self.index_key_focus.is_focused(window);
         let asr_lang_focused = self.asr_language_focus.is_focused(window);
         let scrollbar = self.scrollbar(cx);
         let settings = self.show_settings;
@@ -2476,7 +2799,7 @@ impl Render for CaptureApp {
                     ))
                     .child(button(
                         "Start capture",
-                        cx.listener(|this, _, _, cx| this.start_capture(cx)),
+                        cx.listener(|this, _, _, cx| this.open_preset_picker(cx)),
                     ))
             }))
             .children(dash.then(|| {
@@ -2632,8 +2955,8 @@ impl Render for CaptureApp {
                     .child(self.chunk_chips(cx))
             }))
             .children(sett.then(|| {
-                // Multimodal index endpoint (#44): the LM Studio chat URL. Indexing is OFF
-                // until this is set AND reachable (the dot reflects /v1/index/status).
+                // Multimodal index endpoint (#52/#53): structured provider + host:port + key, and a
+                // model dropdown. Indexing is OFF until set AND reachable (the dot reflects status).
                 let (dot, label) = if self.index_status.available {
                     (0x34a853u32, "reachable")
                 } else if self.index_status.configured {
@@ -2641,7 +2964,8 @@ impl Render for CaptureApp {
                 } else {
                     (0x6a6a6au32, "not set")
                 };
-                div()
+                let is_base = self.index_is_base_url();
+                let mut panel = div()
                     .flex()
                     .flex_col()
                     .gap_1()
@@ -2654,80 +2978,138 @@ impl Render for CaptureApp {
                             .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(rgb(dot)))
                             .child(div().text_color(rgb(0x9aa0a6)).child(label)),
                     )
+                    // Provider chips: selecting prefills the port + re-fetches models.
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .items_center()
+                            .flex_wrap()
+                            .child(div().min_w(px(60.0)).text_color(rgb(0x9aa0a6)).child("provider"))
+                            .children(INDEX_PROVIDERS.iter().map(|(id, plabel, _, _, _)| {
+                                let pid = id.to_string();
+                                chip(
+                                    &format!("idx-prov-{id}"),
+                                    plabel,
+                                    self.index_provider == *id,
+                                    cx.listener(move |this, _, _, cx| this.set_index_provider(&pid, cx)),
+                                )
+                            })),
+                    )
+                    // Host (or "Base URL" for the custom provider).
                     .child(
                         div()
                             .flex()
                             .gap_2()
                             .items_center()
                             .child(
+                                div().min_w(px(60.0)).text_color(rgb(0x9aa0a6))
+                                    .child(if is_base { "base URL" } else { "host" }),
+                            )
+                            .child(
                                 div()
-                                    .id("index-input")
-                                    .track_focus(&self.index_focus)
-                                    .key_context("index")
-                                    .on_key_down(cx.listener(Self::on_index_key))
+                                    .id("index-host-input")
+                                    .track_focus(&self.index_host_focus)
+                                    .key_context("index-host")
+                                    .on_key_down(cx.listener(|this, ev, _w, cx| this.on_index_field_key(IndexField::Host, ev, cx)))
                                     .flex_1()
                                     .px_2()
                                     .py_1()
                                     .rounded_md()
                                     .border_1()
-                                    .border_color(if index_focused { rgb(0x3d6a87) } else { rgb(0x2a2a2a) })
+                                    .border_color(if index_host_focused { rgb(0x3d6a87) } else { rgb(0x2a2a2a) })
                                     .bg(rgb(0x1e1e1e))
-                                    .text_color(if self.index_url.is_empty() {
-                                        rgb(0x666b6f)
+                                    .text_color(if self.index_host.is_empty() { rgb(0x666b6f) } else { rgb(0xe0e0e0) })
+                                    .child(if self.index_host.is_empty() {
+                                        if is_base { "http://1.2.3.4:8000/v1  (Enter to check)".to_string() }
+                                        else { "192.168.31.217  (Enter to check)".to_string() }
+                                    } else if index_host_focused {
+                                        format!("{}▏", self.index_host)
                                     } else {
-                                        rgb(0xe0e0e0)
-                                    })
-                                    .child(if self.index_url.is_empty() {
-                                        "http://192.168.31.217:1234/v1/chat/completions  (Enter to check)".to_string()
-                                    } else if index_focused {
-                                        format!("{}▏", self.index_url)
-                                    } else {
-                                        self.index_url.clone()
+                                        self.index_host.clone()
                                     })
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        window.focus(&this.index_focus);
+                                        window.focus(&this.index_host_focus);
                                         cx.notify();
                                     })),
                             )
                             .child(button("Check", cx.listener(|this, _, _, cx| this.probe_index_status(cx)))),
-                    )
-                    .child(
+                    );
+                // Port (host:port providers only — custom hides it).
+                if !is_base {
+                    panel = panel.child(
                         div()
                             .flex()
                             .gap_2()
                             .items_center()
-                            .child(div().min_w(px(44.0)).text_color(rgb(0x9aa0a6)).child("model"))
+                            .child(div().min_w(px(60.0)).text_color(rgb(0x9aa0a6)).child("port"))
                             .child(
                                 div()
-                                    .id("index-model-input")
-                                    .track_focus(&self.index_model_focus)
-                                    .key_context("index-model")
-                                    .on_key_down(cx.listener(Self::on_index_model_key))
+                                    .id("index-port-input")
+                                    .track_focus(&self.index_port_focus)
+                                    .key_context("index-port")
+                                    .on_key_down(cx.listener(|this, ev, _w, cx| this.on_index_field_key(IndexField::Port, ev, cx)))
+                                    .w(px(110.0))
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(if index_port_focused { rgb(0x3d6a87) } else { rgb(0x2a2a2a) })
+                                    .bg(rgb(0x1e1e1e))
+                                    .text_color(if self.index_port.is_empty() { rgb(0x666b6f) } else { rgb(0xe0e0e0) })
+                                    .child(if self.index_port.is_empty() {
+                                        "1234".to_string()
+                                    } else if index_port_focused {
+                                        format!("{}▏", self.index_port)
+                                    } else {
+                                        self.index_port.clone()
+                                    })
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        window.focus(&this.index_port_focus);
+                                        cx.notify();
+                                    })),
+                            ),
+                    );
+                }
+                // API key (openai only).
+                if self.index_needs_key() {
+                    panel = panel.child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .items_center()
+                            .child(div().min_w(px(60.0)).text_color(rgb(0x9aa0a6)).child("API key"))
+                            .child(
+                                div()
+                                    .id("index-key-input")
+                                    .track_focus(&self.index_key_focus)
+                                    .key_context("index-key")
+                                    .on_key_down(cx.listener(|this, ev, _w, cx| this.on_index_field_key(IndexField::Key, ev, cx)))
                                     .flex_1()
                                     .px_2()
                                     .py_1()
                                     .rounded_md()
                                     .border_1()
-                                    .border_color(if index_model_focused { rgb(0x3d6a87) } else { rgb(0x2a2a2a) })
+                                    .border_color(if index_key_focused { rgb(0x3d6a87) } else { rgb(0x2a2a2a) })
                                     .bg(rgb(0x1e1e1e))
-                                    .text_color(if self.index_model.is_empty() {
-                                        rgb(0x666b6f)
+                                    .text_color(if self.index_key.is_empty() { rgb(0x666b6f) } else { rgb(0xe0e0e0) })
+                                    .child(if self.index_key.is_empty() {
+                                        "sk-…  (Enter to check)".to_string()
+                                    } else if index_key_focused {
+                                        format!("{}▏", self.index_key)
                                     } else {
-                                        rgb(0xe0e0e0)
-                                    })
-                                    .child(if self.index_model.is_empty() {
-                                        "qwen/qwen3.5-9b  (model id — blank = server default)".to_string()
-                                    } else if index_model_focused {
-                                        format!("{}▏", self.index_model)
-                                    } else {
-                                        self.index_model.clone()
+                                        self.index_key.clone()
                                     })
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        window.focus(&this.index_model_focus);
+                                        window.focus(&this.index_key_focus);
                                         cx.notify();
                                     })),
                             ),
-                    )
+                    );
+                }
+                // Model dropdown (#53) + Refresh, reusing the language-dropdown pattern.
+                panel = panel.child(self.index_model_field(cx));
+                panel
                     .child(
                         // Leaf sampling rate: caption every round(1/rate)-th frame. Coarser =
                         // far fewer vision calls (a long session has thousands of frames).
@@ -2878,11 +3260,13 @@ impl Render for CaptureApp {
                 };
                 div()
                     .absolute()
+                    .top_0()
+                    .left_0()
                     .size_full()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .bg(rgba(0x000000aa))
+                    .bg(rgba(0x000000cc))
                     .occlude()
                     .child(
                         div()
@@ -2931,6 +3315,70 @@ impl Render for CaptureApp {
                                     ),
                             ),
                     )
+            }))
+            // Start-capture preset picker — occluding backdrop + a card listing the 6
+            // presets (label + one-line hint). Picking one applies its toggles + starts.
+            .children(self.show_preset_picker.then(|| {
+                let mut card = div()
+                    .id("preset-card")
+                    .track_scroll(&self.preset_scroll)
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .w(px(400.0))
+                    .max_h_full()
+                    .overflow_y_scroll() // cap to the viewport (minus the overlay padding) + scroll
+                    .p_4()
+                    .rounded_lg()
+                    .bg(rgb(0x1c1c1c))
+                    .child(div().text_lg().child("Start capture"))
+                    .child(
+                        div()
+                            .text_color(rgb(0x9aa0a6))
+                            .child("Pick a preset — it sets the mic/screenshots and how the index reads the screen."),
+                    );
+                for (id, label, hint) in CAPTURE_PRESETS {
+                    let pid = id.to_string();
+                    card = card.child(
+                        div()
+                            .id(SharedString::from(format!("preset-{id}")))
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .bg(rgb(0x2a2a2a))
+                            .hover(|s| s.bg(rgb(0x2d4f67)))
+                            .child(div().text_color(rgb(0xf2f2f2)).child(*label))
+                            .child(div().text_sm().text_color(rgb(0xaab0b8)).child(*hint))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.start_with_preset(&pid, cx);
+                            })),
+                    );
+                }
+                card = card.child(
+                    div().flex().justify_end().child(button(
+                        "Cancel",
+                        cx.listener(|this, _, _, cx| {
+                            this.show_preset_picker = false;
+                            cx.notify();
+                        }),
+                    )),
+                );
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .p_6() // margins so the card never touches the window edges
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(rgba(0x000000cc))
+                    .occlude()
+                    .child(card)
             }))
     }
 }
@@ -3160,6 +3608,11 @@ impl CaptureApp {
                 row = row.child(div().text_color(rgb(0x6a6a6a)).child("(Refresh windows to load devices)"));
             }
             root = root.child(row);
+            // Live transcription-language toggle: the same searchable dropdown as Settings,
+            // surfaced here so the language can be switched DURING a live capture (especially
+            // meetings). Picking applies it immediately via daemon `asr_set_language` (the
+            // next chunk transcribes in it), the way the Mic row above live-switches devices.
+            root = root.child(self.language_field(asr_lang_focused, cx));
         }
 
         // Manage: capability status + prune + re-transcribe (finished sessions only).
