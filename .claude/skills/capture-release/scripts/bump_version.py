@@ -26,6 +26,7 @@ TARGETS = [
     (REPO / "pyproject.toml",              r'^version = "([0-9]+\.[0-9]+\.[0-9]+)"', 'version = "{v}"'),
     (REPO / "gui/Cargo.toml",              r'^version = "([0-9]+\.[0-9]+\.[0-9]+)"', 'version = "{v}"'),
     (REPO / "packaging/build_macos_dmg.sh", r'CAPTURE_GUI_VERSION:-([0-9]+\.[0-9]+\.[0-9]+)', 'CAPTURE_GUI_VERSION:-{v}'),
+    (REPO / "packaging/build_windows.ps1", r'else \{ "([0-9]+\.[0-9]+\.[0-9]+)" \}', 'else {{ "{v}" }}'),
 ]
 
 

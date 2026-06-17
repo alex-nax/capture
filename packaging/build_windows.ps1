@@ -27,7 +27,7 @@ param()
 $ErrorActionPreference = "Continue"
 
 $ROOT = (Resolve-Path "$PSScriptRoot\..").Path
-$VERSION = if ($env:CAPTURE_GUI_VERSION) { $env:CAPTURE_GUI_VERSION } else { "0.2.5" }
+$VERSION = if ($env:CAPTURE_GUI_VERSION) { $env:CAPTURE_GUI_VERSION } else { "0.2.6" }
 $PROFILE_ = if ($env:CAPTURE_WIN_DEBUG -eq "1") { "debug" } else { "release" }
 $TARGET = Join-Path $ROOT "gui\target"
 $BIN = Join-Path $TARGET $PROFILE_
