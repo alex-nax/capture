@@ -1,5 +1,34 @@
 # Progress Log
 
+## Session 62 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **fixed 2 issues from a real
+Windows install** of the Phase-4 installer.
+- **Issue 1 — a console window; closing it killed the app.** `Capture.exe` (agent) and
+  `capture-gui.exe` are Rust binaries → console-subsystem by default → Windows gives them a console
+  that the whole tree shares; closing it kills everything. **Fix:** both `gui/src/main.rs` and
+  `agent/windows/src/main.rs` now carry `#![cfg_attr(not(debug_assertions), windows_subsystem =
+  "windows")]` — **release** builds are GUI/windows-subsystem apps with **no console** (debug keeps it
+  for dev). So the shipped installer must use **release** binaries (the Phase-4 test build shipped DEBUG
+  → consoles). The daemon was already spawned `CREATE_NO_WINDOW`.
+- **Issue 2 — "Whisper runtime unavailable in this daemon."** `manager.runtime_available()` only checked
+  for `mlx_whisper` (excluded from the Windows freeze) → reported False even though faster-whisper is
+  bundled; and the catalog was mlx-only. **Fix (runtime-aware ASR manager):** `runtime_available()` is
+  True for mlx **or** faster-whisper; `catalog()`/`default_repo()`/validation pick the
+  `Systran/faster-whisper-*` set on the faster build vs `mlx-community/*` on Apple Silicon;
+  `is_downloaded` recognizes the CT2 `model.bin`; a stale cross-platform `whisper_model` config is
+  ignored in favour of the default. Also **`FasterWhisper.__init__` now reads the GUI-persisted
+  `whisper_model` config** (it previously read only env→default, so a model picked in the GUI never
+  reached it), skipping mlx-only repos. Verified on the box: `runtime_available=True`,
+  `backend_available=True`, catalog = the 5 Systran faster-whisper repos, default
+  `Systran/faster-whisper-base`.
+- **Verified:** smoke **67/67** (one flaky `WinError 10054` socket-reset in an SSE test on the first
+  run; clean on retry — unrelated to ASR), contracts **4/4**, ASR modules import.
+- **Building a RELEASE installer** (release cargo gui+agent+helper for the no-console fix + a re-freeze
+  for the ASR fix) to hand back a corrected `CaptureSetup-0.2.5-x64.exe`. Specs synced: asr.md
+  (runtime-aware manager), gui.md + agent-windows.md (windows-subsystem / no console), features.json #34.
+
+---
+
 ## Session 61 — 2026-06-17
 **Agent**: builder (**Windows box**, branch **windows-support**) — **merged `origin/v2`** (the macOS
 box's latest index/preset work) into the Windows branch.

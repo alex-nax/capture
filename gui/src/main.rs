@@ -1,3 +1,6 @@
+// Release builds on Windows are a GUI app (no console window; closing a stray console must not
+// kill the app). Debug keeps the console for dev diagnostics. No-op on non-Windows targets.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 //! capture-gui: native GPUI desktop client for the capture-mcp daemon.
 
 mod app;

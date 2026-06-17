@@ -1,3 +1,6 @@
+// A tray app must never own a console window (closing it would kill the agent + its daemon/GUI).
+// Release builds are windows-subsystem (no console); debug keeps it for dev diagnostics.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 //! Capture — Windows system-tray agent (feature #36), the native sibling of macOS `CaptureBar`.
 //!
 //! A thin always-resident tray app: it owns the persistent tray icon, the **daemon lifecycle**

@@ -106,6 +106,10 @@ Mirrors `CaptureBar` ([agent.md](agent.md)) route-for-route:
   the `/v1` contract.
 - **`CREATE_NO_WINDOW` for every spawn** (daemon, any helper) — a stray console window would steal
   foreground and contaminate whole-screen captures.
+- **No console of its own** — `main.rs` carries `#![cfg_attr(not(debug_assertions), windows_subsystem =
+  "windows")]`, so a **release** `Capture.exe` is a windows-subsystem app with no console window
+  (closing a terminal must never kill the agent + its daemon/GUI). Therefore the installer ships
+  **release** binaries; debug keeps a console for dev.
 
 ## Failure modes & handling
 

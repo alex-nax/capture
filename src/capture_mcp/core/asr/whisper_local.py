@@ -159,7 +159,15 @@ class FasterWhisper(ASRBackend):
         _add_nvidia_dll_dirs()
         from faster_whisper import WhisperModel
 
-        model = model or os.environ.get("CAPTURE_WHISPER_MODEL", _FW_DEFAULT)
+        from .. import config as _config
+
+        # Resolution: explicit arg → env → GUI-persisted config (what the model manager writes) →
+        # default. Ignore a stale mlx-only repo in config (CTranslate2 can't load those) so a
+        # config synced from a Mac doesn't break faster-whisper.
+        cfg = _config.get("whisper_model")
+        if not (isinstance(cfg, str) and cfg.strip()) or cfg.strip().startswith("mlx-community/"):
+            cfg = None
+        model = model or os.environ.get("CAPTURE_WHISPER_MODEL") or cfg or _FW_DEFAULT
         device = device or os.environ.get("CAPTURE_WHISPER_DEVICE") or _auto_device()
         if compute_type is None:
             compute_type = os.environ.get("CAPTURE_WHISPER_COMPUTE") or (

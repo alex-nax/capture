@@ -294,6 +294,11 @@ each icon to an alpha mask tinted by `text_color`. The `icon(name, size, color)`
   from a service shell). Remaining for Windows: the tray uses a text title (Windows wants an `.ico`); the
   persistent tray + lifecycle is the native agent #36 ([agent-windows.md](agent-windows.md)). See
   [windows-release.md](windows-release.md).
+- **No console window on Windows (release).** `main.rs` carries
+  `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`, so a **release** build is a GUI
+  app with no console — closing a stray terminal can no longer kill the app. Debug keeps the console for
+  dev diagnostics, so the shipped installer must use **release** binaries (the agent `Capture.exe`
+  carries the same attribute; the daemon is always spawned `CREATE_NO_WINDOW`).
 - **Tray/hotkey latency** ~250 ms (the drain interval) — fine for clicks/presses; lower
   it or use `set_event_handler` if it ever feels laggy.
 - **Hotkey "start" needs a window selected** in the picker (the "stop from anywhere"
