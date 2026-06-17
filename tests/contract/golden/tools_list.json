@@ -103,6 +103,18 @@
           "default": null,
           "title": "Pid"
         },
+        "preset": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preset"
+        },
         "screenshot_format": {
           "default": "png",
           "title": "Screenshot Format",

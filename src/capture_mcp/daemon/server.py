@@ -84,6 +84,16 @@ def default_runs_dir() -> Path:
     return Path(env).expanduser() if env else Path.home() / ".capture" / "runs"
 
 
+def _session_index_preset(session_dir: str) -> str | None:
+    """The `index_preset` recorded on a session at capture time (#54), or None. An index with no
+    explicit preset defaults to this, so 'I captured a meeting' carries through to indexing."""
+    try:
+        cfg = json.loads((Path(session_dir) / "session.json").read_text()).get("config") or {}
+        return cfg.get("index_preset")
+    except Exception:
+        return None
+
+
 class _ApiError(Exception):
     def __init__(self, status: int, message: str) -> None:
         super().__init__(message)
@@ -363,11 +373,13 @@ class CaptureDaemon(ThreadingHTTPServer):
                     client.max_px = req.max_px
                 if not client.available():
                     raise RuntimeError("index endpoint not reachable (configure a working LM Studio URL)")
+                # #54: an index with no explicit preset defaults to the session's recorded capture preset.
+                prompt_preset = req.prompt_preset or _session_index_preset(session_dir) or "auto"
                 idx = indexer.build_index(
                     session_dir, client,
                     sample_rate=req.sample_rate, max_leaves=req.max_leaves,
                     fuse_transcript=req.fuse_transcript,
-                    prompt_preset=req.prompt_preset, leaf_prompt=req.leaf_prompt,
+                    prompt_preset=prompt_preset, leaf_prompt=req.leaf_prompt,
                     leaf_schema=req.leaf_schema, classify_prompt=req.classify_prompt,
                     model_label=client.model, on_progress=on_progress,
                 )

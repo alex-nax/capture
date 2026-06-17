@@ -206,6 +206,10 @@ daemon (#31/#30), one Screen Recording grant — with the CLI and GUI.
 
 ### `capture_start`
 
+Accepts an optional `preset` (#54: meeting/coding/lecture/auto/general/custom) recording the capture
+intent + the index preset a later `capture_index` defaults to; a frontier model picks `custom` and
+supplies its own `leaf_prompt`/`leaf_schema`.
+
 1. Defines a local `_present(v)` predicate (`server.py:113-120`): `None` is absent; a
    `str` is present only if it is non-blank after `.strip()`; any other non-`None`
    value (notably `pid=0`) is present.

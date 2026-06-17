@@ -343,9 +343,16 @@
           "title": "Port"
         },
         "prompt_preset": {
-          "default": "auto",
-          "title": "Prompt Preset",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt Preset"
         },
         "provider": {
           "anyOf": [
@@ -394,6 +401,18 @@
           "title": "Can Retranscribe",
           "type": "boolean"
         },
+        "capture_preset": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Capture Preset"
+        },
         "dir": {
           "title": "Dir",
           "type": "string"
@@ -412,6 +431,18 @@
           "default": true,
           "title": "Has Screenshots",
           "type": "boolean"
+        },
+        "index_preset": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Index Preset"
         },
         "log_lines": {
           "title": "Log Lines",
@@ -571,6 +602,18 @@
               "title": "Can Retranscribe",
               "type": "boolean"
             },
+            "capture_preset": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Capture Preset"
+            },
             "dir": {
               "title": "Dir",
               "type": "string"
@@ -589,6 +632,18 @@
               "default": true,
               "title": "Has Screenshots",
               "type": "boolean"
+            },
+            "index_preset": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Index Preset"
             },
             "log_lines": {
               "title": "Log Lines",
@@ -848,6 +903,18 @@
           ],
           "default": null,
           "title": "Pid"
+        },
+        "preset": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preset"
         },
         "screenshot_format": {
           "default": "png",

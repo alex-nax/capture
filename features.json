@@ -823,7 +823,7 @@
         "The chosen preset is recorded on the session and used as the index default.",
         "MCP capture_start accepts the same preset for parity."
       ],
-      "passes": false,
+      "passes": true,
       "dependencies": [
         49,
         50

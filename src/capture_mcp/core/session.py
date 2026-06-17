@@ -135,6 +135,7 @@ class CaptureSession:
         audio_chunk_seconds: float | None = None,
         asr_backend: str = "auto",
         cwd: str | None = None,
+        preset: str | None = None,
     ) -> None:
         stamp = fs_stamp()
         self.id = f"{stamp}-{secrets.token_hex(3)}"
@@ -165,6 +166,11 @@ class CaptureSession:
         self.audio_chunk_seconds = audio_chunk_seconds
         self.asr_backend = asr_backend
         self.cwd = cwd
+        # Capture preset (#54): records the intent + the index preset a later index defaults to.
+        from .presets import index_preset_for
+
+        self.capture_preset = preset
+        self.index_preset = index_preset_for(preset)
 
         self.t0: float | None = None
         self.t1: float | None = None
@@ -444,6 +450,8 @@ class CaptureSession:
             "mic_status": self._mic.status if self._mic else ("off" if self.mic_device is None else "init"),
             "mic_segments": self._mic.segments if self._mic else 0,
             "mic_device": self.mic_device,  # active input device id (None = mic off)
+            "capture_preset": self.capture_preset,  # #54: recorded intent
+            "index_preset": self.index_preset,      # the index preset a later index defaults to
             **session_capabilities(self.dir),
             "notes": list(self.notes),  # snapshot; notes may be appended concurrently
         }
@@ -464,6 +472,8 @@ class CaptureSession:
                 "audio_source": self.audio_source,
                 "mic_device": self.mic_device,
                 "audio_chunk_seconds": self.audio_chunk_seconds,
+                "capture_preset": self.capture_preset,
+                "index_preset": self.index_preset,
                 "asr_backend": self.asr_backend,
                 "cwd": self.cwd,
             },

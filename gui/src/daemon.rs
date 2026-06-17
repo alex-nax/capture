@@ -280,7 +280,12 @@ impl Daemon {
         Ok(Box::new(std::io::BufReader::new(resp.into_reader())))
     }
 
-    pub fn start(&self, body: serde_json::Value) -> Result<Session, String> {
+    /// Start a capture (POST /v1/sessions). A non-empty `preset` (meeting/coding/
+    /// lecture/auto/general/custom) is recorded on the session and steers a later index.
+    pub fn start(&self, mut body: serde_json::Value, preset: &str) -> Result<Session, String> {
+        if !preset.trim().is_empty() {
+            body["preset"] = serde_json::json!(preset.trim());
+        }
         let resp = Self::agent()
             .post(&format!("{}/v1/sessions", self.endpoint))
             .set("Authorization", &self.auth())

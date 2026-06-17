@@ -116,6 +116,7 @@ pub struct CaptureApp {
     root_scroll: ScrollHandle,             // the single page scroll (drives the scrollbar)
     sb_drag: Option<(Pixels, Pixels)>,     // scrollbar drag: (mouse-down y, offset at down)
     show_settings: bool,                   // Settings screen vs. the capture dashboard
+    show_preset_picker: bool,              // the start-capture preset popup is open
     shot_format: String,                   // "png" | "jpeg" — applied to new captures
     shot_res_ix: usize,                    // index into RES_PRESETS (0 = native)
     jpeg_quality: u32,                     // 1..100, only for jpeg
@@ -170,6 +171,18 @@ const RES_PRESETS: [(&str, Option<&str>); 4] = [
     ("1440p", Some("2560x1440")),
     ("1080p", Some("1920x1080")),
     ("720p", Some("1280x720")),
+];
+
+/// Start-capture presets for the picker popup: `(id, label, hint)`. The `id` is sent to
+/// the daemon (which records it + defaults a later index to it); see `start_with_preset`
+/// for how each maps to the mic / screenshots toggles. Mirrors the backend contract.
+const CAPTURE_PRESETS: &[(&str, &str, &str)] = &[
+    ("meeting", "Meeting", "Video call/standup — mic on; captures participants, active speaker, task assignments."),
+    ("coding", "Coding / tutorial", "An IDE or coding video — extracts verbatim code at high resolution."),
+    ("lecture", "Lecture / explainer", "A slide/explainer tutorial — topics, key points, formulas."),
+    ("auto", "Auto", "Classify per frame; adapts as the screen changes."),
+    ("general", "General", "Plain capture; index auto-classifies."),
+    ("custom", "Custom (MCP)", "A frontier model supplies tailored index prompts over MCP."),
 ];
 
 /// Index-endpoint providers for the Settings selector (#52): `(id, label, default_port, needs_key, is_base_url)`.
@@ -444,6 +457,7 @@ impl CaptureApp {
             root_scroll: ScrollHandle::new(),
             sb_drag: None,
             show_settings: false,
+            show_preset_picker: false,
             shot_format,
             shot_res_ix,
             jpeg_quality,
@@ -490,7 +504,7 @@ impl CaptureApp {
         if self.sessions.iter().any(|s| s.state == "running") {
             self.stop_all(cx);
         } else {
-            self.start_capture(cx);
+            self.open_preset_picker(cx);
         }
     }
 
@@ -976,11 +990,47 @@ impl CaptureApp {
         serde_json::Value::Object(m)
     }
 
-    fn start_capture(&mut self, cx: &mut Context<Self>) {
+    /// Open the preset picker — the dashboard "Start capture" entry point. Picking a
+    /// preset (or hitting a hotkey path via meeting-default) runs `start_with_preset`.
+    fn open_preset_picker(&mut self, cx: &mut Context<Self>) {
+        self.show_preset_picker = true;
+        cx.notify();
+    }
+
+    /// Apply a preset's capture toggles to the GUI state, persist them, close the
+    /// picker, then start the capture threading `preset` through to the daemon.
+    /// Mapping (mirrors the backend contract):
+    ///   meeting → screenshots on + mic on (defaults to the first input device if none);
+    ///   coding/lecture → screenshots on, mic off;
+    ///   auto/general/custom → screenshots on, mic left as-is.
+    fn start_with_preset(&mut self, preset: &str, cx: &mut Context<Self>) {
+        self.capture_screenshots = true;
+        match preset {
+            "meeting" => {
+                if self.mic_device.is_none() {
+                    // Pick the default input if known, else the first available device.
+                    self.mic_device = self
+                        .mics
+                        .iter()
+                        .find(|d| d.default)
+                        .or_else(|| self.mics.first())
+                        .map(|d| d.id.clone());
+                }
+            }
+            "coding" | "lecture" => self.mic_device = None,
+            _ => {} // auto / general / custom: leave the mic as the user set it
+        }
+        self.save_settings();
+        self.show_preset_picker = false;
+        self.start_capture(preset, cx);
+    }
+
+    fn start_capture(&mut self, preset: &str, cx: &mut Context<Self>) {
         let Some(d) = self.daemon.clone() else {
             self.message = "no daemon — run: capture daemon start".into();
             return;
         };
+        let preset = preset.to_string();
         // One session per CHECKED window, in picker order. Per app (pid): only the
         // first window records the app audio (macOS audio is per-app); the rest are
         // screenshots-only. The mic attaches to the first window of the chosen app.
@@ -1026,9 +1076,10 @@ impl CaptureApp {
             let mut err: Option<String> = None;
             for body in bodies {
                 let d2 = d.clone();
+                let preset = preset.clone();
                 match cx
                     .background_executor()
-                    .spawn(async move { d2.start(body) })
+                    .spawn(async move { d2.start(body, &preset) })
                     .await
                 {
                     Ok(s) => {
@@ -1833,7 +1884,7 @@ impl CaptureApp {
                     body[k.as_str()] = v.clone();
                 }
             }
-            let r = cx.background_executor().spawn(async move { d.start(body) }).await;
+            let r = cx.background_executor().spawn(async move { d.start(body, "") }).await;
             let _ = this.update(cx, |v, cx| {
                 match r {
                     Ok(s) => {
@@ -2679,7 +2730,7 @@ impl Render for CaptureApp {
                     ))
                     .child(button(
                         "Start capture",
-                        cx.listener(|this, _, _, cx| this.start_capture(cx)),
+                        cx.listener(|this, _, _, cx| this.open_preset_picker(cx)),
                     ))
             }))
             .children(dash.then(|| {
@@ -3188,6 +3239,63 @@ impl Render for CaptureApp {
                                     ),
                             ),
                     )
+            }))
+            // Start-capture preset picker — occluding backdrop + a card listing the 6
+            // presets (label + one-line hint). Picking one applies its toggles + starts.
+            .children(self.show_preset_picker.then(|| {
+                let mut card = div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .w(px(400.0))
+                    .p_4()
+                    .rounded_lg()
+                    .bg(rgb(0x1c1c1c))
+                    .child(div().text_lg().child("Start capture"))
+                    .child(
+                        div()
+                            .text_color(rgb(0x9aa0a6))
+                            .child("Pick a preset — it sets the mic/screenshots and how the index reads the screen."),
+                    );
+                for (id, label, hint) in CAPTURE_PRESETS {
+                    let pid = id.to_string();
+                    card = card.child(
+                        div()
+                            .id(SharedString::from(format!("preset-{id}")))
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .bg(rgb(0x242424))
+                            .hover(|s| s.bg(rgb(0x2d4f67)))
+                            .child(div().text_color(rgb(0xe0e0e0)).child(*label))
+                            .child(div().text_color(rgb(0x9aa0a6)).child(*hint))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.start_with_preset(&pid, cx);
+                            })),
+                    );
+                }
+                card = card.child(
+                    div().flex().justify_end().child(button(
+                        "Cancel",
+                        cx.listener(|this, _, _, cx| {
+                            this.show_preset_picker = false;
+                            cx.notify();
+                        }),
+                    )),
+                );
+                div()
+                    .absolute()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(rgba(0x000000aa))
+                    .occlude()
+                    .child(card)
             }))
     }
 }

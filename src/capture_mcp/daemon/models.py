@@ -58,6 +58,10 @@ class StartSessionRequest(_Strict):
     audio_chunk_seconds: float | None = None
     asr_backend: str = "auto"
     cwd: str | None = None
+    #: Capture preset (#54): one choice that records the capture intent + the default index preset for
+    #: the session (meeting/coding/lecture/auto/general/custom). The GUI also applies its mic/screenshot
+    #: defaults; the recorded `index_preset` is what a later index (GUI or MCP) defaults to.
+    preset: str | None = None
 
     @model_validator(mode="after")
     def _exactly_one_target(self) -> "StartSessionRequest":
@@ -94,6 +98,9 @@ class SessionSummary(_Strict):
     mic_status: str = "off"
     mic_segments: int = 0
     mic_device: str | None = None
+    #: Capture preset (#54) + the index preset it implies — recorded so a later index defaults to it.
+    capture_preset: str | None = None
+    index_preset: str | None = None
     # Capability flags from on-disk artifacts (recomputed each read; reflect pruning).
     has_screenshots: bool = True
     has_audio: bool = True
@@ -199,7 +206,8 @@ class IndexRequest(_Strict):
     #:   • ``leaf_prompt`` + ``leaf_schema`` → a custom STRUCTURED extractor (one schema per frame).
     #:   • ``leaf_prompt`` alone → a custom free-text caption.
     #:   • ``classify_prompt`` → overrides the auto classifier's prompt.
-    prompt_preset: str = "auto"
+    #: ``None`` → fall back to the session's recorded `index_preset` (#54), then "auto".
+    prompt_preset: str | None = None
     leaf_prompt: str | None = None
     leaf_schema: dict | None = None
     classify_prompt: str | None = None

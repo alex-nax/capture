@@ -87,6 +87,7 @@ async def capture_start(
     audio_chunk_seconds: float = 8.0,
     asr_backend: str = "auto",
     cwd: str | None = None,
+    preset: str | None = None,
 ) -> dict:
     """Start capturing a process. Returns a session summary including ``session_id``.
 
@@ -114,6 +115,10 @@ async def capture_start(
             process owns several windows (e.g. two Chrome windows), which pid alone
             can't disambiguate. Audio stays per-process.
         bundle_id: Bundle id for per-app audio (e.g. "com.apple.Safari"); optional.
+        preset: capture preset (#54) recording the intent + the index preset a later index defaults to —
+            "meeting" (mic + participant/task extraction), "coding" (verbatim code at high-res), "lecture"
+            (slides/explainer), "auto" (classify per frame), "general", or "custom" (you, a frontier model,
+            supply tailored index prompts via `capture_index`). Leave unset for plain capture.
         screenshot_interval: Seconds between screenshots (default 1.0).
         screenshot_format: Image format: png (default), jpg/jpeg, tiff, gif, bmp.
         screenshot_resolution: Bounding box "WxH" (e.g. "1280x720"); shots are
@@ -153,7 +158,7 @@ async def capture_start(
         screenshot_resolution=screenshot_resolution, screenshot_jpeg_quality=screenshot_jpeg_quality,
         capture_screenshots=capture_screenshots, capture_audio=capture_audio,
         audio_source=audio_source, mic_device=mic_device, audio_chunk_seconds=audio_chunk_seconds,
-        asr_backend=asr_backend, cwd=cwd,
+        asr_backend=asr_backend, cwd=cwd, preset=preset,
     )
 
     d = _daemon()
