@@ -75,28 +75,27 @@ mile**: packaging, installer, signing/SmartScreen, daemon lifecycle, and auto-up
 
 ## Behavior
 
-### 1. Prerequisites — core-portability fixes [planned]
+### 1. Prerequisites — core-portability fixes [done 2026-06-17]
 
-Three shared-core spots leak POSIX/macOS assumptions and gate a clean Windows daemon run
-(verified against the code 2026-06-17):
+Three shared-core spots leaked POSIX/macOS assumptions and gated a clean Windows daemon run; all
+three are now fixed (verified on the Windows box: smoke 67/67 + a live `capture daemon start/status/stop`
+round-trip):
 
-- **`cli/__init__.py` `daemon start`** spawns `python -m capture_mcp.daemon` with
-  `start_new_session=True` (`:53`), which is **POSIX-only**. Windows branch: detect `os.name == "nt"`
-  and use `creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW` instead
-  (no console flash, survives the parent).
-- **`vision_client._encode_image`** downscales screenshots via `sips` and **already falls back to the
-  raw PNG on any failure** (`:69-70`), so multimodal indexing *works* on Windows — but the raw-PNG
-  payload is much larger (token/bandwidth bloat). Add a `Pillow` (`PIL.Image.thumbnail`) downscale
-  path before the raw-PNG fallback: chain `sips` (macOS) → Pillow (cross-platform) → raw PNG.
-- **`import_media`** imports the macOS `helper_path` **lazily inside the function** (`:36`,
-  `# macOS-only; import lazily`) — it does **not** break daemon import on Windows; the
-  import-a-file-as-a-session feature is simply macOS-only today. A Windows path needs an ffmpeg-based
-  audio/frame extraction (or wait for a cross-platform helper). Until then, `capture_import` should
-  return a clear "not supported on Windows yet" error rather than a stack trace.
+- **`cli/__init__.py` `daemon start`** spawned `python -m capture_mcp.daemon` with
+  `start_new_session=True` (POSIX-only). **Fixed:** branches on `sys.platform == "win32"` to use
+  `creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW` (no console flash,
+  survives the parent), else `start_new_session=True`.
+- **`vision_client._encode_image`** downscaled via `sips` only (raw-PNG fallback otherwise). **Fixed:**
+  now chains `sips` (macOS, `_downscale_sips`) → **Pillow** (`_downscale_pillow`, lazy `PIL` import) →
+  raw PNG. Multimodal indexing works on Windows; with Pillow installed the payload is downscaled JPEG,
+  without it the raw-PNG fallback still works (Pillow is not yet a declared dep — see open items).
+- **`import_media.import_file`** lazily imports the macOS `helper_path`. **Fixed:** a `sys.platform !=
+  "darwin"` guard raises a clear `NotImplementedError` (capture_import is macOS-only until a Windows
+  ffmpeg extraction path) instead of a confusing `ImportError`.
 
-Already correct (no change): `audio.py` spawns the audio helper with `creationflags=_NO_WINDOW`
-(`:39`); `util.descendant_pids` guards on `os.name` (POSIX `ps` only); `Path.home()/".capture"`
-resolves to `C:\Users\<user>\.capture` (works; idiomatic `%APPDATA%` is an open item).
+Already correct (no change): `audio.py` spawns the audio helper with `creationflags=_NO_WINDOW`;
+`util.descendant_pids` guards on `os.name` (POSIX `ps` only); `Path.home()/".capture"` resolves to
+`C:\Users\<user>\.capture` (works; idiomatic `%APPDATA%` is an open item).
 
 ### 2. Packaging / freeze [planned]
 
@@ -253,16 +252,26 @@ Live backlog for the Windows release (tracked: `features.json` #34, #36):
 - **`~/.capture`** works but is non-idiomatic on Windows (`%APPDATA%`/`%LOCALAPPDATA%`); a
   platform-aware data dir is a low-priority cleanup.
 - **Windows-on-ARM** is out of scope (x64 only for v1).
-- **GPUI DX11** build is unverified in CI.
+- **GPUI on Windows: compiles + renders (verified 2026-06-17).** gpui 0.2.2 builds on Windows (MSVC,
+  ~2m) and creates its **DirectX** renderer + window in the interactive desktop session (smoke via
+  `scripts/run_interactive.ps1` → `RENDERER_OK`). Two caveats: (a) the renderer needs an **interactive
+  GPU session** — launched from a non-interactive/service shell it fails with
+  `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE (0x887A0022)` (the same WinSta0 requirement as screen capture;
+  the logon-task / normal desktop launch satisfies it); (b) `gui/src/main.rs:59` `unwrap()`s renderer
+  creation, so that failure currently panics — make it graceful (surface the interactive-desktop hint)
+  before shipping. CI build/run is still TODO.
 - **Signing/cert decision** deferred — unsigned v1 with the `signtool` hook ready.
 - **CUDA bundling** explicitly out; non-NVIDIA alternatives in [asr.md](asr.md).
 - The **import-a-file** feature (`capture_import`) is macOS-only until a Windows extraction path.
 
 ## Tests
 
-- **[current]** `tests/smoke.py` passes **20/20 on Windows** through the abstraction; live Sessions
-  6–7 captured real windows and an 8-video YouTube playlist end-to-end (see
-  [platform-abstraction.md](platform-abstraction.md) §Tests).
+- **[current]** `tests/smoke.py` passes **67/67 on Windows** (was 20/20 pre-V2; the darwin-only
+  helper-path test is skipped) through the abstraction; live Sessions 6–7 captured real windows and an
+  8-video YouTube playlist end-to-end (see [platform-abstraction.md](platform-abstraction.md) §Tests).
+- **[current, Phase 0, 2026-06-17]** On the Windows box: smoke 67/67 after the core-portability fixes;
+  a live `capture daemon start/status/stop` round-trip via the new Windows spawn branch; the GPUI app
+  builds (`cargo build`) and **renders** (window + DirectX, `RENDERER_OK`) in the interactive session.
 - **[planned] packaged-bundle acceptance** (manual checklist; no GPUI UI harness): install from
   `CaptureSetup-<v>-x64.exe` on a clean Windows 10/11 box → tray icon appears and persists across
   closing the window → `/v1/health` ok → `list_windows` returns real windows → a ~5 s self-test

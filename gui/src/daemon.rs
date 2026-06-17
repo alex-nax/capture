@@ -176,12 +176,20 @@ pub fn discover() -> Option<Daemon> {
     })
 }
 
-/// Path to the daemon bundled inside the packaged app, if present:
-/// `Capture.app/Contents/Resources/captured/captured` (next to the GUI binary's
-/// `MacOS` dir). None in a dev build (run the daemon from the venv instead).
+/// Path to the daemon bundled inside the packaged app, if present. None in a dev build
+/// (run the daemon from the venv instead). Layout differs per OS:
+/// - macOS: `Capture.app/Contents/Resources/captured/captured` (capture-gui lives in MacOS/).
+/// - Windows: `captured\captured.exe` beside `capture-gui.exe` at the install root
+///   (see docs/specs/windows-release.md).
 pub fn bundled_daemon() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let cand = exe.parent()?.join("../Resources/captured/captured");
+    let dir = exe.parent()?;
+    #[cfg(target_os = "macos")]
+    let cand = dir.join("../Resources/captured/captured");
+    #[cfg(target_os = "windows")]
+    let cand = dir.join("captured").join("captured.exe");
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let cand = dir.join("captured").join("captured");
     if cand.exists() {
         Some(cand)
     } else {
@@ -189,17 +197,27 @@ pub fn bundled_daemon() -> Option<PathBuf> {
     }
 }
 
-/// Spawn a daemon binary **detached** (own process group → outlives the GUI, so
-/// captures survive the app quitting). Returns true if it launched.
+/// Spawn a daemon binary **detached** so it outlives the GUI (captures survive the app
+/// quitting). POSIX: its own process group. Windows: a new process group + no console
+/// window (a stray console would steal foreground and pollute whole-screen captures).
+/// Returns true if it launched.
 pub fn spawn_detached(bin: &std::path::Path) -> bool {
-    use std::os::unix::process::CommandExt;
-    std::process::Command::new(bin)
-        .stdin(std::process::Stdio::null())
+    let mut cmd = std::process::Command::new(bin);
+    cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .process_group(0)
-        .spawn()
-        .is_ok()
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW (0x0800_0000) | CREATE_NEW_PROCESS_GROUP (0x0000_0200)
+        cmd.creation_flags(0x0800_0000 | 0x0000_0200);
+    }
+    cmd.spawn().is_ok()
 }
 
 impl Daemon {

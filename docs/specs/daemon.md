@@ -84,7 +84,8 @@ request/validation, 401 auth, 404 unknown, 500 unexpected — never a stack trac
 omitted) · `tail SESSION_ID [-n N]` · `watch [SESSION_ID]` (stream `/v1/events`,
 optionally filtered to one session; Ctrl-C to stop). Prints JSON; non-zero exit +
 `{"error":…}` on failure. `daemon start` spawns `python -m capture_mcp.daemon`
-detached (`start_new_session`) and waits for `/v1/health`.
+detached (POSIX `start_new_session`; Windows `CREATE_NEW_PROCESS_GROUP|CREATE_NO_WINDOW`)
+and waits for `/v1/health`.
 
 ## Behavior
 

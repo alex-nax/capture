@@ -1,5 +1,35 @@
 # Progress Log
 
+## Session 56 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **Phase 0** of the Windows port:
+core-portability fixes + make the GUI build/run on Windows. Verified on this box.
+- **Python core-portability (3 fixes)**: `cli/__init__.py` `daemon start` now branches
+  `start_new_session` (POSIX) vs `creationflags=CREATE_NEW_PROCESS_GROUP|CREATE_NO_WINDOW` (Windows);
+  `vision_client._encode_image` chains `sips` → **Pillow** (`_downscale_sips`/`_downscale_pillow`, lazy
+  PIL) → raw-PNG; `import_media.import_file` raises a clear `NotImplementedError` on non-macOS (no more
+  confusing lazy-`platform.macos` ImportError). Corrected the earlier audit: import_media's macOS import
+  was already lazy (no daemon-import crash) and vision already had a raw-PNG fallback.
+- **GUI compile/run (Rust)**: `gui/src/daemon.rs` `spawn_detached` is now `#[cfg]`-branched (unix
+  `process_group(0)` vs Windows `creation_flags(0x0800_0200)`) — this was the one **hard compile error**
+  on Windows; `bundled_daemon`/`skill_source` paths are per-OS for the planned Windows layout
+  (`captured\captured.exe`, `skill\` beside `capture-gui.exe`). The CG screen-perm FFI was already
+  `#[cfg(target_os="macos")]`-gated.
+- **Verified on Windows (this box, Python 3.12 venv + Rust 1.95 MSVC)**: smoke **67/67**; live
+  `capture daemon start → status(running, platform=win32) → stop`; `cargo build` of the GUI clean
+  (~2m20s, gpui 0.2.2 + DirectX); the GUI **renders** (window + DirectX renderer, `RENDERER_OK`) when
+  launched in the interactive desktop via `scripts/run_interactive.ps1`. From a NON-interactive shell
+  the GUI renderer fails with `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE (0x887A0022)` — the documented WinSta0
+  requirement (the daemon needs no GPU). `gui/src/main.rs:59` `unwrap()`s renderer creation → make it
+  graceful before shipping (noted in windows-release.md).
+- **Finding**: gpui 0.2.2 uses a **DirectX** renderer on Windows (so #34's "DX11 backend" is right;
+  blade-graphics is just a compiled dep). Specs synced (windows-release.md §1 → done + §Tests/open-items,
+  platform-abstraction.md, asr.md, daemon.md).
+- **Next (Phase 1/2)**: per-process audio native helper (#21/#34); GUI runtime macOS-isms (file picker
+  → rfd, open folder/URL → explorer/start, privacy deep-link → ms-settings, mic-grant) for functional
+  parity; then packaging (Phase 4) + auto-update/release (Phase 5).
+
+---
+
 ## Session 55 — 2026-06-17
 **Agent**: builder (**Windows box**, new branch **windows-support**) — full-cycle Windows support:
 audit + planning + **specs-first** (no code yet, per request).

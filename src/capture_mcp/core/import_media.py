@@ -20,6 +20,7 @@ import json
 import logging
 import secrets
 import subprocess
+import sys
 from pathlib import Path
 
 from . import retranscribe
@@ -58,6 +59,14 @@ def import_file(
     src = Path(path).expanduser()
     if not src.is_file():
         raise ValueError(f"file not found: {src}")
+    if sys.platform != "darwin":
+        # Extraction goes through the macOS AVFoundation audiocap helper; a Windows
+        # ffmpeg-based path is planned (docs/specs/windows-release.md). Fail with a clear
+        # message instead of a confusing ImportError from the lazy macOS helper import.
+        raise NotImplementedError(
+            "capture_import is macOS-only for now (uses the AVFoundation audiocap helper); "
+            "a cross-platform import path is planned — see docs/specs/windows-release.md."
+        )
 
     helper = _helper_bin()
     # Anchor the timeline at import time: the session sorts as the newest (ids are

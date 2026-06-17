@@ -151,7 +151,10 @@ final image directly (no temp file; the macOS `sips` path still uses a `.tmp.png
   windows and the screen DC is the blank service desktop. **Escape hatch:**
   `scripts/run_interactive.ps1` runs a command in the logged-on user's interactive session via a
   transient Interactive-logon scheduled task. This was used to verify real-window capture
-  end-to-end (see Tests).
+  end-to-end (see Tests). The **GPUI app's DirectX renderer** has the same requirement: launched from
+  a non-interactive session it fails with `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE (0x887A0022)`; in the
+  interactive desktop it creates its window + renderer fine (verified 2026-06-17). The daemon itself
+  needs no GPU.
 - `PrintWindow` may return black for some GPU/DWM-composited windows; `PW_RENDERFULLCONTENT` is
   used and it falls back to `BitBlt` from the window DC. A capture-by-screen-region alternative is
   not implemented.
@@ -165,13 +168,13 @@ final image directly (no temp file; the macOS `sips` path still uses a `.tmp.png
   (`windows-rs`: `ActivateAudioInterfaceAsync` + `PROCESS_LOOPBACK` with `INCLUDE_TARGET_PROCESS_TREE`
   for Chromium-family apps) speaking the same 16 kHz s16le PCM contract — async-COM from Python ctypes
   is impractical. Tracked in [windows-release.md](windows-release.md) / product-architecture.md.
-- **Shared-core portability leaks (Windows).** Three spots in the "platform-neutral" core still assume
-  POSIX/macOS and are prerequisites for a clean Windows daemon run: `cli/__init__.py` `daemon start`
-  uses `start_new_session=True` (POSIX-only → needs `creationflags=CREATE_NEW_PROCESS_GROUP |
-  CREATE_NO_WINDOW`); `vision_client._encode_image` downscales via `sips` (falls back to the raw PNG on
-  Windows, so indexing works but with inflated payloads → add a Pillow path); `import_media` lazily
-  imports the macOS helper, so file-import is macOS-only (a Windows ffmpeg extraction path is owed).
-  Details + the fix plan in [windows-release.md](windows-release.md) §Behavior.
+- **Shared-core portability leaks (Windows) — fixed 2026-06-17.** Three spots in the
+  "platform-neutral" core assumed POSIX/macOS; all now handled: `cli/__init__.py` `daemon start`
+  branches `start_new_session` (POSIX) vs `creationflags=CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`
+  (Windows); `vision_client._encode_image` chains `sips` → Pillow → raw PNG; `import_media.import_file`
+  raises a clear `NotImplementedError` on non-macOS (file-import stays macOS-only until a Windows
+  ffmpeg path). Verified: smoke 67/67 + a live daemon start/stop on Windows. See
+  [windows-release.md](windows-release.md) §Behavior §1.
 - CI across both OSes is not set up (feature #19).
 - **Full-cycle Windows product** (installer, signing, daemon logon-task lifecycle, in-app auto-update):
   see [windows-release.md](windows-release.md); the native Windows tray agent: [agent-windows.md](agent-windows.md).
