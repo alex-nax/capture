@@ -155,8 +155,26 @@ final image directly (no temp file; the macOS `sips` path still uses a `.tmp.png
 - `PrintWindow` may return black for some GPU/DWM-composited windows; `PW_RENDERFULLCONTENT` is
   used and it falls back to `BitBlt` from the window DC. A capture-by-screen-region alternative is
   not implemented.
-- Windows mic capture requires a configured dshow device (no `:default` exists for dshow).
+- Windows mic capture requires a configured dshow device (no `:default` exists for dshow), and
+  **mic device enumeration returns `[]`** on Windows (`AudioSource.list_input_devices` default impl —
+  there is no `--list-mics` analog for the Windows helper yet), so the GUI mic selector (#37) has no
+  devices to offer on Windows. Planned: WASAPI device enumeration.
+- **Per-process audio is the remaining refinement (#21 → #34).** `Win32AudioSource.command(source="app")`
+  returns `None` when `pyaudiowpatch` is unavailable, and otherwise uses **system loopback**, so it
+  captures the full output mix, not one app. True per-process isolation needs a **native helper binary**
+  (`windows-rs`: `ActivateAudioInterfaceAsync` + `PROCESS_LOOPBACK` with `INCLUDE_TARGET_PROCESS_TREE`
+  for Chromium-family apps) speaking the same 16 kHz s16le PCM contract — async-COM from Python ctypes
+  is impractical. Tracked in [windows-release.md](windows-release.md) / product-architecture.md.
+- **Shared-core portability leaks (Windows).** Three spots in the "platform-neutral" core still assume
+  POSIX/macOS and are prerequisites for a clean Windows daemon run: `cli/__init__.py` `daemon start`
+  uses `start_new_session=True` (POSIX-only → needs `creationflags=CREATE_NEW_PROCESS_GROUP |
+  CREATE_NO_WINDOW`); `vision_client._encode_image` downscales via `sips` (falls back to the raw PNG on
+  Windows, so indexing works but with inflated payloads → add a Pillow path); `import_media` lazily
+  imports the macOS helper, so file-import is macOS-only (a Windows ffmpeg extraction path is owed).
+  Details + the fix plan in [windows-release.md](windows-release.md) §Behavior.
 - CI across both OSes is not set up (feature #19).
+- **Full-cycle Windows product** (installer, signing, daemon logon-task lifecycle, in-app auto-update):
+  see [windows-release.md](windows-release.md); the native Windows tray agent: [agent-windows.md](agent-windows.md).
 
 ## Tests
 - `tests/smoke.py` is cross-platform and passes **20/20 on Windows** through the abstraction

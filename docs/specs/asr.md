@@ -240,6 +240,25 @@ Factory:
 - **faster-whisper now supports CUDA** (device/compute auto-detected + env-overridable, with a Windows
   cuBLAS/cuDNN DLL-path fix and a CPU fallback). Used as benchmark "Backend A" in
   [`../asr-benchmark.md`](../asr-benchmark.md) vs local Nemotron (#23). Riva/Nemotron remains unverified.
+- **Windows / non-NVIDIA ASR (planned surfacing).** The decision for the Windows release
+  ([windows-release.md](windows-release.md)) is **don't bundle CUDA** but always have a working ASR
+  path for users **without** an NVIDIA GPU. The alternatives already exist in code: `FasterWhisper`
+  falls back to **CPU `int8`** when CUDA is unavailable (above); `openai_compat` is a stdlib-only
+  remote `/v1/audio/transcriptions` backend (`CAPTURE_OPENAI_ASR_URL`); `nemotron`/Riva is a remote
+  option; and the `minimal` extra captures screenshots+logs with no ASR. So a non-NVIDIA Windows box
+  is never a hard failure — it transcribes on CPU (slower) or via a configured remote endpoint, or
+  runs screenshots-only. What is **[planned]**: (a) make this explicit/observable, and (b) the two
+  rough edges below.
+- **[planned] Model manager catalog is mlx-only.** `manager.CATALOG` is six `mlx-community/whisper-*`
+  repos, so the GUI model picker (`GET /v1/asr/models`) does not drive `FasterWhisper` on Windows
+  (which uses named models `base`/`small`/`medium`/`large-v3`, not mlx repos). On Windows the model is
+  effectively env-only (`CAPTURE_WHISPER_MODEL`, default `base`) until a **platform-aware catalog**
+  lands.
+- **[planned] CUDA fallback is silent.** A failed CUDA load logs a generic warning and drops to CPU
+  `int8` without saying which DLL/version failed, and nothing reports the chosen device to the GUI.
+  Planned: a **CUDA preflight** (verify `nvidia-cublas-cu12` + `nvidia-cudnn-cu12` are present, with a
+  clear install hint) and a `GET /v1/asr/backend` report (`{backend, device, compute_type,
+  fallback_reason}`) the GUI can show.
 
 ## Tests
 - `tests/smoke.py` is the project smoke harness; ASR coverage here should be verified through it where

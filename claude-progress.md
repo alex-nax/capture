@@ -1,5 +1,44 @@
 # Progress Log
 
+## Session 55 — 2026-06-17
+**Agent**: builder (**Windows box**, new branch **windows-support**) — full-cycle Windows support:
+audit + planning + **specs-first** (no code yet, per request).
+- **Branch**: cut `windows-support` from `main`. Reconciled state: this box's `main` already carries the
+  V2 + Windows groundwork (12 unpushed commits from `162222a V2 … multi-OS groundwork`); `origin/v2` has
+  nothing `main` lacks; the macOS box's 0.2.x sessions (40–54) are committed only on **that** machine and
+  are NOT here.
+- **Audit**: ran a 9-investigator parallel workflow over every subsystem (backends, GUI, tray agent,
+  packaging, auto-update, release/CI, ASR, roadmap, core portability). Verdict: engine layer ~done +
+  live-verified (GDI+/EnumWindows/WASAPI loopback + faster-whisper CUDA captured an 8-video playlist
+  end-to-end); the gap is the **last mile** — installer, signing/SmartScreen, daemon lifecycle, native
+  tray agent (#36), GUI macOS-isms (won't compile on Windows: `process_group`, CG FFI), and a
+  Windows auto-update path.
+- **Decisions locked (owner)**: Inno Setup + winget; **logon task, never a Service**; **Rust** tray
+  agent (windows-rs + tray-icon); **don't bundle CUDA** but provide CPU-int8 / remote openai-compat /
+  Riva / minimal alternatives for non-NVIDIA boxes; **unsigned v1** with a `signtool` hook
+  (`CAPTURE_WIN_SIGN_*`) — SmartScreen fires once on the downloaded installer's first run, never on
+  captures or post-install launches.
+- **Specs written**: NEW `docs/specs/windows-release.md` (packaging/freeze, Inno Setup installer +
+  winget, daemon logon-task lifecycle, interactive-desktop preflight, signing/SmartScreen, cross-platform
+  auto-update, release/CI) and `docs/specs/agent-windows.md` (Rust tray agent, #36). Updated `asr.md`
+  (non-NVIDIA alternatives + planned platform-aware catalog / CUDA preflight / `/v1/asr/backend`),
+  `platform-abstraction.md` (per-process native helper plan, mic enumeration, core-portability leaks,
+  pointers), `windows.md` (disambiguation: it's the macOS GUI-window module), `docs/specs/README.md`
+  (two new rows + clarified the `windows.md` row), and `features.json` (#34/#36 → spec pointers +
+  decisions + auto-update/non-NVIDIA/core-portability acceptance criteria). `features.json` validates
+  (55 features).
+- **Corrected two audit overstatements against the real code**: `import_media` imports the macOS helper
+  **lazily inside the function** (macOS-only feature, does NOT crash daemon import on Windows);
+  `vision_client._encode_image` **falls back to the raw PNG** when `sips` is absent (indexing works on
+  Windows, just with fatter payloads). Confirmed real prereqs: `cli/__init__.py:53`
+  `start_new_session=True` (POSIX-only) and `Win32AudioSource.command(source="app")` → `None` without
+  pyaudiowpatch (system-loopback only).
+- **Next (Phase 0, when greenlit)**: fix the three core-portability leaks + `#[cfg]`-gate the GUI
+  macOS-isms so it compiles, then verify the daemon + a real capture on this box. No release/version
+  bump (specs-first; nothing shipped).
+
+---
+
 ## Session 54 — 2026-06-17
 **Agent**: builder (macOS box, branch **v2**) — skill optimization + 0.2.2 deploy + local commit.
 - **Skill (skill-creator):** rewrote `skills/capture/SKILL.md` Step 1 to the **app-first distribution**

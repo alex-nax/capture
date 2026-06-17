@@ -510,11 +510,14 @@
       "id": 34,
       "category": "gui",
       "priority": "medium",
-      "description": "M4 — Windows release: GPUI app on the DX11 backend, Inno Setup installer (+ winget), logon-task daemon install, interactive-station preflight UX, and per-process audio via a NATIVE helper binary (windows-rs, ActivateAudioInterfaceAsync + PROCESS_LOOPBACK with INCLUDE_TARGET_PROCESS_TREE for Chromium-family apps) speaking the frozen 16kHz s16le PCM stdout contract — closes the per-process half of #21. Ship with honest SmartScreen messaging (Trusted Signing unavailable to individuals; OV cert does not clear cold-start).",
+      "description": "M4 — Windows release: GPUI app on the DX11 backend, Inno Setup installer (+ winget), logon-task daemon install, interactive-station preflight UX, and per-process audio via a NATIVE helper binary (windows-rs, ActivateAudioInterfaceAsync + PROCESS_LOOPBACK with INCLUDE_TARGET_PROCESS_TREE for Chromium-family apps) speaking the frozen 16kHz s16le PCM stdout contract — closes the per-process half of #21. Ship with honest SmartScreen messaging (Trusted Signing unavailable to individuals; OV cert does not clear cold-start). SPEC: docs/specs/windows-release.md. Decisions (2026-06-17, owner): Inno Setup + winget; logon task (not a Service); don't bundle CUDA (CPU int8 / remote openai-compat / Riva / screenshots-only minimal alternatives for non-NVIDIA boxes); unsigned v1 with a signtool hook (CAPTURE_WIN_SIGN_*); cross-platform in-app auto-update (generalize gui/src/update.rs + a PowerShell updater; both .dmg and .exe under one release tag).",
       "acceptance_criteria": [
         "CaptureSetup-x64.exe installs and first capture works without a terminal",
         "Per-process loopback isolates a Chromium app's audio while other apps play sound",
-        "GUI labels system-mix vs per-process source correctly"
+        "GUI labels system-mix vs per-process source correctly",
+        "Core-portability prereqs fixed so the daemon runs on Windows (cli start uses creationflags, not start_new_session; vision indexing downscales via Pillow; capture_import degrades cleanly)",
+        "Non-NVIDIA Windows ASR works (CPU int8 or a configured remote endpoint) with no hard failure when CUDA is absent",
+        "In-app auto-update on Windows downloads the installer, runs it silently, and relaunches; the same release tag carries both the macOS .dmg and the Windows .exe"
       ],
       "passes": false,
       "dependencies": [
@@ -543,7 +546,7 @@
       "id": 36,
       "category": "gui",
       "priority": "medium",
-      "description": "Windows menu-bar/tray agent — the native sibling of the macOS CaptureBar (docs/specs/agent.md). A thin always-resident system-tray app (Win32 NOTIFYICON or WinUI/C#) that owns the persistent tray icon, the daemon lifecycle (spawn the bundled captured; stop it on Quit), and launches the GPUI window (capture-gui with CAPTURE_AGENT=1) on demand. Same role + same /v1 contract as the macOS agent; no shared code (native per-OS, owner's decision). Part of the M4 Windows release.",
+      "description": "Windows menu-bar/tray agent — the native sibling of the macOS CaptureBar (docs/specs/agent.md). A thin always-resident system-tray app in RUST (windows-rs + tray-icon/muda, owner's decision 2026-06-17) that owns the persistent tray icon, the daemon lifecycle (spawn the bundled captured with CREATE_NO_WINDOW; stop it on Quit if idle), and launches the GPUI window (capture-gui with CAPTURE_AGENT=1) on demand. Same role + same /v1 contract as the macOS agent; no shared code (native per-OS). Part of the M4 Windows release. SPEC: docs/specs/agent-windows.md.",
       "acceptance_criteria": [
         "Launching the packaged Windows app shows a persistent system-tray icon that reflects daemon/capture state and survives closing the window",
         "The tray spawns the bundled daemon on launch and stops it on Quit (so the install isn't pinned)",
