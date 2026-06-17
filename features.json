@@ -876,6 +876,98 @@
         44,
         56
       ]
+    },
+    {
+      "id": 58,
+      "category": "v3",
+      "priority": "high",
+      "passes": false,
+      "dependencies": [],
+      "description": "v3 SPIKE A — ScreenCaptureKit from Rust. A throwaway binary that captures one app's audio (16k mono s16le) + a window screenshot via objc2/`screencapturekit`/`cidre`, to de-risk the biggest unknown (bindings maturity, entitlements, the SCStreamError -3805 reconnect) BEFORE scheduling the platform crate. Decides whether the macOS capture port is hand-FFI or turnkey."
+    },
+    {
+      "id": 59,
+      "category": "v3",
+      "priority": "high",
+      "passes": false,
+      "dependencies": [],
+      "description": "v3 SPIKE B — whisper-rs vs mlx-whisper benchmark. Transcribe a fixed clip with whisper-rs (whisper.cpp Metal + CoreML) vs the current mlx path using docs/asr-benchmark.md; measure latency/accuracy. Decides whether an MLX backend is ever worth the FFI/sidecar work, or whisper-rs is the macOS default outright."
+    },
+    {
+      "id": 60,
+      "category": "v3",
+      "priority": "high",
+      "passes": false,
+      "dependencies": [],
+      "description": "v3 workspace skeleton + capture-core contract types. Stand up the cargo workspace; define the /v1 + on-disk CONTRACT TYPES in capture-core (serde) as the source of truth (replacing the pydantic v1_schema golden) and regenerate the GUI's types from them. Keeps the contract firewall stable for the incremental port."
+    },
+    {
+      "id": 61,
+      "category": "v3",
+      "priority": "high",
+      "passes": false,
+      "dependencies": [
+        60
+      ],
+      "description": "v3 capture-index port (reqwest+serde+image). Port vision_client + build_index + live_index (merge-tree) + AGENTS.md + the #49/#51/#56/#57 logic to Rust; `image` replaces sips for downscale/encode. Pure logic + HTTP — validate against the 7 existing eval corpora as regression fixtures (no capture/permissions needed). First high-value, low-risk port; proves the toolchain."
+    },
+    {
+      "id": 62,
+      "category": "v3",
+      "priority": "high",
+      "passes": false,
+      "dependencies": [
+        60,
+        61
+      ],
+      "description": "v3 capture-daemon (/v1 axum + SSE) + capture-mcp (rmcp/JSON-RPC stdio). Serve the byte-identical /v1 + the 12-tool MCP surface from Rust; flip the GUI's daemon client to the Rust daemon. Validate against the contract + the GUI end-to-end."
+    },
+    {
+      "id": 63,
+      "category": "v3",
+      "priority": "high",
+      "passes": false,
+      "dependencies": [
+        59,
+        60
+      ],
+      "description": "v3 capture-asr — pluggable AsrBackend trait + manager (mirrors asr/base+manager). whisper-rs default (Metal/CoreML on Mac, CUDA on Win), the OpenAI-compat/Nemotron HTTP backends, MLX optional-later behind the trait. Port the chunking + silence-gate + language/chunk settings. Benchmark-gated (spike B) before deleting the Python ASR."
+    },
+    {
+      "id": 64,
+      "category": "v3",
+      "priority": "high",
+      "passes": false,
+      "dependencies": [
+        58,
+        60
+      ],
+      "description": "v3 capture-platform macOS — ScreenCaptureKit (app audio + screenshots) + AVFoundation mic via objc2, behind the WindowFinder/ScreenGrabber/AudioSource traits. Replaces audiocap.swift (capture moves in-process via FFI; the helper binary disappears). Gated on spike A."
+    },
+    {
+      "id": 65,
+      "category": "v3",
+      "priority": "medium",
+      "passes": false,
+      "dependencies": [
+        60,
+        64
+      ],
+      "description": "v3 capture-platform Windows (windows-rs: Graphics.Capture + WASAPI loopback) + UNIFIED single-binary bundling. Replaces audiocap_win.py + the Win32 grabber. A single signed .exe + installer (cargo-dist/WiX) — no Python, no DLL zoo (the core motivation)."
+    },
+    {
+      "id": 66,
+      "category": "v3",
+      "priority": "low",
+      "passes": false,
+      "dependencies": [
+        61,
+        62,
+        63,
+        64,
+        65
+      ],
+      "description": "v3 cutover — retire the Python package + the Swift/Python helpers, drop PyInstaller; finalize cargo-dist packaging for mac+win. selenium→chromiumoxide (or keep optional) for the browser-capture flow. v3 becomes the default branch."
     }
   ]
 }
