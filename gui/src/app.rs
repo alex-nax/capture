@@ -3186,11 +3186,13 @@ impl Render for CaptureApp {
                 };
                 div()
                     .absolute()
+                    .top_0()
+                    .left_0()
                     .size_full()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .bg(rgba(0x000000aa))
+                    .bg(rgba(0x000000cc))
                     .occlude()
                     .child(
                         div()
@@ -3269,10 +3271,10 @@ impl Render for CaptureApp {
                             .py_2()
                             .rounded_md()
                             .cursor_pointer()
-                            .bg(rgb(0x242424))
+                            .bg(rgb(0x2a2a2a))
                             .hover(|s| s.bg(rgb(0x2d4f67)))
-                            .child(div().text_color(rgb(0xe0e0e0)).child(*label))
-                            .child(div().text_color(rgb(0x9aa0a6)).child(*hint))
+                            .child(div().text_color(rgb(0xf2f2f2)).child(*label))
+                            .child(div().text_sm().text_color(rgb(0xaab0b8)).child(*hint))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.start_with_preset(&pid, cx);
                             })),
@@ -3289,11 +3291,13 @@ impl Render for CaptureApp {
                 );
                 div()
                     .absolute()
+                    .top_0()
+                    .left_0()
                     .size_full()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .bg(rgba(0x000000aa))
+                    .bg(rgba(0x000000cc))
                     .occlude()
                     .child(card)
             }))
