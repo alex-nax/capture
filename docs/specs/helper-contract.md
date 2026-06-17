@@ -3,10 +3,11 @@
 _Status: current as of 2026-06-10. Source of truth = the code; update this spec in the same change as the code._
 
 > **This protocol is FROZEN shared property** (product-architecture.md invariant).
-> Every audio source helper — today's Swift `audiocap` (macOS, per-app/system) and
-> `audiocap_win.py` (Windows, system loopback), and the planned native Windows
-> per-process-loopback helper (feature #34) — must speak exactly this contract.
-> The engine consumes helpers ONLY through it; nothing may parse helper internals.
+> Every audio source helper — the Swift `audiocap` (macOS, per-app/system),
+> `audiocap_win.py` (Windows, system loopback), and the native Windows **per-process**
+> loopback helper `audiocap_win.exe` (feature #34, `helper/audiocap_win_rs/`) — must speak
+> exactly this contract. The engine consumes helpers ONLY through it; nothing may parse
+> helper internals.
 
 ## Purpose
 
@@ -20,7 +21,9 @@ this spec is only the contract.
 ## Files
 
 - `helper/audiocap.swift` — macOS ScreenCaptureKit helper (per-app / `--system`).
-- `helper/audiocap_win.py` — Windows WASAPI system-loopback helper.
+- `helper/audiocap_win.py` — Windows WASAPI **system**-loopback helper (full output mix; fallback).
+- `helper/audiocap_win_rs/` (Rust, `windows-rs`) → `audiocap_win.exe` — Windows **per-process** WASAPI
+  loopback helper (target pid + its process tree); preferred when a target pid is known.
 - Consumers: `core/audio.py` (`_read_loop` on stdout, `_spawn_stderr_logger` on
   stderr), `core/platform/macos.py` / `core/platform/windows.py` (build argv).
 
@@ -49,10 +52,14 @@ this spec is only the contract.
     PNG per timestamp to `<dir>/<offset_ms>.png` (integer-millisecond stem; the importer renames these to
     `fs_stamp` on the audio timeline). Frame count → stderr. **Does not use stdout.** No video track ⇒ writes
     nothing, exit `0`. `--out` required (else exit 2).
-- Windows: `python helper/audiocap_win.py [--rate <hz>] [--stall-timeout <s>]`
-  (system mix only today; `--stall-timeout` is accepted but currently a no-op —
-  see Known limitations).
-- `--rate` defaults to 16000 on both. The engine always requests 16000.
+- Windows (system mix): `python helper/audiocap_win.py [--rate <hz>] [--stall-timeout <s>]`
+  (`--stall-timeout` is accepted but currently a no-op — see Known limitations).
+- Windows (per-process): `audiocap_win.exe --pid <PID> [--rate <hz>] [--no-tree]` — captures the
+  target process **and its tree** (so Chromium's audio-render child is included) via the WASAPI
+  Process Loopback API (`ActivateAudioInterfaceAsync` + `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`,
+  `INCLUDE_TARGET_PROCESS_TREE`). `--no-tree` restricts to the single pid. Emits
+  `READY rate=<n> channels=1 fmt=s16le target=pid:<N>` then s16le PCM. No `--pid` → usage, exit 1.
+- `--rate` defaults to 16000 on all. The engine always requests 16000.
 
 ### stdout — PCM only, nothing else, ever
 
@@ -156,9 +163,12 @@ transcripts, and events; see audio.md / events.md.)
   watchdog for wedged loopback streams); blocking reads normally deliver
   silence frames, so this has not bitten in practice. Implement or drop when
   the native Windows helper (#34) replaces this one.
-- Windows helper captures the full system mix, not per-process (the #34
-  refinement: Process Loopback API with process-tree mode, speaking exactly
-  this contract).
+- The **per-process** Windows helper now exists (`audiocap_win_rs` → `audiocap_win.exe`; WASAPI
+  Process Loopback with process-tree mode) and is verified capturing a target process at 16 kHz mono
+  s16le (rms ~2113 on a playing process; integrated daemon capture wrote a non-silent `audio.s16le`).
+  `audiocap_win.py` (full system mix) remains the fallback when no target pid is known or the native
+  exe is absent. Shipping the (signed) `audiocap_win.exe` beside the frozen daemon is part of the M4
+  installer (windows-release.md).
 - Reconnect gaps are not silence-filled, so long captures can drift vs wall
   clock (documented in audio.md; offline re-transcription is the workaround).
 

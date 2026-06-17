@@ -429,6 +429,31 @@ class Win32ScreenGrabber(ScreenGrabber):
             user32.ReleaseDC(dc_owner, src_dc)
 
 
+def _native_app_helper() -> "str | None":
+    """The native **per-process** WASAPI loopback helper (``audiocap_win.exe``), if present.
+
+    Resolution order: ``CAPTURE_AUDIOCAP_WIN`` override → beside the frozen daemon (packaged) →
+    the dev cargo-build output. Unlike the Python ``audiocap_win.py`` helper (which captures the
+    full output **mix**), this isolates ONE app's audio — its whole process tree, so Chromium's
+    audio-render child is included — matching macOS ScreenCaptureKit per-app behaviour.
+    """
+    override = os.environ.get("CAPTURE_AUDIOCAP_WIN")
+    if override and Path(override).exists():
+        return override
+    exe_dir = Path(sys.executable).resolve().parent  # packaged: beside captured.exe
+    root = Path(__file__).resolve().parents[4]        # repo root (dev)
+    for c in (
+        exe_dir / "audiocap_win.exe",
+        root / "helper" / "audiocap_win_rs" / "target" / "release" / "audiocap_win.exe",
+        root / "helper" / "audiocap_win_rs" / "target" / "debug" / "audiocap_win.exe",
+        root / "gui" / "target" / "release" / "audiocap_win.exe",
+        root / "gui" / "target" / "debug" / "audiocap_win.exe",
+    ):
+        if c.exists():
+            return str(c)
+    return None
+
+
 class Win32AudioSource(AudioSource):
     def command(
         self,
@@ -439,15 +464,20 @@ class Win32AudioSource(AudioSource):
         rate: int,
         mic_device: str | None = None,  # accepted for ABC parity; not yet used on Windows
     ) -> tuple[list[str], str] | None:
-        # System-audio capture via WASAPI loopback (captures the full output mix,
-        # which includes the target app's audio). True per-app WASAPI *process*
-        # loopback is a future refinement; this needs the pyaudiowpatch helper.
         if source in ("auto", "app"):
-            helper = Path(__file__).resolve().parents[3] / "helper" / "audiocap_win.py"
+            # Prefer TRUE per-process loopback (the native helper isolates the target app's
+            # whole process tree, like macOS ScreenCaptureKit) when a target pid is known.
+            native = _native_app_helper()
+            if native and pid:
+                return ([native, "--pid", str(pid), "--rate", str(rate)], "loopback")
+            # Fallback: Python WASAPI **system** loopback (the full output mix; mute other
+            # audio for a clean transcript). NOTE: parents[4] is the repo root — parents[3]
+            # was an off-by-one (→ src/helper, which never exists) that silently disabled this.
+            helper = Path(__file__).resolve().parents[4] / "helper" / "audiocap_win.py"
             if helper.exists() and importlib.util.find_spec("pyaudiowpatch") is not None:
                 return ([sys.executable, str(helper), "--rate", str(rate)], "loopback")
             if source == "app":
-                return None  # explicitly wanted app audio but loopback unavailable
+                return None  # explicitly wanted app audio but no loopback available
 
         # Optional microphone capture via ffmpeg dshow. dshow has no ":default"
         # device, so a device name must be supplied via CAPTURE_DSHOW_AUDIO.

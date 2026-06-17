@@ -37,6 +37,9 @@ mile**: packaging, installer, signing/SmartScreen, daemon lifecycle, and auto-up
 - `scripts/run_interactive.ps1` — run a command in the interactive WinSta0 session via a transient
   Interactive-logon scheduled task (the interactive-station escape hatch).
 - `src/capture_mcp/core/platform/windows.py`, `helper/audiocap_win.py` — engine backends.
+- `helper/audiocap_win_rs/` (Rust, `windows-rs`) → `audiocap_win.exe` — native **per-process** WASAPI
+  loopback helper (the #34 audio refinement; landed + verified 2026-06-17). `Win32AudioSource` prefers
+  it when a target pid is known; see [helper-contract.md](helper-contract.md).
 - `packaging/captured_main.py` — the PyInstaller entry (shared; calls `multiprocessing.freeze_support()`).
 
 **[planned]**
@@ -107,8 +110,9 @@ Already correct (no change): `audio.py` spawns the audio helper with `creationfl
    `asr.openai_compat`, `indexer`, `frames`, `vision_client`, `import_media`) and
    `--collect-all faster_whisper` + CTranslate2; **exclude `mlx`/`Quartz`/`AVFoundation`** (the macOS
    freeze does the reverse). `freeze_support()` in `captured_main.py` is required (numba/multiprocessing).
-4. Copy `helper/audiocap_win.py` beside the frozen daemon; bundle the `skill/`; embed a `.ico` +
-   an application manifest; assemble the install tree (§Public contract).
+4. `cargo build --release` the native audio helper (`helper/audiocap_win_rs/`) → `audiocap_win.exe`;
+   copy it **and** `helper/audiocap_win.py` (fallback) beside the frozen daemon; bundle the `skill/`;
+   embed a `.ico` + an application manifest; assemble the install tree (§Public contract).
 5. **(optional) sign** every `.exe`/`.dll` (§5) if `CAPTURE_WIN_SIGN_*` is set.
 6. Compile `packaging/capture.iss` (Inno Setup) → `dist/CaptureSetup-<v>-x64.exe`; sign the installer.
 7. Best-effort ASR self-test (`captured.exe --asr-selftest`), non-fatal (like macOS).
@@ -160,6 +164,15 @@ session; see `scripts/run_interactive.ps1`") instead of silently capturing a bla
   name and accrues reputation across downloads (it does **not** clear cold-start); EV front-loads it;
   Azure Trusted Signing needs a ≥3-year org. **UAC is separate** (a per-machine install elevates; the
   default per-user install does not) and is not SmartScreen.
+- **Smart App Control / WDAC is stricter than SmartScreen (observed 2026-06-17).** On a box with Smart
+  App Control (or a WDAC policy) enabled, *unsigned* executables can be outright **blocked**, not merely
+  warned: during dev, freshly-compiled Cargo **build-script** probe binaries were blocked with
+  `os error 4551` ("An Application Control policy has blocked this file"), though the final unsigned
+  `audiocap_win.exe` / `capture-gui.exe` *did* run. Implication: on SAC machines an unsigned
+  installer/app may be **blocked** (not just warned), raising the value of the `signtool` hook + an OV
+  cert beyond what SmartScreen alone implies. Dev workaround for the build-script block: build into an
+  already-cleared `target/` dir so Cargo skips re-running cleared build scripts (hence the helper builds
+  via the GUI's target dir on this box).
 
 ### 6. Auto-update — cross-platform [planned]
 
@@ -242,9 +255,12 @@ Generalize `gui/src/update.rs` (today: `.dmg`-only, `hdiutil`/`/bin/bash`/`/Appl
 ## Known limitations / open items
 
 Live backlog for the Windows release (tracked: `features.json` #34, #36):
-- **Per-process audio** is the native-helper work (#34 / the #21 refinement): until it lands,
-  Windows captures the **system output mix** only (`audiocap_win.py`), so other audio should be muted
-  for a clean transcript. See [platform-abstraction.md](platform-abstraction.md).
+- **Per-process audio — native helper landed (dev, 2026-06-17).** `audiocap_win.exe`
+  (`helper/audiocap_win_rs/`, WASAPI Process Loopback + process-tree) isolates one app's audio; verified
+  capturing a playing process (rms ~2113) and through an integrated daemon capture (`audio.s16le` rms
+  ~1526). `audiocap_win.py` (system mix) remains the fallback. Remaining: ship the **signed** exe in the
+  installer; a multi-app A/B isolation check; mic enumeration. See
+  [helper-contract.md](helper-contract.md) / [platform-abstraction.md](platform-abstraction.md).
 - **Mic device enumeration** returns `[]` on Windows (no `--list-mics` analog); needs WASAPI
   enumeration so the GUI mic selector (#37) works on Windows.
 - **`pyaudiowpatch`** is a non-PyPI third-party fork — vendoring / a maintained-fork contingency, or
@@ -272,6 +288,11 @@ Live backlog for the Windows release (tracked: `features.json` #34, #36):
 - **[current, Phase 0, 2026-06-17]** On the Windows box: smoke 67/67 after the core-portability fixes;
   a live `capture daemon start/status/stop` round-trip via the new Windows spawn branch; the GPUI app
   builds (`cargo build`) and **renders** (window + DirectX, `RENDERER_OK`) in the interactive session.
+- **[current, Phase 1, 2026-06-17]** Native per-process audio helper (`audiocap_win.exe`) verified:
+  standalone capture of a playing process (rms ~2113, correct `READY`) and an **integrated daemon
+  capture** (`capture start --pid … --no-screenshots`) wrote a non-silent `audio.s16le` (rms ~1526) via
+  `Win32AudioSource` → native helper. `command()` returns the native helper for `app`+pid and the
+  (path-fixed) Python system-loopback fallback otherwise. smoke 67/67.
 - **[planned] packaged-bundle acceptance** (manual checklist; no GPUI UI harness): install from
   `CaptureSetup-<v>-x64.exe` on a clean Windows 10/11 box → tray icon appears and persists across
   closing the window → `/v1/health` ok → `list_windows` returns real windows → a ~5 s self-test

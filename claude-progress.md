@@ -1,5 +1,39 @@
 # Progress Log
 
+## Session 57 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **Phase 1**: native **per-process**
+audio loopback helper (#34/#21 refinement). Built + verified end-to-end on real audio.
+- **New crate `helper/audiocap_win_rs/`** (Rust, `windows-rs` 0.61) → `audiocap_win.exe`: WASAPI
+  Process Loopback via `ActivateAudioInterfaceAsync` + `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`
+  with `INCLUDE_TARGET_PROCESS_TREE` (so Chromium's audio-render child is captured). Implements the
+  `IActivateAudioInterfaceCompletionHandler` COM callback, builds the VT_BLOB `PROPVARIANT` by explicit
+  layout, captures event-driven at 16 kHz mono s16le, and writes PCM to stdout + `READY ... target=pid:N`
+  to stderr — the frozen helper contract. `--pid N [--rate 16000] [--no-tree]`.
+- **Wired into `Win32AudioSource.command()`**: prefers the native helper for `source in (auto,app)` when
+  a target pid is known (`[exe, --pid, N, --rate, R]`), else the Python **system**-loopback fallback.
+  Added `_native_app_helper()` resolver (`CAPTURE_AUDIOCAP_WIN` → beside the frozen daemon → cargo
+  output). **Fixed a latent bug**: the Python fallback used `parents[3]` (→ `src/helper`, which never
+  exists) — corrected to `parents[4]` (repo root); there was no Windows guard like the macOS
+  `test_helper_path`.
+- **Verified (interactive session, real audio):** standalone — captured a looping-WAV process →
+  `audio.s16le`-equivalent rms ~2113, correct READY. Integrated — `capture daemon start` +
+  `capture start --pid <player> --no-screenshots` wrote a **non-silent `audio.s16le`** (136 KB, rms
+  ~1526) through the full daemon→CaptureSession→AudioCapture→native-helper path. `command()` resolution
+  unit-checked; smoke **67/67**.
+- **Toolchain finding (Smart App Control):** Cargo's freshly-compiled **build-script** probe exes were
+  **blocked** by Smart App Control/WDAC (`os error 4551`), though the final unsigned helper/GUI exes
+  *run*. Workaround: build into the GUI's already-cleared `target/` (`CARGO_TARGET_DIR`) so cleared
+  build scripts aren't re-run; matched the helper to `windows` **0.61** (gpui's version) to reuse them.
+  This makes SAC a real signing concern for the installer (documented in windows-release.md §5).
+- **Also:** gpui 0.2.2 uses a **DirectX** renderer on Windows (corrects an earlier blade/Vulkan guess).
+- Specs synced: helper-contract.md (native helper as a conforming impl + argv), platform-abstraction.md
+  (mapping/files/config/open-item), windows-release.md (files/build-step/§5 SAC/§Tests), features.json #34.
+- **Next:** Phase 2 (GUI runtime macOS-isms → usable on Windows) or Phase 3 (tray agent) / Phase 4
+  (installer). Native helper still needs: signed packaging beside the daemon, a multi-app isolation A/B,
+  and GUI source labeling (system-mix vs per-process).
+
+---
+
 ## Session 56 — 2026-06-17
 **Agent**: builder (**Windows box**, branch **windows-support**) — **Phase 0** of the Windows port:
 core-portability fixes + make the GUI build/run on Windows. Verified on this box.
