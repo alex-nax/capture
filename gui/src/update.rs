@@ -1,7 +1,8 @@
-//! In-app update check against GitHub releases (#48). The GUI checks whether a newer
-//! release than the running build exists; if so, the Settings panel offers an **Update**
-//! that — ONLY after the user confirms — downloads the notarized .dmg and installs it
-//! (replace `/Applications/Capture.app` + relaunch) via a detached updater script.
+//! In-app update check against GitHub releases (#48). The GUI checks whether a newer release than the
+//! running build exists; if so, Settings offers an **Update** that — ONLY after the user confirms —
+//! downloads the OS-specific asset, installs it, and relaunches, via a detached updater:
+//!   - macOS:   notarized `.dmg` → replace `/Applications/Capture.app` (detached bash + hdiutil).
+//!   - Windows: `CaptureSetup-*-x64.exe` → run it silently, relaunch (detached PowerShell).
 //!
 //! Network + install are best-effort and never block the UI; failures surface as a message.
 
@@ -14,8 +15,8 @@ pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Debug)]
 pub struct UpdateInfo {
-    pub version: String,    // e.g. "0.3.0"
-    pub dmg_url: String,    // browser_download_url of the .dmg asset
+    pub version: String,   // e.g. "0.3.0"
+    pub asset_url: String, // browser_download_url of the OS-specific asset (.dmg / .exe)
 }
 
 fn parse_semver(s: &str) -> Option<(u32, u32, u32)> {
@@ -33,8 +34,23 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
-/// Query GitHub for the latest release; `Some(info)` only if it's newer than `CURRENT`.
-/// Returns `None` on any error or when already up to date (the UI treats both as "no update").
+/// The release asset that matches this OS (macOS `.dmg`; Windows `CaptureSetup*.exe`).
+#[cfg(target_os = "macos")]
+fn asset_matches(name: &str) -> bool {
+    name.ends_with(".dmg")
+}
+#[cfg(target_os = "windows")]
+fn asset_matches(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.starts_with("capturesetup") && n.ends_with(".exe")
+}
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn asset_matches(_name: &str) -> bool {
+    false
+}
+
+/// Query GitHub for the latest release; `Some(info)` only if it's newer than `CURRENT` AND carries an
+/// asset for this OS. Returns `None` on any error or when already up to date.
 pub fn check() -> Option<UpdateInfo> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
     let resp = agent()
@@ -49,36 +65,52 @@ pub fn check() -> Option<UpdateInfo> {
     if latest <= cur {
         return None;
     }
-    let dmg_url = v
+    let asset_url = v
         .get("assets")?
         .as_array()?
         .iter()
         .find_map(|a| {
             let name = a.get("name")?.as_str()?;
-            name.ends_with(".dmg").then(|| a.get("browser_download_url")?.as_str().map(String::from))?
+            asset_matches(name).then(|| a.get("browser_download_url")?.as_str().map(String::from))?
         })?;
     Some(UpdateInfo {
         version: tag.trim_start_matches('v').to_string(),
-        dmg_url,
+        asset_url,
     })
 }
 
-/// Download the release .dmg and hand off to a detached updater that replaces the app and
-/// relaunches it. Blocking (download is ~160 MB) — call on a background thread. The caller
-/// has already confirmed with the user.
+/// Download the OS asset and hand off to a detached updater that installs it + relaunches. Blocking
+/// (the download is large) — call on a background thread. The caller has already confirmed.
 pub fn download_and_install(info: &UpdateInfo) -> Result<(), String> {
     let resp = agent()
-        .get(&info.dmg_url)
+        .get(&info.asset_url)
         .set("User-Agent", "capture-gui")
         .call()
         .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        install_macos(info, resp)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        install_windows(info, resp)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (info, resp);
+        Err("in-app update is not supported on this platform".into())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn install_macos(info: &UpdateInfo, resp: ureq::Response) -> Result<(), String> {
     let dmg = std::env::temp_dir().join(format!("Capture-update-{}.dmg", info.version));
     {
         let mut f = std::fs::File::create(&dmg).map_err(|e| e.to_string())?;
         std::io::copy(&mut resp.into_reader(), &mut f).map_err(|e| e.to_string())?;
     }
-    // The downloaded .dmg is notarized + stapled (GitHub release), so Gatekeeper accepts it
-    // and the same Developer-ID signature keeps the Screen Recording (TCC) grant.
+    // The downloaded .dmg is notarized + stapled, so Gatekeeper accepts it and the same Developer-ID
+    // signature keeps the Screen Recording (TCC) grant.
     let script = std::env::temp_dir().join("capture-updater.sh");
     {
         let mut f = std::fs::File::create(&script).map_err(|e| e.to_string())?;
@@ -95,12 +127,38 @@ pub fn download_and_install(info: &UpdateInfo) -> Result<(), String> {
     Ok(())
 }
 
-/// Detached updater: quit the running app, mount the .dmg, replace the installed bundle,
-/// relaunch. Self-contained so it survives the app exiting.
+#[cfg(target_os = "windows")]
+fn install_windows(info: &UpdateInfo, resp: ureq::Response) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    let exe = std::env::temp_dir().join(format!("CaptureSetup-update-{}.exe", info.version));
+    {
+        let mut f = std::fs::File::create(&exe).map_err(|e| e.to_string())?;
+        std::io::copy(&mut resp.into_reader(), &mut f).map_err(|e| e.to_string())?;
+    }
+    let script = std::env::temp_dir().join("capture-updater.ps1");
+    {
+        let mut f = std::fs::File::create(&script).map_err(|e| e.to_string())?;
+        f.write_all(UPDATER_PS1.as_bytes()).map_err(|e| e.to_string())?;
+    }
+    // Detached + windowless so the updater survives the app it's about to stop.
+    Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"])
+        .arg(&script)
+        .arg(&exe)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(0x0800_0000 | 0x0000_0200) // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Detached macOS updater: quit the app + daemon, mount the .dmg, replace the bundle, relaunch.
+#[cfg(target_os = "macos")]
 const UPDATER_SH: &str = r#"#!/bin/bash
 DMG="$1"
 APP="/Applications/Capture.app"
-# Let the just-spawned process detach, then quit the running app + daemon.
 sleep 1
 pkill -f "Capture.app/Contents/MacOS/CaptureBar" 2>/dev/null
 pkill -f "Capture.app/Contents/Resources/captured/captured" 2>/dev/null
@@ -114,4 +172,17 @@ if [ -n "$MNT" ] && [ -d "$MNT/Capture.app" ]; then
   open "$APP"
 fi
 rm -f "$DMG"
+"#;
+
+/// Detached Windows updater: stop the agent/window/daemon, run the installer silently (Inno upgrades
+/// the existing per-user install in place by AppId), relaunch the tray agent.
+#[cfg(target_os = "windows")]
+const UPDATER_PS1: &str = r#"param([string]$Installer)
+Start-Sleep -Seconds 1
+Get-Process Capture, capture-gui, captured -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+Start-Process $Installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-' -Wait
+$exe = Join-Path $env:LOCALAPPDATA 'Programs\Capture\Capture.exe'
+if (Test-Path $exe) { Start-Process $exe }
+Remove-Item $Installer -Force -ErrorAction SilentlyContinue
 "#;

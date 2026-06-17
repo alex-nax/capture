@@ -52,7 +52,7 @@ mile**: packaging, installer, signing/SmartScreen, daemon lifecycle, and auto-up
 
 **[planned]**
 - `packaging/winget/` — winget manifest referencing the GitHub-release `.exe`.
-- `gui/src/update.rs` — generalize the macOS-only updater to a cross-platform asset/installer flow.
+- `gui/src/update.rs` — **done**: cross-platform updater (macOS `.dmg` + Windows `.exe` silent install).
 - `.github/workflows/release.yml` — cross-platform release CI (macOS DMG + Windows installer under
   one tag). **None exist today** (`.github/` holds only an issue template).
 - Core-portability prerequisite fixes — see *Behavior §1*.
@@ -184,20 +184,22 @@ session; see `scripts/run_interactive.ps1`") instead of silently capturing a bla
   already-cleared `target/` dir so Cargo skips re-running cleared build scripts (hence the helper builds
   via the GUI's target dir on this box).
 
-### 6. Auto-update — cross-platform [planned]
+### 6. Auto-update — cross-platform [done 2026-06-17]
 
-Generalize `gui/src/update.rs` (today: `.dmg`-only, `hdiutil`/`/bin/bash`/`/Applications/Capture.app`):
-- Rename `UpdateInfo.dmg_url` → `asset_url`; `check()` selects the asset by OS via `cfg!(target_os)`
-  (`.dmg` on macOS, `CaptureSetup-*-x64.exe` on Windows). `parse_semver` / latest-release query /
-  confirm-modal UX are unchanged and stay shared.
-- `download_and_install` **Windows branch:** download the installer to `%TEMP%`; write a detached
-  **PowerShell** updater; spawn it hidden (`CREATE_NEW_PROCESS_GROUP`, no window); the GUI then exits.
-  The updater: (a) stop the agent + daemon — `POST /v1/admin/shutdown` if idle, else `taskkill /IM
-  Capture.exe /IM captured.exe /F`; (b) run `CaptureSetup-<v>-x64.exe /VERYSILENT /SUPPRESSMSGBOXES
-  /NORESTART`; (c) wait for it; (d) relaunch `Capture.exe`. **Rollback:** back up the install dir
-  first; on a non-zero installer exit, restore it.
-- **Skill auto-update** already uses cross-platform `dirs` (`%USERPROFILE%\.claude\skills\capture`,
-  `~/.codex/skills/capture`) and content-hash comparison — only a Windows smoke test is needed.
+`gui/src/update.rs` is now cross-platform (was `.dmg`-only):
+- `UpdateInfo.dmg_url` → `asset_url`; `check()` selects the asset by OS via `#[cfg(target_os)]`
+  `asset_matches` (`.dmg` on macOS, `CaptureSetup*.exe` on Windows). `parse_semver` / latest-release
+  query / the confirm-modal UX are unchanged and shared (`app.rs` reads only `info.version`).
+- `download_and_install` splits into `install_macos` (existing bash/hdiutil flow) and **`install_windows`**:
+  download the installer to `%TEMP%`, write a detached **PowerShell** updater (`UPDATER_PS1`), spawn it
+  hidden (`CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`); the app then exits. The updater stops
+  `Capture`/`capture-gui`/`captured`, runs `CaptureSetup…exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+  /SP-` (Inno upgrades the per-user install in place by AppId), then relaunches `Capture.exe`.
+- **Verification needs a newer release to update *to*** — tested as part of the release flow (install
+  version A → publish A+1 → the installed app offers + applies it). No throwaway version: the real
+  next release is the update target.
+- **Skill auto-update** already uses cross-platform `dirs` — only a Windows smoke check remains.
+- **[planned] polish:** rollback on a failed installer exit (back up the install dir first).
 
 ### 7. Release process — cross-platform [planned]
 

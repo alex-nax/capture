@@ -1,5 +1,28 @@
 # Progress Log
 
+## Session 66 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **cross-platform in-app auto-update**
+(Phase 5 updater) + push, ahead of cutting a release.
+- **`gui/src/update.rs` is now cross-platform** (was macOS `.dmg`-only). `UpdateInfo.dmg_url`→`asset_url`;
+  `check()` selects the OS asset via `#[cfg]` `asset_matches` (`.dmg` macOS / `CaptureSetup*.exe`
+  Windows). `download_and_install` → `install_macos` (existing bash/hdiutil) + **`install_windows`**:
+  download the `.exe` to `%TEMP%`, write a detached **PowerShell** updater (`UPDATER_PS1`), spawn it
+  windowless (`CREATE_NO_WINDOW|CREATE_NEW_PROCESS_GROUP`); the app exits; the updater stops
+  Capture/capture-gui/captured, runs `CaptureSetup…exe /VERYSILENT …` (Inno in-place upgrade by AppId),
+  relaunches `Capture.exe`. `app.rs` reads only `info.version`, so the rename was safe. GUI builds clean.
+- **Pushed `windows-support` to origin** (the earlier no-push boundary lifted by "yes, push"). It's a
+  clean fast-forward over `origin/v2` (12 ahead, 0 behind) → the merge into v2 is conflict-free.
+- **Versioning (owner):** do NOT bump now / no throwaway version. The single real release is the
+  updater's test target: reinstall the current 0.2.5 (with the updater) → cut ONE release (bump→0.2.6,
+  both `.dmg`+`.exe` assets) → the installed 0.2.5 updates to 0.2.6 (Windows here; macOS on the owner's
+  Mac).
+- Specs: windows-release.md §6 (auto-update done) + Files; features.json #34.
+- **Next:** merge windows-support→v2 (PR needs `gh auth login`, else a local FF); rebuild the 0.2.5
+  RELEASE installer (with the updater) + reinstall; then the release (bump + Windows artifacts + packs as
+  assets + macOS DMG) + verify the updater both ways.
+
+---
+
 ## Session 65 — 2026-06-17
 **Agent**: builder (**Windows box**, branch **windows-support**) — **ASR runtimes: pack tooling + lean
 build + GUI picker** (the rest of #58 except AMD + pack hosting).
