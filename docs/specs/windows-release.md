@@ -2,7 +2,10 @@
 
 _Status: **partially implemented**, 2026-06-17 — core portability, per-process audio, GUI usability, the
 native tray agent, and the **Inno Setup installer** have landed + are verified on the Windows box (Phases
-0–4); cross-platform **auto-update** + **release/CI** remain (Phase 5). Source of truth = the code; this
+0–4); cross-platform **auto-update** is implemented and the **Windows updater is verified end-to-end**
+(v0.2.5 → v0.2.6 silent in-place upgrade, 2026-06-17). Remaining blocker: on **Smart App Control**
+machines the unsigned GUI binary is blocked at launch (see §5), so a signing/Store decision gates broad
+distribution. Source of truth = the code; this
 spec marks **[current]/[done]** vs **[planned]** per section. (`features.json` #34, with the tray agent
 #36 in [agent-windows.md](agent-windows.md).)_
 
@@ -174,15 +177,28 @@ session; see `scripts/run_interactive.ps1`") instead of silently capturing a bla
   name and accrues reputation across downloads (it does **not** clear cold-start); EV front-loads it;
   Azure Trusted Signing needs a ≥3-year org. **UAC is separate** (a per-machine install elevates; the
   default per-user install does not) and is not SmartScreen.
-- **Smart App Control / WDAC is stricter than SmartScreen (observed 2026-06-17).** On a box with Smart
-  App Control (or a WDAC policy) enabled, *unsigned* executables can be outright **blocked**, not merely
-  warned: during dev, freshly-compiled Cargo **build-script** probe binaries were blocked with
-  `os error 4551` ("An Application Control policy has blocked this file"), though the final unsigned
-  `audiocap_win.exe` / `capture-gui.exe` *did* run. Implication: on SAC machines an unsigned
-  installer/app may be **blocked** (not just warned), raising the value of the `signtool` hook + an OV
-  cert beyond what SmartScreen alone implies. Dev workaround for the build-script block: build into an
-  already-cleared `target/` dir so Cargo skips re-running cleared build scripts (hence the helper builds
-  via the GUI's target dir on this box).
+- **Smart App Control / WDAC blocks unsigned binaries outright — proven 2026-06-17.** On a box with
+  Smart App Control **On** (`HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy` →
+  `VerifiedAndReputablePolicyState=1`), Code Integrity **blocks** the unsigned `capture-gui.exe` at
+  launch (`Microsoft-Windows-CodeIntegrity/Operational` event **3077**, SAC policy
+  `{0283ac0f-fff1-49ae-ada1-8a933130cad6}`): the tray agent + daemon start, but the GPUI window never
+  opens and the user gets a "blocked" toast. This is **not** SmartScreen (no Mark-of-the-Web — the
+  install-dir files are local) and **cannot be bypassed locally** — SAC is non-configurable by design
+  (no allowlist, no folder/file exception, no per-app "Run anyway"). Empirically ruled out on this box:
+  a **self-signed cert** (Authenticode *Valid*, root imported into Trusted Root) → still 3077; a
+  **Defender AV folder + process exclusion** → still 3077 (AV exclusions skip the *scanner*, not Code
+  Integrity). Why the other binaries ran: ISG cloud *file-reputation* admits the ubiquitous PyInstaller
+  bootloader (`captured.exe`) and the tiny Rust agent (`Capture.exe`), but the unique ~15 MB GPUI binary
+  has no reputation → blocked. **Paths that actually pass SAC:** (a) turn SAC **Off** — free but
+  *irreversible without a Windows reset*; (b) an **EV** code-signing cert — reliable, and clears
+  SmartScreen cold-start too; (c) **Microsoft Store** distribution — Store-signed packages are
+  SAC-trusted (a self-distributed MSIX signed with a self-signed cert is **not**); (d) a standard **OV**
+  cert that organically accrues ISG reputation — slow and *not* a dependable SAC fix. The earlier
+  dev-time `os error 4551` on Cargo **build-script** probes was the same SAC; workaround is building into
+  an already-cleared `target/` so Cargo skips re-running cleared build scripts (hence the helper/agent
+  build via the GUI's target dir on this box). **Updater note:** the in-app silent in-place upgrade
+  itself works under SAC (the installer, agent, and daemon all ran) — SAC blocks specifically the
+  unreputed GPUI window binary.
 
 ### 6. Auto-update — cross-platform [done 2026-06-17]
 
@@ -291,7 +307,11 @@ Live backlog for the Windows release (tracked: `features.json` #34, #36):
   the logon-task / normal desktop launch satisfies it); (b) `gui/src/main.rs:59` `unwrap()`s renderer
   creation, so that failure currently panics — make it graceful (surface the interactive-desktop hint)
   before shipping. CI build/run is still TODO.
-- **Signing/cert decision** deferred — unsigned v1 with the `signtool` hook ready.
+- **Signing/cert decision** deferred — unsigned v1 with the `signtool` hook ready. **Sharpened
+  2026-06-17:** unsigned + self-signed + OV are all *not* dependable on Smart App Control machines (see
+  §5 — proven: SAC blocks the unsigned GPUI binary and has no local override). The only reliable paths
+  to SAC trust are an **EV** cert or **Microsoft Store** distribution; without one, fresh-Win11 SAC users
+  are blocked while the SAC-disabled majority get only a one-time SmartScreen prompt.
 - **CUDA bundling** explicitly out; non-NVIDIA alternatives in [asr.md](asr.md).
 - The **import-a-file** feature (`capture_import`) is macOS-only until a Windows extraction path.
 
