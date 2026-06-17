@@ -1,5 +1,33 @@
 # Progress Log
 
+## Session 61 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **merged `origin/v2`** (the macOS
+box's latest index/preset work) into the Windows branch.
+- **Pulled 7 commits from `origin/v2`** (`cb74c42..99ed5d8`): content-aware index classifier +
+  verbatim-code extractors + per-capture AGENTS.md + provider/model config UI (#52/#53), #51
+  OCR-reliability flags, #54 start-capture presets, #55 live/online incremental indexing, a scrollable
+  preset picker + live language toggle, and reconstruction-guidance refinements. New engine files
+  `core/live_index.py` + `core/presets.py`; daemon routes `/v1/index/providers`, `/v1/index/models`,
+  `preset` on `/v1/sessions`.
+- **3-way merge** from base `7023ca1` (we were 6 ahead with Phases 0–4, v2 was 7 ahead). The `ort`
+  strategy **auto-merged with NO textual conflicts** — the 5 shared files (`features.json`, GUI
+  `app.rs`/`daemon.rs`, `docs/specs/daemon.md`/`gui.md`) had disjoint edit regions; Python was a clean
+  union (v2 and the Windows work touched disjoint `.py` files).
+- **Verified the merge** (not just "git didn't conflict"): `features.json` valid — **57 features, ids
+  1–57 contiguous, no duplicates**, both my #34/#36 Windows content and v2's #51–57 present; **smoke
+  67/67**; **contracts 4/4** (v2's regenerated goldens hold against the merged models); GUI **`cargo
+  build` clean**; both specs carry both sides' additions; **no leftover conflict markers**.
+- **Numbering/session check (the reconciliation worry): clean.** `origin/v2` never touched
+  `claude-progress.md` (its log still tops at Session 54), so my Windows Sessions 55–60 merged with **no
+  collision** and the log is a single 1–61 sequence. NOTE: the macOS box's index features #51–57 have
+  **no progress-log entries on this branch** — that work is captured in `features.json` + the v2 commit
+  messages, not the session log. (If the macOS box later writes/pushes its own Sessions 55+, those will
+  need renumbering then — not an issue in the current tree.)
+- Merge commit `895a9d1`; nothing pushed (all local). **Next:** resume Phase 5 (cross-platform
+  auto-update + release/CI) on the reconciled branch, now that update.rs is alongside v2's latest.
+
+---
+
 ## Session 60 — 2026-06-17
 **Agent**: builder (**Windows box**, branch **windows-support**) — **Phase 4**: **Windows installer**
 (#34). Produced + verified a real `CaptureSetup-x64.exe`.
