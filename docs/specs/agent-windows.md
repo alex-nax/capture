@@ -1,8 +1,10 @@
 # Spec: Windows tray agent (`Capture.exe`, native — #36)
 
-_Status: **PLANNED / design** as of 2026-06-17 — **not yet implemented** (`features.json` #36). This
-is the Windows sibling of the macOS [agent.md](agent.md) (`CaptureBar`). Source of truth for shipped
-behavior is the code; this spec is the agreed intent. Update to **[current]** when it lands._
+_Status: **implemented (dev)**, 2026-06-17 — the agent binary (`agent/windows/` → `Capture.exe`) and the
+logon-task registration (`packaging/register_logon_task.ps1`) exist and are verified on the Windows box;
+the tray icon/menu **visuals** remain a manual check (no harness, same as macOS). The Windows sibling of
+macOS [agent.md](agent.md) (`CaptureBar`). (`features.json` #36; packaged install + manual-tray
+verification land with the M4 installer, [windows-release.md](windows-release.md).)_
 
 ## Purpose
 
@@ -21,14 +23,20 @@ the install can be updated/uninstalled without being pinned.
 
 ## Files
 
+**[current]**
+- `agent/windows/Cargo.toml`, `agent/windows/src/main.rs` — the whole agent → `Capture.exe`. A small
+  `Daemon` `/v1` client (`ureq`), a `tray-icon` + `muda` tray/menu, and an `Agent` state machine driven
+  by a **minimal Win32 message loop** (`GetMessageW` + a 2 s `WM_TIMER` poll; menu clicks via
+  `muda::MenuEvent`). Tray icons are generated in code (gray dot idle / red dot recording) — no asset
+  file yet. Deps are pinned to the GUI's versions (`tray-icon` 0.24.1 / `muda` 0.19.2 / `ureq` 2 /
+  `windows` 0.61) so building into the **shared `gui/target`** reuses already-built artifacts and dodges
+  the Smart App Control build-script block (see windows-release.md §5).
+- `packaging/register_logon_task.ps1` — register/unregister `Capture.exe` as an **interactive logon
+  task** (the Windows daemon-lifecycle entry; the installer calls it; also usable from source).
+
 **[planned]**
-- `agent/windows/Cargo.toml`, `agent/windows/src/main.rs` — the whole agent. A small Rust
-  `DaemonClient` (mirrors the `/v1` routes it needs over `ureq`/`reqwest`), a tray built with
-  `tray-icon` + `muda`, a 2 s poll, and the daemon-lifecycle state machine.
-- `packaging/build_windows.ps1` — `cargo build --release` the agent → `Capture.exe`, placed at the
-  install root as the entry point ([windows-release.md](windows-release.md)).
-- `packaging/capture.iss` — makes `Capture.exe` the Start-Menu target and the **logon task** so it is
-  always-resident from login.
+- `packaging/build_windows.ps1` — `cargo build --release` the agent → `Capture.exe` at the install root.
+- `packaging/capture.iss` — makes `Capture.exe` the Start-Menu target and calls `register_logon_task.ps1`.
 
 ## Bundle layout (Windows)
 
@@ -81,11 +89,12 @@ Mirrors `CaptureBar` ([agent.md](agent.md)) route-for-route:
   work. **Quit** gracefully stops the daemon (`/v1/admin/shutdown`) **iff it's idle** (no running
   captures) — freeing the install for update/uninstall while letting an in-progress capture survive an
   accidental Quit — then exits.
-- **Autostart:** the installer registers the **agent** to start at the user's logon on the
-  interactive desktop. Primary mechanism: a **Task Scheduler logon task** (parity with the
-  daemon-lifecycle decision and visible in Task Scheduler); an `HKCU\...\CurrentVersion\Run` key is
-  the simpler alternative — both run in the interactive WinSta0 session, satisfying the
-  window-discovery requirement. Decide one at implementation; default to the logon task.
+- **Autostart (decided + implemented):** a **Task Scheduler interactive logon task** registered by
+  `packaging/register_logon_task.ps1` (`-AtLogOn`, `LogonType Interactive`, no execution-time limit) runs
+  `Capture.exe` in the WinSta0 desktop at login — satisfying the window-discovery requirement. Verified
+  register → query → unregister with no admin/UAC. The installer invokes it (uninstall unregisters). An
+  `HKCU\...\Run` key was the simpler alternative, but the logon task matches the daemon-lifecycle
+  decision and is visible in Task Scheduler.
 
 ## Invariants & constraints
 
@@ -120,9 +129,11 @@ Mirrors `CaptureBar` ([agent.md](agent.md)) route-for-route:
 
 ## Known limitations / open items
 
-- **Icon assets** — two `.ico` files (idle/recording) must be authored + bundled (no SF Symbols).
-- **Window focusing** — needs the PID-track → `SetForegroundWindow`/`ShowWindow` path (TBD at impl).
-- **Autostart mechanism** — logon task vs `HKCU Run` key: decide at implementation (default logon task).
+- **Tray icons are generated in code** (gray dot idle / red dot recording) — dependency-free; a branded
+  `.ico` glyph is a later polish.
+- **Open Window doesn't focus an already-open window** — it no-ops when the GUI child is still alive (so
+  it never duplicates). Focusing it (track the PID → `EnumWindows` → `SetForegroundWindow`) is a TODO.
+- **Autostart = interactive logon task** (`packaging/register_logon_task.ps1`) — decided + verified.
 - **No global hotkey yet** — parity with macOS (⌃⌘R lives in the GPUI window); moving a global hotkey
   into the agent (`RegisterHotKey`) is a follow-up.
 - **Microphone permission** — Windows has no TCC; per-app mic access is OS Settings (Privacy →
@@ -132,10 +143,12 @@ Mirrors `CaptureBar` ([agent.md](agent.md)) route-for-route:
 
 ## Tests
 
-- **[planned]** Headless daemon-lifecycle test: the agent spawns the bundled daemon, `/v1/health`
-  answers, `ensure_daemon()` adopts an already-running daemon (no double-spawn), and a graceful Quit
-  stops an **idle** daemon but leaves a **running** capture alive.
-- **[planned]** Manual acceptance (on a clean Windows box): launching `Capture.exe` stays resident,
-  spawns the daemon, opens the window; the tray reflects idle/capturing state and **survives closing
-  the window**; **Open Window** re-focuses rather than duplicating; Quit stops the idle daemon and
-  frees the install for uninstall. (These are `features.json` #36's acceptance criteria.)
+- **[current, 2026-06-17]** Verified on the Windows box (interactive session via
+  `scripts/run_interactive.ps1`): with a pre-started daemon, launching `Capture.exe` stays **resident**,
+  **adopts** the daemon (no double-spawn — it health-checks first), and **launches exactly one**
+  `capture-gui.exe` with `CAPTURE_AGENT=1` (`agent_alive=true, gui_count=1, daemon_running=true`).
+  `packaging/register_logon_task.ps1` register → verify → unregister round-trips clean (Interactive
+  logon task, no admin).
+- **[manual]** Tray icon appearance, menu clicks (Open / Stop All / Start-Stop Daemon / Quit), the
+  quit-stops-idle-daemon path, and survives-window-close are visual checks — no tray test harness (same
+  as macOS). `features.json` #36 flips `true` after the packaged install + a manual tray pass (M4).

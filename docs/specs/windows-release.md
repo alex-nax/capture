@@ -40,6 +40,9 @@ mile**: packaging, installer, signing/SmartScreen, daemon lifecycle, and auto-up
 - `helper/audiocap_win_rs/` (Rust, `windows-rs`) → `audiocap_win.exe` — native **per-process** WASAPI
   loopback helper (the #34 audio refinement; landed + verified 2026-06-17). `Win32AudioSource` prefers
   it when a target pid is known; see [helper-contract.md](helper-contract.md).
+- `agent/windows/` (Rust) → `Capture.exe` — the native tray agent (#36; landed + verified 2026-06-17),
+  and `packaging/register_logon_task.ps1` — interactive logon-task registration. See
+  [agent-windows.md](agent-windows.md).
 - `packaging/captured_main.py` — the PyInstaller entry (shared; calls `multiprocessing.freeze_support()`).
 
 **[planned]**
@@ -47,7 +50,6 @@ mile**: packaging, installer, signing/SmartScreen, daemon lifecycle, and auto-up
   daemon, lay out the install tree, (optionally) sign, compile the Inno Setup script.
 - `packaging/capture.iss` — Inno Setup script (layout, shortcuts, logon-task registration, uninstall).
 - `packaging/winget/` — winget manifest referencing the GitHub-release `.exe`.
-- `agent/windows/` — the Rust tray agent (Cargo crate); see [agent-windows.md](agent-windows.md).
 - `gui/src/update.rs` — generalize the macOS-only updater to a cross-platform asset/installer flow.
 - `.github/workflows/release.yml` — cross-platform release CI (macOS DMG + Windows installer under
   one tag). **None exist today** (`.github/` holds only an issue template).
@@ -136,12 +138,15 @@ CUDA if available, else CPU `int8`, else a configured remote endpoint — see [a
   user data (`%USERPROFILE%\.capture`, the HF model cache) unless the user opts to purge.
 - `winget` manifest points at the released `.exe`.
 
-### 4. Daemon lifecycle [planned]
+### 4. Daemon lifecycle [agent + logon task done 2026-06-17; installer wiring planned]
 
-At **runtime** the tray agent owns spawn/stop ([agent-windows.md](agent-windows.md)). At **logon**
-the installer's logon task starts the **agent**, which spawns the daemon — mirroring macOS
-launchd → `CaptureBar`. For the from-source path, `capture daemon install|uninstall` registers/removes
-the logon task (the launchd/systemd analogue, currently a [planned] item in [daemon.md](daemon.md)).
+At **runtime** the tray agent (`Capture.exe`, [agent-windows.md](agent-windows.md)) owns the daemon —
+it spawns/adopts it and stops it on Quit (verified). At **logon** an **interactive logon task** starts
+the agent (which spawns the daemon) — mirroring macOS launchd → `CaptureBar`.
+`packaging/register_logon_task.ps1` registers/unregisters that task (`-AtLogOn`, `LogonType
+Interactive`, no time limit; verified register→unregister, no admin); the installer will call it at
+install/uninstall. **[planned]** a `capture daemon install|uninstall` CLI wrapper for the from-source
+path (the launchd/systemd analogue, a [planned] item in [daemon.md](daemon.md)).
 
 **Interactive-desktop preflight:** add a check (daemon health and/or `capture doctor`) that samples
 window enumeration and, if the process is in a non-interactive window station (a Service, SSH, or CI),
@@ -301,6 +306,11 @@ Live backlog for the Windows release (tracked: `features.json` #34, #36):
   Settings deep-link, launch help text per-OS) and `main.rs` renderer creation made **graceful** (logs +
   clean exit, no panic). GUI rebuilds clean and re-renders (`RENDERER_OK`) in the interactive session;
   macOS paths are unchanged (cfg-gated).
+- **[current, Phase 3, 2026-06-17]** Native tray agent (`agent/windows/` → `Capture.exe`) verified in the
+  interactive session: stays resident, **adopts** a running daemon (no double-spawn), and launches one
+  `capture-gui.exe` (`CAPTURE_AGENT=1`) — `agent_alive=true, gui_count=1, daemon_running=true`.
+  `register_logon_task.ps1` register/verify/unregister round-trips clean. Tray icon/menu visuals are a
+  manual check.
 - **[planned] packaged-bundle acceptance** (manual checklist; no GPUI UI harness): install from
   `CaptureSetup-<v>-x64.exe` on a clean Windows 10/11 box → tray icon appears and persists across
   closing the window → `/v1/health` ok → `list_windows` returns real windows → a ~5 s self-test

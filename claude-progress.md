@@ -1,5 +1,35 @@
 # Progress Log
 
+## Session 59 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **Phase 3**: native **tray agent**
+(#36) + daemon **logon task**. Built + verified.
+- **New crate `agent/windows/`** (Rust) → **`Capture.exe`**: a system-tray app (`tray-icon` + `muda`)
+  driven by a **minimal Win32 message loop** (`GetMessageW` + a 2 s `WM_TIMER` poll; menu clicks via
+  `muda::MenuEvent`). Owns: persistent tray (generated gray/red dot icons), the **daemon lifecycle**
+  (thin `/v1` `Daemon` client over `ureq`: health-check → adopt, else spawn `captured.exe` with
+  `CREATE_NO_WINDOW`, debounced; auto-respawn unless user-stopped; graceful `/v1/admin/shutdown` on Quit
+  iff idle), and launches **`capture-gui.exe`** with `CAPTURE_AGENT=1`. Menu: header state / Open Window
+  / Stop All Captures / Start-Stop Daemon / Quit. Sibling of macOS `CaptureBar`, no shared code.
+- **`packaging/register_logon_task.ps1`**: register/unregister `Capture.exe` as an **interactive logon
+  task** (`-AtLogOn`, `LogonType Interactive`, no time limit) — the Windows daemon-lifecycle entry
+  (logon task, never a Service). Fixed a PowerShell gotcha (a local `$action` clobbered the `$Action`
+  param — vars are case-insensitive).
+- **SAC-safe build**: deps pinned to the GUI's versions (tray-icon 0.24.1 / muda 0.19.2 / ureq 2 /
+  windows 0.61) and built into the shared `gui/target` so cleared build scripts aren't re-run. Agent
+  compiled first try (`Capture.exe`, 5.4 MB).
+- **Verified (interactive session):** with a pre-started daemon, `Capture.exe` stays **resident**,
+  **adopts** the daemon (no double-spawn), and launches exactly **one** `capture-gui.exe`
+  (`agent_alive=true, gui_count=1, daemon_running=true`). `register_logon_task.ps1` register → query
+  (state=Ready, Interactive) → unregister round-trips clean (no admin). Tray icon/menu visuals remain a
+  manual check (no harness, same as macOS).
+- Specs synced: agent-windows.md (→ implemented-dev: Files/Autostart/Tests/limitations),
+  windows-release.md (Files/§4/§Tests), features.json #36.
+- **Next:** Phase 4 (build_windows.ps1 + Inno Setup installer that bundles GUI+agent+daemon+native
+  helper+skill, calls register_logon_task.ps1, signtool hook) → then Phase 5 (auto-update + release/CI).
+  Agent TODOs: Open-Window focus of an existing window; a branded `.ico`.
+
+---
+
 ## Session 58 — 2026-06-17
 **Agent**: builder (**Windows box**, branch **windows-support**) — **Phase 2**: make the GPUI app
 **usable on Windows** (runtime macOS-isms → cross-platform). All `#[cfg]`-gated; macOS unchanged.
