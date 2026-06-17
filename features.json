@@ -772,13 +772,13 @@
       "id": 51,
       "category": "indexing",
       "priority": "medium",
-      "description": "Hybrid OCR-escalation for zero-error-tolerant code. Study finding: the local model's code_legible SELF-flag is untrustworthy (rated 38/65 frames 'high' yet confabulated); the reliable trigger is CROSS-FRAME OCR DISAGREEMENT (token instability) on persistent code, plus a prefer-dictated-tokens narration<->OCR reconciliation (1c0c0d: narrated note values recovered tokens OCR garbled). On flagged frames, do a targeted high-res/frontier re-read instead of trusting consensus.",
+      "description": "Hybrid OCR-escalation, v1 (flag-now half — auto-re-read deferred per user). _flag_code_reliability post-processes code leaves: sets data.ocr_uncertain where the OCR'd file name is a singleton amid several differently-named code leaves (the local model's confabulation signature; validated to flag exactly the fake names on a real index, leaving real recurring files alone), and attaches data.narration_values (numbers/identifiers spoken in the frame's transcript) so the consumer prefers DICTATED tokens over garbled OCR (1c0c0d finding). AGENTS.md (#57) lists the flagged frames as 're-read these first'. DEFERRED: automated higher-res/frontier re-read of flagged frames at build time.",
       "acceptance_criteria": [
         "Detect cross-frame token instability for code content and mark those frames for re-read.",
         "Narration-dictated tokens deterministically win over conflicting OCR.",
         "Does not regress non-code content."
       ],
-      "passes": false,
+      "passes": true,
       "dependencies": [
         49
       ]

@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
 from . import frames as frames_mod
@@ -154,6 +155,61 @@ def _code_max_px() -> int:
         return int(os.environ.get("CAPTURE_INDEX_CODE_MAX_PX", "2048"))
     except ValueError:
         return 2048
+
+
+#: Content types whose leaves carry code worth reliability-flagging (#51).
+_CODE_RELIABILITY_TYPES = CODE_TYPES | {"custom", "lecture"}
+_NUM_RE = re.compile(r"-?\d+(?:\.\d+)?")
+#: CamelCase / ALL_CAPS / dotted identifiers spoken in narration (likely dictated tokens).
+_IDENT_RE = re.compile(r"\b(?:[A-Z][a-z0-9]+){2,}\b|\b[A-Z][A-Z0-9_]{2,}\b|\b\w+\.\w+\b")
+
+
+def _narration_values(text: str) -> list[str]:
+    """Candidate DICTATED tokens spoken in the narration over a frame — numbers + identifier-like
+    words — that a consumer should PREFER over OCR'd code (the 1c0c0d finding: a narrator who speaks
+    note values/names lets you recover tokens the OCR garbled). Heuristic, deterministic."""
+    if not text:
+        return []
+    out, seen = [], set()
+    for v in _NUM_RE.findall(text)[:14] + _IDENT_RE.findall(text)[:10]:
+        if v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out[:18]
+
+
+def _flag_code_reliability(nodes: dict) -> int:
+    """#51 (flag-now half): on code leaves, attach `narration_values` (dictated tokens from the
+    transcript) and set `ocr_uncertain` where the OCR'd file name DISAGREES across frames — a
+    file/asset seen only once amid several differently-named code leaves is the local model's
+    confabulation signature (the eval study: it invented a different class every frame). The flagged
+    `repr_frame` paths are exactly what a frontier consumer should re-read (the auto-re-read is the
+    deferred second half). Returns the count flagged uncertain."""
+    from collections import Counter
+
+    code_leaves = [nd for nd in nodes.values()
+                   if not nd["children"] and nd.get("content_type") in _CODE_RELIABILITY_TYPES]
+    if not code_leaves:
+        return 0
+    files = Counter()
+    for nd in code_leaves:
+        d = nd.get("data") or {}
+        f = (d.get("file") or d.get("file_or_asset") or "").strip().lower()
+        if f:
+            files[f] += 1
+    flagged = 0
+    for nd in code_leaves:
+        d = nd.get("data") or {}
+        nv = _narration_values(nd.get("transcript_slice") or "")
+        if nv:
+            d["narration_values"] = nv
+        f = (d.get("file") or d.get("file_or_asset") or "").strip().lower()
+        # A singleton file name amid ≥3 distinct names across ≥4 code leaves ⇒ likely confabulated.
+        if f and files[f] <= 1 and len(files) >= 3 and len(code_leaves) >= 4:
+            d["ocr_uncertain"] = True
+            flagged += 1
+        nd["data"] = d
+    return flagged
 
 CLASSIFY_PROMPT = (
     "Classify what this screenshot PRIMARILY shows: set `content_type` to the single best fit and `app` to the "
@@ -351,6 +407,7 @@ def build_index(
             if cid in nodes:
                 nodes[cid]["parent"] = node["id"]
 
+    _flag_code_reliability(nodes)  # #51: mark cross-frame-disagreeing code + surface dictated tokens
     index = _assemble(params, model_label, nodes, root_id=root["id"], leaf_count=n, node_count=total_nodes)
     _write_index(d, index)
     _write_prompts_record(
@@ -404,6 +461,8 @@ def _write_agents_md(d: Path, index: dict, model_label, nodes: dict) -> None:
     mix = ", ".join(f"{c} {t}" for t, c in counts.most_common()) or "mixed"
     has_code = any(t in counts for t in ("coding", "terminal", "lecture", "custom"))
     has_meeting = "meeting" in counts
+    uncertain = [nd for nd in leaves if (nd.get("data") or {}).get("ocr_uncertain")]  # #51
+    has_nv = any((nd.get("data") or {}).get("narration_values") for nd in leaves)
     title = d.name
     recorded = ""
     try:
@@ -443,12 +502,25 @@ def _write_agents_md(d: Path, index: dict, model_label, nodes: dict) -> None:
             "  cross-check the transcript, and **re-read the frame at `repr_frame.path`** (full resolution) for the",
             "  exact tokens. Do not ship the index's `code` verbatim without verifying it against the frame.",
         ]
+        if has_nv:
+            out.append("- **`data.narration_values`** holds tokens (numbers/identifiers) SPOKEN over a code frame — "
+                       "prefer these over the OCR'd `code` when they conflict (the narrator is more reliable than the OCR).")
+        if uncertain:
+            out.append(f"- **`data.ocr_uncertain: true`** marks the {len(uncertain)} code frame(s) whose file name "
+                       "disagreed across frames (a confabulation signature) — re-read those FIRST (listed below).")
     if has_meeting:
         out += [
             "- **Meeting fields** — participant names, task assignments, and decisions are reliable when the",
             "  transcript corroborates them; small-font shared-board text (ticket IDs, dates) may be misread — verify",
             "  from the frame.",
         ]
+    if uncertain:
+        out += ["", "## Frames flagged for verification (#51)",
+                "These code frames disagreed with their neighbours (likely OCR confabulation) — re-read them first:"]
+        for nd in uncertain[:20]:
+            ld = nd.get("data") or {}
+            fp = (nd.get("repr_frame") or {}).get("path", "?")
+            out.append(f"- `{fp}` — claimed `{ld.get('file') or ld.get('file_or_asset') or '?'}`")
     out += ["", "## This capture", f"- Content mix: {mix}",
             f"- {index.get('leaf_count', '?')} leaves / {index.get('node_count', '?')} nodes", ""]
     try:

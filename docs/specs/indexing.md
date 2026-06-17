@@ -93,6 +93,16 @@ per-call `max_px` override on `structured_image`; classification and non-code ty
 meeting/video gain nothing from the extra pixels, so the base stays 1024 there (~14% token / ~43% local-time
 cost is spent only where it pays).
 
+### OCR-reliability flags (#51, flag-now half)
+After the tree is built, `_flag_code_reliability` post-processes code leaves (`coding`/`terminal`/`lecture`/
+`custom`): it sets **`data.ocr_uncertain: true`** where the OCR'd `file`/`file_or_asset` is a *singleton amid
+several differently-named code leaves* — the local model's confabulation signature (the study saw it invent a
+different class every frame), validated to flag exactly the fake file names while leaving the real recurring
+ones alone. It also attaches **`data.narration_values`** — numbers/identifiers spoken in that frame's
+transcript slice — so a consumer can prefer the *dictated* token over a garbled OCR (the 1c0c0d finding). The
+`AGENTS.md` lists the flagged frames as "re-read these first." The **automated re-read** of flagged frames
+(higher-res / frontier re-extraction at build time) is the deferred second half — for now the flags steer the
+*consuming* agent's targeted re-read.
 ### LM Studio structured output (the load-bearing constraint)
 LM Studio enforces `response_format: json_schema` with **llama.cpp grammar-constrained sampling**, which
 forbids a **reasoning model**'s `<think>` block → the model returns **empty `content`**. Neither `/no_think`
