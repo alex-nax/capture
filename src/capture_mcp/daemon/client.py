@@ -199,6 +199,21 @@ class DaemonClient:
     def asr_set_model(self, repo: str) -> dict:
         return self._request("POST", "/v1/asr/model", body={"repo": repo})
 
+    def asr_runtimes(self) -> dict:
+        return self._request("GET", "/v1/asr/runtimes")
+
+    def asr_runtime_install(self, rid: str, source: "str | None" = None) -> dict:
+        body = {"id": rid}
+        if source:
+            body["source"] = source
+        return self._request("POST", "/v1/asr/runtimes/install", body=body)
+
+    def asr_set_runtime(self, rid: str) -> dict:
+        return self._request("POST", "/v1/asr/runtime", body={"id": rid})
+
+    def asr_backend(self) -> dict:
+        return self._request("GET", "/v1/asr/backend")
+
     def permissions(self) -> dict:
         return self._request("GET", "/v1/permissions")
 

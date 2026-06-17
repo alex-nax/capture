@@ -1,0 +1,28 @@
+[package]
+name = "audiocap-win"
+version = "0.1.0"
+edition = "2021"
+description = "Windows per-process WASAPI loopback capture helper for capture-mcp (16 kHz mono s16le PCM on stdout)."
+
+[[bin]]
+name = "audiocap_win"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 2
+strip = true
+
+[dependencies]
+windows-core = "0.61"
+
+[dependencies.windows]
+version = "0.61"
+features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_System_Threading",
+    "Win32_Media_Audio",
+]

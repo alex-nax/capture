@@ -77,7 +77,12 @@ pub const AGENTS: &[Agent] = &[
 fn skill_source() -> Option<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let bundled = dir.join("../Resources/skill"); // Capture.app/Contents/Resources/skill
+            // macOS: Capture.app/Contents/Resources/skill (capture-gui in MacOS/).
+            // Windows/other: skill\ beside the exe at the install root.
+            #[cfg(target_os = "macos")]
+            let bundled = dir.join("../Resources/skill");
+            #[cfg(not(target_os = "macos"))]
+            let bundled = dir.join("skill");
             if bundled.join("SKILL.md").exists() {
                 return Some(bundled);
             }

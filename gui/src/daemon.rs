@@ -146,6 +146,42 @@ fn default_chunk() -> f64 {
     30.0
 }
 
+/// A selectable ASR runtime (GET /v1/asr/runtimes) — engine + hardware requirement + state.
+#[derive(Deserialize, Clone, Default)]
+#[allow(dead_code)] // mirrors the wire shape; the UI reads a subset
+pub struct AsrRuntime {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub engine: String,
+    #[serde(default)]
+    pub device: Option<String>,
+    #[serde(default)]
+    pub requires: String,
+    #[serde(default)]
+    pub installed: bool,
+    #[serde(default)]
+    pub active: bool,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct AsrGpu {
+    #[serde(default)]
+    pub nvidia: bool,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct AsrRuntimes {
+    #[serde(default)]
+    pub active: Option<String>,
+    #[serde(default)]
+    pub gpu: AsrGpu,
+    #[serde(default)]
+    pub runtimes: Vec<AsrRuntime>,
+}
+
 #[derive(Deserialize, Clone, Default)]
 pub struct AudioDevice {
     pub id: String,
@@ -183,12 +219,20 @@ pub fn discover() -> Option<Daemon> {
     })
 }
 
-/// Path to the daemon bundled inside the packaged app, if present:
-/// `Capture.app/Contents/Resources/captured/captured` (next to the GUI binary's
-/// `MacOS` dir). None in a dev build (run the daemon from the venv instead).
+/// Path to the daemon bundled inside the packaged app, if present. None in a dev build
+/// (run the daemon from the venv instead). Layout differs per OS:
+/// - macOS: `Capture.app/Contents/Resources/captured/captured` (capture-gui lives in MacOS/).
+/// - Windows: `captured\captured.exe` beside `capture-gui.exe` at the install root
+///   (see docs/specs/windows-release.md).
 pub fn bundled_daemon() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let cand = exe.parent()?.join("../Resources/captured/captured");
+    let dir = exe.parent()?;
+    #[cfg(target_os = "macos")]
+    let cand = dir.join("../Resources/captured/captured");
+    #[cfg(target_os = "windows")]
+    let cand = dir.join("captured").join("captured.exe");
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let cand = dir.join("captured").join("captured");
     if cand.exists() {
         Some(cand)
     } else {
@@ -196,17 +240,27 @@ pub fn bundled_daemon() -> Option<PathBuf> {
     }
 }
 
-/// Spawn a daemon binary **detached** (own process group → outlives the GUI, so
-/// captures survive the app quitting). Returns true if it launched.
+/// Spawn a daemon binary **detached** so it outlives the GUI (captures survive the app
+/// quitting). POSIX: its own process group. Windows: a new process group + no console
+/// window (a stray console would steal foreground and pollute whole-screen captures).
+/// Returns true if it launched.
 pub fn spawn_detached(bin: &std::path::Path) -> bool {
-    use std::os::unix::process::CommandExt;
-    std::process::Command::new(bin)
-        .stdin(std::process::Stdio::null())
+    let mut cmd = std::process::Command::new(bin);
+    cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .process_group(0)
-        .spawn()
-        .is_ok()
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW (0x0800_0000) | CREATE_NEW_PROCESS_GROUP (0x0000_0200)
+        cmd.creation_flags(0x0800_0000 | 0x0000_0200);
+    }
+    cmd.spawn().is_ok()
 }
 
 impl Daemon {
@@ -488,6 +542,39 @@ impl Daemon {
     /// Remove a downloaded model's weights from the HF cache (frees disk).
     pub fn asr_delete(&self, repo: &str) -> Result<(), String> {
         self.asr_post("/v1/asr/models/delete", repo)
+    }
+
+    /// The selectable ASR runtimes (registry + installed/active + a GPU hint).
+    pub fn asr_runtimes(&self) -> Result<AsrRuntimes, String> {
+        Self::agent()
+            .get(&format!("{}/v1/asr/runtimes", self.endpoint))
+            .set("Authorization", &self.auth())
+            .call()
+            .map_err(|e| e.to_string())?
+            .into_json()
+            .map_err(|e| e.to_string())
+    }
+
+    /// Install a runtime pack (background; progress over /v1/events as asr_runtime_install).
+    pub fn asr_runtime_install(&self, id: &str) -> Result<(), String> {
+        Self::ok_or_error(
+            Self::agent()
+                .post(&format!("{}/v1/asr/runtimes/install", self.endpoint))
+                .set("Authorization", &self.auth())
+                .send_json(serde_json::json!({ "id": id })),
+            "runtime install failed",
+        )
+    }
+
+    /// Set the active runtime (loaded into the running daemon; a switch may need a restart).
+    pub fn asr_set_runtime(&self, id: &str) -> Result<(), String> {
+        Self::ok_or_error(
+            Self::agent()
+                .post(&format!("{}/v1/asr/runtime", self.endpoint))
+                .set("Authorization", &self.auth())
+                .send_json(serde_json::json!({ "id": id })),
+            "set runtime failed",
+        )
     }
 
     /// Switch the microphone on a LIVE capture (empty = off). Appends to the mic track.

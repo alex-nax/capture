@@ -6,6 +6,12 @@ _Status: current as of 2026-06-07. Source of truth = the code; update this spec 
 > wraps `find_windows`/`primary_window` and maps each `WindowInfo` to a platform-neutral `WindowRef`
 > (`window_id`/`pid`/`app_name`/`title`/`width`/`height`). The **Windows-OS** equivalent lives in
 > `platform/windows.py:Win32WindowFinder` (`EnumWindows`). See [platform-abstraction.md](platform-abstraction.md).
+>
+> **Looking for Windows-OS support?** This file is *not* it. Windows-as-a-platform — backends, the
+> packaged installer, daemon logon-task lifecycle, signing, and auto-update — lives in
+> [platform-abstraction.md](platform-abstraction.md), [windows-release.md](windows-release.md), and
+> [agent-windows.md](agent-windows.md). The name collision is incidental: this spec documents
+> `core/windows.py`, the module that finds on-screen **GUI windows** on macOS.
 
 ## Purpose
 Map a target process (by pid) or application (by case-insensitive name substring) to its

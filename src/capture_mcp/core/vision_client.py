@@ -65,30 +65,59 @@ def load(url: str | None = None, model: str | None = None) -> "VisionClient":
     )
 
 
+def _downscale_sips(p: str, max_px: int) -> "bytes | None":
+    """Downscale to JPEG (longest edge ≤ ``max_px``) via macOS ``sips``; ``None`` on any
+    failure (e.g. ``sips`` absent on non-macOS)."""
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(suffix=".jpg")
+        os.close(fd)
+        r = subprocess.run(
+            ["sips", "-Z", str(max_px), "-s", "format", "jpeg", p, "--out", tmp],
+            capture_output=True,
+        )
+        if r.returncode == 0 and os.path.getsize(tmp) > 0:
+            with open(tmp, "rb") as f:
+                return f.read()
+    except Exception:
+        return None
+    finally:
+        if tmp and os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    return None
+
+
+def _downscale_pillow(p: str, max_px: int) -> "bytes | None":
+    """Cross-platform downscale to JPEG via Pillow (longest edge ≤ ``max_px``); ``None`` if
+    Pillow is unavailable or the encode fails. Lazy import so it stays an optional dep."""
+    try:
+        import io
+
+        from PIL import Image  # optional; only used when sips isn't available
+
+        with Image.open(p) as im:
+            im = im.convert("RGB")
+            im.thumbnail((max_px, max_px))
+            buf = io.BytesIO()
+            im.save(buf, format="JPEG", quality=85)
+            return buf.getvalue()
+    except Exception:
+        return None
+
+
 def _encode_image(path: "str | os.PathLike", max_px: int) -> tuple[str, str]:
-    """``(base64, mime)`` for a screenshot: downscale + JPEG via ``sips`` (longest edge
-    ≤ ``max_px``) to shrink the payload; on any failure, send the raw PNG unchanged."""
+    """``(base64, mime)`` for a screenshot: downscale + JPEG (longest edge ≤ ``max_px``) to
+    shrink the payload, tried in order ``sips`` (macOS) → Pillow (cross-platform); on any
+    failure send the raw PNG unchanged. The raw-PNG fallback keeps indexing working on a box
+    with neither downscaler (just with a heavier payload)."""
     p = str(path)
     if max_px > 0:
-        tmp = None
-        try:
-            fd, tmp = tempfile.mkstemp(suffix=".jpg")
-            os.close(fd)
-            r = subprocess.run(
-                ["sips", "-Z", str(max_px), "-s", "format", "jpeg", p, "--out", tmp],
-                capture_output=True,
-            )
-            if r.returncode == 0 and os.path.getsize(tmp) > 0:
-                with open(tmp, "rb") as f:
-                    return base64.b64encode(f.read()).decode("ascii"), "image/jpeg"
-        except Exception:
-            pass
-        finally:
-            if tmp and os.path.exists(tmp):
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
+        jpg = _downscale_sips(p, max_px) or _downscale_pillow(p, max_px)
+        if jpg is not None:
+            return base64.b64encode(jpg).decode("ascii"), "image/jpeg"
     with open(p, "rb") as f:
         return base64.b64encode(f.read()).decode("ascii"), "image/png"
 

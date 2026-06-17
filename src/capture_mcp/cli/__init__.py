@@ -46,11 +46,17 @@ def _daemon_start(_args) -> int:
     existing = DaemonClient.from_discovery()
     if existing is not None and existing.available():
         return _out({"already_running": True, **existing.health()})
-    # Detach so the daemon outlives this CLI invocation.
+    # Detach so the daemon outlives this CLI invocation. POSIX: a new session.
+    # Windows: a new process group + no console window (`start_new_session` is
+    # POSIX-only and rejected on Windows).
+    if sys.platform == "win32":
+        detach = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW}
+    else:
+        detach = {"start_new_session": True}
     proc = subprocess.Popen(
         [sys.executable, "-m", "capture_mcp.daemon"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        start_new_session=True,
+        **detach,
     )
     for _ in range(100):  # up to ~10s for it to come up
         time.sleep(0.1)
