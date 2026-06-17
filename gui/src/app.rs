@@ -114,6 +114,7 @@ pub struct CaptureApp {
     cmd_input: String,                     // "launch a command/URL" field buffer
     cmd_focus: FocusHandle,                // focus for the command field
     root_scroll: ScrollHandle,             // the single page scroll (drives the scrollbar)
+    preset_scroll: ScrollHandle,           // the preset-picker card scroll (caps to the viewport)
     sb_drag: Option<(Pixels, Pixels)>,     // scrollbar drag: (mouse-down y, offset at down)
     show_settings: bool,                   // Settings screen vs. the capture dashboard
     show_preset_picker: bool,              // the start-capture preset popup is open
@@ -177,12 +178,12 @@ const RES_PRESETS: [(&str, Option<&str>); 4] = [
 /// the daemon (which records it + defaults a later index to it); see `start_with_preset`
 /// for how each maps to the mic / screenshots toggles. Mirrors the backend contract.
 const CAPTURE_PRESETS: &[(&str, &str, &str)] = &[
+    ("auto", "Auto", "Classify per frame; adapts as the screen changes."),
     ("meeting", "Meeting", "Video call/standup — mic on; captures participants, active speaker, task assignments."),
     ("coding", "Coding / tutorial", "An IDE or coding video — extracts verbatim code at high resolution."),
     ("lecture", "Lecture / explainer", "A slide/explainer tutorial — topics, key points, formulas."),
-    ("auto", "Auto", "Classify per frame; adapts as the screen changes."),
     ("general", "General", "Plain capture; index auto-classifies."),
-    ("custom", "Custom (MCP)", "A frontier model supplies tailored index prompts over MCP."),
+    ("custom", "Custom", "Use your current capture settings — set resolution, mic, and language in Settings."),
 ];
 
 /// Index-endpoint providers for the Settings selector (#52): `(id, label, default_port, needs_key, is_base_url)`.
@@ -455,6 +456,7 @@ impl CaptureApp {
             cmd_input: String::new(),
             cmd_focus: cx.focus_handle(),
             root_scroll: ScrollHandle::new(),
+            preset_scroll: ScrollHandle::new(),
             sb_drag: None,
             show_settings: false,
             show_preset_picker: false,
@@ -3246,10 +3248,14 @@ impl Render for CaptureApp {
             // presets (label + one-line hint). Picking one applies its toggles + starts.
             .children(self.show_preset_picker.then(|| {
                 let mut card = div()
+                    .id("preset-card")
+                    .track_scroll(&self.preset_scroll)
                     .flex()
                     .flex_col()
                     .gap_2()
                     .w(px(400.0))
+                    .max_h_full()
+                    .overflow_y_scroll() // cap to the viewport (minus the overlay padding) + scroll
                     .p_4()
                     .rounded_lg()
                     .bg(rgb(0x1c1c1c))
@@ -3294,6 +3300,7 @@ impl Render for CaptureApp {
                     .top_0()
                     .left_0()
                     .size_full()
+                    .p_6() // margins so the card never touches the window edges
                     .flex()
                     .items_center()
                     .justify_center()
@@ -3529,6 +3536,11 @@ impl CaptureApp {
                 row = row.child(div().text_color(rgb(0x6a6a6a)).child("(Refresh windows to load devices)"));
             }
             root = root.child(row);
+            // Live transcription-language toggle: the same searchable dropdown as Settings,
+            // surfaced here so the language can be switched DURING a live capture (especially
+            // meetings). Picking applies it immediately via daemon `asr_set_language` (the
+            // next chunk transcribes in it), the way the Mic row above live-switches devices.
+            root = root.child(self.language_field(asr_lang_focused, cx));
         }
 
         // Manage: capability status + prune + re-transcribe (finished sessions only).
