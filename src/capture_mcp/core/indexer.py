@@ -76,19 +76,23 @@ CONTENT_PROMPTS: dict[str, dict] = {
     },
     "lecture": {
         "label": "Lecture / tutorial",
-        "prompt": "This is an educational video / screencast / tutorial. `summary` = 1-2 sentences on what is being "
-                  "taught. `topic` = the slide title or current topic. `key_points` = key terms, definitions, code, "
-                  "or formulas visible (read verbatim).",
-        "schema": _schema({"topic": _STR, "key_points": _STRS}),
-        "combine_focus": "the concepts taught and how the material progresses, with key terms, code, and definitions",
+        "prompt": "This is an educational video / screencast / tutorial / explainer (often inside a video player). "
+                  "`summary` = 1-2 sentences on what is being taught. `topic` = the slide title or current topic. "
+                  "`key_points` = key terms, definitions, or takeaways (verbatim where shown). `code` = any source "
+                  "code on screen transcribed verbatim (else \"\"). `formulas` = any equations/formulas shown "
+                  "verbatim (else []).",
+        "schema": _schema({"topic": _STR, "key_points": _STRS, "code": _STR, "formulas": _STRS}),
+        "combine_focus": "the concepts taught and how the material progresses, with key terms, code, formulas, and definitions",
     },
     "coding": {
         "label": "Coding / IDE",
-        "prompt": "This is a code editor / IDE. `summary` = 1-2 sentences on the task. `language` = the programming "
-                  "language. `file` = the open file name. `symbols` = visible function/class/identifier names or "
-                  "errors (verbatim).",
-        "schema": _schema({"language": _STR, "file": _STR, "symbols": _STRS}),
-        "combine_focus": "the coding task, the files and code involved, and the changes or problems",
+        "prompt": "This is a code editor / IDE (possibly shown inside a video player). `summary` = 1-2 sentences on "
+                  "the task. `language` = the programming language. `file` = the open file name (read from the tab/"
+                  "title bar). `code` = the visible source code transcribed VERBATIM — preserve identifiers, "
+                  "signatures, and structure exactly; do not paraphrase or invent; leave \"\" if illegible. "
+                  "`symbols` = key function/class/identifier names or errors (verbatim).",
+        "schema": _schema({"language": _STR, "file": _STR, "code": _STR, "symbols": _STRS}),
+        "combine_focus": "the coding task, the files and the actual code involved, and the changes or problems",
     },
     "terminal": {
         "label": "Terminal",
@@ -153,8 +157,14 @@ def _code_max_px() -> int:
 
 CLASSIFY_PROMPT = (
     "Classify what this screenshot PRIMARILY shows: set `content_type` to the single best fit and `app` to the "
-    "application/site in focus. (meeting = a video call/conference; video = a media player like YouTube; browsing "
-    "= a web page that is NOT a call; document = docs/notes/PDF; design = Figma/Photoshop.)"
+    "application/site in focus. Classify by the CONTENT on screen, NOT the window around it — a screen recording "
+    "or a YouTube/Twitch video OF an IDE or code is `coding`, OF a slide-based tutorial/explainer is `lecture`, "
+    "OF a video call is `meeting`, OF a document/spreadsheet is `document`. Use `video` ONLY when the media itself "
+    "is the subject (a film, vlog, music or gameplay footage) with nothing to read or extract. "
+    "(meeting = a video call/conference; lecture = anything that teaches — a tutorial/explainer/screencast, even "
+    "inside a video player; coding = an IDE/code editor, even inside a video player; terminal = a console; video = "
+    "entertainment media with no code/slides/meeting/document to extract; browsing = a web page that is NOT a call; "
+    "document = docs/notes/PDF; design = Figma/Photoshop.)"
 )
 
 
@@ -348,6 +358,7 @@ def build_index(
         classify_prompt=(classify_prompt_used if auto else None),
         custom={"classify_prompt": classify_prompt, "leaf_prompt": custom_leaf, "leaf_schema": leaf_schema},
     )
+    _write_agents_md(d, index, model_label, nodes)
     log.info("indexed %s: %d leaves, %d nodes", d.name, n, total_nodes)
     return index
 
@@ -379,6 +390,71 @@ def _write_prompts_record(d: Path, model_label, preset, nodes: dict, leaf_count,
         (d / "index_prompts.json").write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
     except Exception:
         log.exception("failed to write index_prompts.json")
+
+
+def _write_agents_md(d: Path, index: dict, model_label, nodes: dict) -> None:
+    """Write ``<session>/AGENTS.md`` — a trust-calibration + usage guide for any agent that later
+    consumes this capture (#57). The structured ``data`` (especially verbatim ``code``) is a CHEAP
+    LOCAL-MODEL scaffold and is hallucination-prone (the eval study saw the 9B confabulate code), so
+    this tells the consumer which fields to trust vs verify. Content-aware via the leaf type mix."""
+    from collections import Counter
+
+    leaves = [nd for nd in nodes.values() if not nd["children"]]
+    counts = Counter(nd.get("content_type") for nd in leaves if nd.get("content_type"))
+    mix = ", ".join(f"{c} {t}" for t, c in counts.most_common()) or "mixed"
+    has_code = any(t in counts for t in ("coding", "terminal", "lecture", "custom"))
+    has_meeting = "meeting" in counts
+    title = d.name
+    recorded = ""
+    try:
+        sm = (json.loads((d / "session.json").read_text()).get("summary") or {})
+        title = sm.get("window_title") or sm.get("app_name") or d.name
+        recorded = sm.get("started_at") or ""
+    except Exception:
+        pass
+
+    out = [f"# Capture: {title}", ""]
+    if recorded:
+        out.append(f"_Recorded {recorded}_\n")
+    if index.get("root_summary"):
+        out += [index["root_summary"], ""]
+    out += [
+        "## Artifacts",
+        "- `index.json` — hierarchical index: per-frame leaf captions → range summaries → a root summary. Each",
+        "  leaf node carries `repr_frame.path` (the source screenshot), `content_type`, `data` (the structured",
+        "  extraction), and `transcript_slice` (the narration over that span).",
+        "- `transcript.jsonl` — the time-aligned spoken audio. **Authoritative.**",
+        "- `screenshots/` — the full-resolution source frames. Re-read these for anything you must trust verbatim.",
+        "- `index_prompts.json` — the model + prompts/schemas this index was built with.",
+        "",
+        "## How to trust this index (read first)",
+        f"The structured `data` was extracted by a small LOCAL vision model (`{model_label or 'local VLM'}`). Treat",
+        "it as a cheap **scaffold for navigation, not ground truth**:",
+        "- **Transcript = reliable.** Where the narration states a value (a name, number, command, note), prefer it",
+        "  over the on-screen OCR.",
+        "- **Cross-frame disagreement = a red flag.** When the same on-screen content is captured differently across",
+        "  nearby leaves, that region is OCR-unreliable — verify it against the source frame.",
+        "- **Summaries / topics = directionally reliable** for locating things; exact details need the frame.",
+    ]
+    if has_code:
+        out += [
+            "- **Verbatim `code` is OCR and hallucination-prone** — the model can misread an identifier (e.g. drop a",
+            "  leading letter, `AActor`→`Actor`) or confabulate whole snippets. Before reproducing any code:",
+            "  cross-check the transcript, and **re-read the frame at `repr_frame.path`** (full resolution) for the",
+            "  exact tokens. Do not ship the index's `code` verbatim without verifying it against the frame.",
+        ]
+    if has_meeting:
+        out += [
+            "- **Meeting fields** — participant names, task assignments, and decisions are reliable when the",
+            "  transcript corroborates them; small-font shared-board text (ticket IDs, dates) may be misread — verify",
+            "  from the frame.",
+        ]
+    out += ["", "## This capture", f"- Content mix: {mix}",
+            f"- {index.get('leaf_count', '?')} leaves / {index.get('node_count', '?')} nodes", ""]
+    try:
+        (d / "AGENTS.md").write_text("\n".join(out), encoding="utf-8")
+    except Exception:
+        log.exception("failed to write AGENTS.md")
 
 
 def _node(nid, depth, lo, hi, repr_leaf, t_lo, t_hi, *, n_frames, content_type, vision_caption,

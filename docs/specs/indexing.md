@@ -64,10 +64,16 @@ sampling), then **conquer** by combining leaves back up to the root.
 ## Per-frame extraction: classify → structured, type-specific (the "auto" preset)
 A universal description prompt is wrong (meeting ≠ lecture ≠ gameplay), so each frame is handled in
 **two structured stages** (the default `auto` preset; a fixed preset like `meeting` skips stage 1):
-1. **Classify** — a structured call returns `{content_type ∈ enum, app}`.
+1. **Classify** — a structured call returns `{content_type ∈ enum, app}`. The classifier classifies by the
+   **content shown, not the window around it** (the eval study found every screen-recorded YouTube/Twitch
+   capture was mis-routed to `video`, losing all code/algorithm detail): a recording *of* an IDE is `coding`,
+   *of* a tutorial/explainer is `lecture`, *of* a call is `meeting`; `video` is reserved for entertainment
+   media with nothing to extract.
 2. **Extract** — the content type routes to a type-specific **json_schema** (e.g. `meeting` →
    `{summary, participants[], active_speaker, shared_content, task_assignments[], data_points[], decisions[]}`;
-   `lecture` → `{summary, topic, key_points[]}`; `coding` → `{summary, language, file, symbols[]}`). The
+   `lecture` → `{summary, topic, key_points[], code, formulas[]}`; `coding` →
+   `{summary, language, file, code, symbols[]}` — `coding`/`terminal` are extracted at higher resolution so the
+   verbatim `code` is legible, see #49). The
    structured fields are stored on the leaf node's `data`; `summary` feeds the tree. So the index carries real
    structured data (e.g. who is on the call and **who is speaking**, read from tile labels + the active-speaker
    highlight, plus the **task assignments / ticket refs / decisions** off a shared doc or board), and the root
@@ -149,6 +155,11 @@ Re-indexing a session backs up the prior `index.json` → `index.prev.json` (lik
 - `index.json` — the full node tree (+ `index_version`, `model`, `params`, `created_at`).
 - `index.prev.json` — the previous index, kept on re-index.
 - `index_summary.txt` — the root summary, human-readable.
+- `index_prompts.json` — the model + prompts/schemas used (the corpus the tuning skill ingests).
+- `AGENTS.md` (#57) — a per-capture **trust-calibration + usage guide** for any agent that later consumes
+  the capture: the artifact map plus content-aware reliability rules (the local model's `data`/`code` is a
+  hallucination-prone scaffold; the transcript is authoritative; re-read `repr_frame.path` for verbatim
+  tokens). Written by `_write_agents_md` after every build; tailored by the leaf `content_type` mix.
 
 ## Configuration (env, mirrors `asr/openai_compat.py`; also set from the GUI)
 **Indexing is DISABLED by default.** It is enabled only when a **working** LM Studio endpoint

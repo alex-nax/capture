@@ -147,6 +147,13 @@ each icon to an alpha mask tinted by `text_color`. The `icon(name, size, color)`
   `index_session` → `POST .../index`, the `list-tree` icon, enabled only when `can_index` **and**
   `index_status.available`; progress streams over SSE into `LiveState.index_progress`, and the **root
   summary + node count** of a built index render below the actions, loaded via `GET .../index` on open).
+- **Index endpoint config (Settings, #52/#53):** a **provider** selector (LM Studio / Ollama / OpenAI /
+  Custom) + **host** + **port** (a single base-URL field for Custom) + an **API-key** field shown only for
+  providers that need one (OpenAI), persisted to `gui-settings.json` (legacy free-text `index_url` is
+  migrated to host:port). The **model** field is a **dropdown** populated from `GET /v1/index/models`
+  (`daemon.index_models`), refreshed on provider/host/port change or a Refresh chip; the build sends the
+  structured `provider/host/port` (the daemon composes the endpoint). A provider selector was built rather
+  than deferred.
 - **Menu-bar (tray):** a status item built on the main thread inside the GPUI run
   loop (`tray.rs`). Its title tracks the running-capture count (`● capture` idle,
   `⦿ N` while N run), updated from the GPUI tray loop (`cx.spawn` + 250 ms `Timer`)
