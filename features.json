@@ -205,7 +205,7 @@
       "id": 15,
       "category": "infrastructure",
       "priority": "high",
-      "description": "Stable code-signing identity so the helper's Screen Recording (TCC) grant persists across rebuilds. scripts/setup_codesign.sh creates the self-signed cert. Session 9: fixed two bugs that made it fail on macOS+OpenSSL-3 \u2014 PKCS#12 export now uses -legacy + a non-empty passphrase (empty/AES-MAC p12 fail `security import` MAC verification), and have_identity() detects via `find-identity -p codesigning` WITHOUT -v (a self-signed cert is untrusted so never lists under -v). The skill installer (skills/capture/scripts/install.sh) now runs setup_codesign.sh instead of an ad-hoc build, so skill-based installs get the persistent grant too.",
+      "description": "Stable code-signing identity so the helper's Screen Recording (TCC) grant persists across rebuilds. scripts/setup_codesign.sh creates the self-signed cert. Session 9: fixed two bugs that made it fail on macOS+OpenSSL-3 — PKCS#12 export now uses -legacy + a non-empty passphrase (empty/AES-MAC p12 fail `security import` MAC verification), and have_identity() detects via `find-identity -p codesigning` WITHOUT -v (a self-signed cert is untrusted so never lists under -v). The skill installer (skills/capture/scripts/install.sh) now runs setup_codesign.sh instead of an ad-hoc build, so skill-based installs get the persistent grant too.",
       "acceptance_criteria": [
         "scripts/setup_codesign.sh creates a codesigning identity and signs the helper (DONE; fixed for OpenSSL 3)",
         "build_helper.sh signs with CODESIGN_IDENTITY (DONE)",
@@ -356,7 +356,7 @@
       "id": 25,
       "category": "core",
       "priority": "high",
-      "description": "M0a \u2014 engine/MCP package split + SessionRegistry: move engine modules to capture/core (verbatim), thin capture/mcp server; extract the _sessions dict/_prune_locked from server.py into a SessionRegistry that rebuilds history from <output_dir>/capture-*/session.json at startup; fix start() holding session._lock through slow component startup (add a 'starting' state, start components outside the lock, mirroring stop()). See docs/specs/product-architecture.md.",
+      "description": "M0a — engine/MCP package split + SessionRegistry: move engine modules to capture/core (verbatim), thin capture/mcp server; extract the _sessions dict/_prune_locked from server.py into a SessionRegistry that rebuilds history from <output_dir>/capture-*/session.json at startup; fix start() holding session._lock through slow component startup (add a 'starting' state, start components outside the lock, mirroring stop()). See docs/specs/product-architecture.md.",
       "acceptance_criteria": [
         "MCP behavior identical: tools/list schemas unchanged, smoke 20/20 (DONE; suite grew to 28/28)",
         "Server restart no longer loses session history (registry rebuilt from session.json files) (DONE; verified cross-process, Session 10)",
@@ -372,7 +372,7 @@
       "id": 26,
       "category": "core",
       "priority": "medium",
-      "description": "M0b \u2014 EventBus + per-session events.jsonl: components push screenshot_taken/transcript_segment/log_line/state events alongside today's polled counters; CaptureSession appends an append-only events.jsonl per session (state transitions + periodic counter snapshots) so future GUI/daemon clients tail one file instead of fs-watching.",
+      "description": "M0b — EventBus + per-session events.jsonl: components push screenshot_taken/transcript_segment/log_line/state events alongside today's polled counters; CaptureSession appends an append-only events.jsonl per session (state transitions + periodic counter snapshots) so future GUI/daemon clients tail one file instead of fs-watching.",
       "acceptance_criteria": [
         "A smoke capture produces events.jsonl with state transitions and counter snapshots (DONE; starting->running->stopping->stopped + periodic and final snapshots, smoke 35/35)",
         "Existing polling (capture_status/summary()) unchanged (DONE; all pre-existing smoke checks pass untouched)"
@@ -386,7 +386,7 @@
       "id": 27,
       "category": "testing",
       "priority": "high",
-      "description": "M0c \u2014 contract fixtures + frozen helper contract: tests/contract/ with a golden MCP tools/list schema dump, a recorded StubASR session-dir fixture (session.json + transcript.jsonl + events.jsonl layout), and PCM chunk/offset fixtures for the 8s-window logic; docs/specs/helper-contract.md freezing the audiocap protocol (argv, 16kHz mono s16le PCM on stdout, READY scanned on stderr, -3801/-3803 fatal vs -3805 transient); fix the audiocap.swift:14 'first line is READY' comment lie.",
+      "description": "M0c — contract fixtures + frozen helper contract: tests/contract/ with a golden MCP tools/list schema dump, a recorded StubASR session-dir fixture (session.json + transcript.jsonl + events.jsonl layout), and PCM chunk/offset fixtures for the 8s-window logic; docs/specs/helper-contract.md freezing the audiocap protocol (argv, 16kHz mono s16le PCM on stdout, READY scanned on stderr, -3801/-3803 fatal vs -3805 transient); fix the audiocap.swift:14 'first line is READY' comment lie.",
       "acceptance_criteria": [
         "Contract tests pass against current code and fail on schema/layout drift (DONE; 3/3 hold, injected drift exits 1, --regen path works)",
         "helper-contract.md exists and matches audiocap.swift + audiocap_win.py reality (DONE; also fixed the READY comment lie, the audiocap_win shutdown NameError, and the phantom-watchdog docstring)"
@@ -401,7 +401,7 @@
       "id": 28,
       "category": "asr",
       "priority": "medium",
-      "description": "asr/openai_compat.py \u2014 small backend POSTing WAV-wrapped PCM to any OpenAI-compatible /v1/audio/transcriptions endpoint, plus a 'minimal' extra in pyproject.toml (screenshots+logs-only install). Turns the Nemotron WSL2/Docker lab into a plain remote endpoint.",
+      "description": "asr/openai_compat.py — small backend POSTing WAV-wrapped PCM to any OpenAI-compatible /v1/audio/transcriptions endpoint, plus a 'minimal' extra in pyproject.toml (screenshots+logs-only install). Turns the Nemotron WSL2/Docker lab into a plain remote endpoint.",
       "acceptance_criteria": [
         "asr_backend pointing at a compatible endpoint yields timestamped transcript segments (DONE; smoke: direct backend + full AudioCapture pipeline against a stub server, 6 segments at offsets 0.5/2.0/8.5/10.0/16.5/18.0)",
         "pip install 'capture-mcp[minimal]' captures screenshots+logs with no ASR deps (DONE; verified in a fresh uv venv: no mlx/faster-whisper/riva importable, real capture produced screenshots+logs)"
@@ -415,9 +415,9 @@
       "id": 29,
       "category": "core",
       "priority": "medium",
-      "description": "list_windows MCP tool \u2014 expose WindowFinder discovery (title, app, pid, window id, bounds) so agents get the same window picker the GUI will use.",
+      "description": "list_windows MCP tool — expose WindowFinder discovery (title, app, pid, window id, bounds) so agents get the same window picker the GUI will use.",
       "acceptance_criteria": [
-        "tools/list shows list_windows; returns layer-0 windows largest-first on macOS and EnumWindows results on Windows (DONE on macOS: 7 real windows largest-first, app_name filter verified, golden updated; Windows backend goes through the same WindowFinder.find \u2014 verify on the Windows box next time it runs the suite)"
+        "tools/list shows list_windows; returns layer-0 windows largest-first on macOS and EnumWindows results on Windows (DONE on macOS: 7 real windows largest-first, app_name filter verified, golden updated; Windows backend goes through the same WindowFinder.find — verify on the Windows box next time it runs the suite)"
       ],
       "passes": true,
       "dependencies": [
@@ -430,9 +430,9 @@
       "priority": "high",
       "description": "TCC attribution spike (GATES the daemon architecture): on a clean macOS 14 and 15 VM, verify that a launchd-agent-spawned, Developer-ID-signed PyInstaller daemon is the TCC-responsible process for Screen Recording, that the grant persists across app updates (same Team ID + bundle id), the daemon-restart-after-grant flow, and the macOS 15 periodic re-approval behavior. Document as a repeatable checklist in docs/specs/product-architecture.md.",
       "acceptance_criteria": [
-        "Written spike report: attribution works (or the documented fallback decision if it does not) (DONE 2026-06-15, macOS 26.5.1/arm64: PASS \u2014 launchd\u2192signed .app PyInstaller daemon\u2192audiocap streamed audio with no terminal grant; spike/tcc-attribution/results/FINDINGS.md)",
-        "Grant survives a simulated app update with unchanged identity/bundle id (DONE: same-identity rebuild+re-sign \u2192 audio flowed immediately, respawns=0, no re-prompt; identity ROTATION lost the grant \u2014 negative control confirms keying to the signing identity)",
-        "re-approval / robustness notes recorded (DONE: macOS 26 SCShareableContent enumeration is intermittently flaky \u2014 audiocap exit 5 rode by the respawn loop; follow-up logged to add a bounded enumeration retry to audiocap.swift)"
+        "Written spike report: attribution works (or the documented fallback decision if it does not) (DONE 2026-06-15, macOS 26.5.1/arm64: PASS — launchd→signed .app PyInstaller daemon→audiocap streamed audio with no terminal grant; spike/tcc-attribution/results/FINDINGS.md)",
+        "Grant survives a simulated app update with unchanged identity/bundle id (DONE: same-identity rebuild+re-sign → audio flowed immediately, respawns=0, no re-prompt; identity ROTATION lost the grant — negative control confirms keying to the signing identity)",
+        "re-approval / robustness notes recorded (DONE: macOS 26 SCShareableContent enumeration is intermittently flaky — audiocap exit 5 rode by the respawn loop; follow-up logged to add a bounded enumeration retry to audiocap.swift)"
       ],
       "passes": true,
       "dependencies": [
@@ -443,12 +443,12 @@
       "id": 31,
       "category": "infrastructure",
       "priority": "high",
-      "description": "M1 \u2014 packaged signed engine, no GUI: PyInstaller onedir of the engine+MCP, Developer ID + notarization, PREBUILT signed audiocap (kills the swiftc/Xcode-CLT requirement for end users), capture doctor (permission preflight, CGRequestScreenCaptureAccess trigger, System Settings deep link), distributed via brew tap + GitHub releases.",
+      "description": "M1 — packaged signed engine, no GUI: PyInstaller onedir of the engine+MCP, Developer ID + notarization, PREBUILT signed audiocap (kills the swiftc/Xcode-CLT requirement for end users), capture doctor (permission preflight, CGRequestScreenCaptureAccess trigger, System Settings deep link), distributed via brew tap + GitHub releases.",
       "acceptance_criteria": [
         "brew install <tap>/capture then 'grant once' yields a working audio capture on a machine with no git/Xcode CLT/Python",
         "Packaged-bundle smoke: a real capture runs from the installed artifact",
         "From-source init.sh path still works unchanged",
-        "[DONE 2026-06-16] TCC daemon-grant via Developer-ID signing \u2014 VERIFIED. The ad-hoc wall: a bundle's separately-signed daemon binary is a different TCC identity than the granted app, so the grant doesn't reach it (confirmed: ad-hoc app granted in Settings, fresh daemon still denied, 0 titles, screenshots fail). FIX (works): sign every binary with Alex's Developer ID (Team YH3QP44ST4) so they share ONE TCC identity. build_macos_dmg.sh CAPTURE_SIGN_IDENTITY path = hardened runtime + packaging/entitlements.plist (allow-jit / allow-unsigned-executable-memory / disable-library-validation / allow-dyld-env for mlx+numba JIT + the .so, + device.audio-input) + secure timestamp, inside-out, helper re-signed with the shared Team ID. VERIFIED: signed+hardened frozen daemon BOOTS; codesign shows Developer ID + flags=runtime; all 4 binaries share Team YH3QP44ST4; after the user grants Screen Recording once, the daemon reports screen_recording=GRANTED and a FRESH daemon (after restart AND app relaunch) keeps it -> 15 windows / 13 titles, real screenshots. The grant PERSISTS (Developer-ID identity is stable, not cdhash) \u2014 no re-granting, no daemon crash (the GUI's CGRequest now grants the shared identity). Restarting just the daemon suffices (it's the same identity); the macOS 'restart the app' nudge can be ignored. Notarization (CAPTURE_NOTARIZE_PROFILE=capture-notary, Apple ID pr0fedt@gmail.com stored) in progress for Gatekeeper. STILL TODO for passes:true: notarize + brew tap + prebuilt-helper + capture doctor + from-source-still-works."
+        "[DONE 2026-06-16] TCC daemon-grant via Developer-ID signing — VERIFIED. The ad-hoc wall: a bundle's separately-signed daemon binary is a different TCC identity than the granted app, so the grant doesn't reach it (confirmed: ad-hoc app granted in Settings, fresh daemon still denied, 0 titles, screenshots fail). FIX (works): sign every binary with Alex's Developer ID (Team YH3QP44ST4) so they share ONE TCC identity. build_macos_dmg.sh CAPTURE_SIGN_IDENTITY path = hardened runtime + packaging/entitlements.plist (allow-jit / allow-unsigned-executable-memory / disable-library-validation / allow-dyld-env for mlx+numba JIT + the .so, + device.audio-input) + secure timestamp, inside-out, helper re-signed with the shared Team ID. VERIFIED: signed+hardened frozen daemon BOOTS; codesign shows Developer ID + flags=runtime; all 4 binaries share Team YH3QP44ST4; after the user grants Screen Recording once, the daemon reports screen_recording=GRANTED and a FRESH daemon (after restart AND app relaunch) keeps it -> 15 windows / 13 titles, real screenshots. The grant PERSISTS (Developer-ID identity is stable, not cdhash) — no re-granting, no daemon crash (the GUI's CGRequest now grants the shared identity). Restarting just the daemon suffices (it's the same identity); the macOS 'restart the app' nudge can be ignored. Notarization (CAPTURE_NOTARIZE_PROFILE=capture-notary, Apple ID pr0fedt@gmail.com stored) in progress for Gatekeeper. STILL TODO for passes:true: notarize + brew tap + prebuilt-helper + capture doctor + from-source-still-works."
       ],
       "passes": false,
       "dependencies": [
@@ -460,7 +460,7 @@
       "id": 32,
       "category": "core",
       "priority": "high",
-      "description": "M2 \u2014 captured daemon + /v1 API + CLI: aiohttp HTTP+WS over UDS+bearer token (127.0.0.1 on Windows), endpoint discovery via ~/.capture/daemon.json (0600), /v1 surface per docs/specs/product-architecture.md, daemon-level ASR model pool, capture CLI (start/stop/status/tail/doctor/daemon install|uninstall) writing launchd agent / logon task / systemd user unit; MCP server gains daemon-first mode with embedded fallback (CAPTURE_MCP_EMBEDDED=1).",
+      "description": "M2 — captured daemon + /v1 API + CLI: aiohttp HTTP+WS over UDS+bearer token (127.0.0.1 on Windows), endpoint discovery via ~/.capture/daemon.json (0600), /v1 surface per docs/specs/product-architecture.md, daemon-level ASR model pool, capture CLI (start/stop/status/tail/doctor/daemon install|uninstall) writing launchd agent / logon task / systemd user unit; MCP server gains daemon-first mode with embedded fallback (CAPTURE_MCP_EMBEDDED=1).",
       "acceptance_criteria": [
         "Agent-started capture is visible via CLI status; sessions survive client exits (DONE: captured /v1 API on 127.0.0.1+token over a shared SessionRegistry; `capture` CLI + the MCP server (daemon-first) are both clients; smoke test_daemon + test_cli_daemon + test_mcp_daemon_first, 62/62)",
         "One Screen Recording grant (to the daemon) gives working audio from two different terminals' MCP agents (MECHANISM DONE: both terminals' MCP agents proxy to the one daemon via daemon-first dispatch, so they share its registry+grant. The stable-grant BENEFIT still needs the packaged signed launchd daemon #31/#30 to be the TCC-responsible process)",
@@ -478,27 +478,27 @@
       "id": 33,
       "category": "gui",
       "priority": "high",
-      "description": "M3 \u2014 GPUI app v1 on macOS: tray/menu-bar icon (tray-icon+muda), main window (session list from daemon registry, new-capture form with /v1/windows picker), session detail (live preview via RenderImage with cache eviction, transcript/log tails), onboarding (SMAppService daemon registration, Grant flow with permission.updated push, ends with a visible 5-second self-test capture), Settings (ASR model manager with resumable+SHA256 downloads). GPUI pinned to a frozen zed git rev + compatible gpui-component rev, cargo vendor, quarterly bump policy.",
+      "description": "M3 — GPUI app v1 on macOS: tray/menu-bar icon (tray-icon+muda), main window (session list from daemon registry, new-capture form with /v1/windows picker), session detail (live preview via RenderImage with cache eviction, transcript/log tails), onboarding (SMAppService daemon registration, Grant flow with permission.updated push, ends with a visible 5-second self-test capture), Settings (ASR model manager with resumable+SHA256 downloads). GPUI pinned to a frozen zed git rev + compatible gpui-component rev, cargo vendor, quarterly bump policy.",
       "acceptance_criteria": [
         "Capture.dmg: drag-install, onboarding to first successful self-test capture without a terminal (PENDING: packaging is M4-adjacent, needs Developer ID #31)",
-        "An MCP-agent-started capture appears live in the GUI session list (DONE slice 1: gui/ GPUI app polls /v1/sessions; verified \u2014 captures started via the CLI/GUI appear in the GUI list with live shots/segs counts, and history sessions recovered from the disk index show too)",
-        "Quitting the GUI does not stop a running capture (DONE: the GUI is a thin daemon client; the daemon owns the session \u2014 verified, captures outlive the GUI process)",
-        "[DONE slices 1-2, macOS, gpui 0.2.2] gui/: daemon client (health/sessions/windows/start/stop/transcript + /v1/events SSE reader) + GPUI window \u2014 health header, /v1/windows picker, Start/Stop, live-polled session list, and a LIVE session-detail pane (screenshot preview via img() + transcript streamed over SSE; auto-opens the running capture). Built+ran+screenshotted: transcript grew live and the preview rendered the video frame. docs/specs/gui.md.",
-        "[DONE slice 3] menu-bar (tray) presence via tray-icon 0.24 + muda 0.19 (gui/src/tray.rs): title reflects the running-capture count (\u25cf capture / \u29bf N, live-updated from the GPUI poll), Open/Stop-all/Quit menu drained on the main-thread tray loop. Verified: title went \u25cf capture -> \u29bf 1 -> \u25cf capture across a CLI start/stop.",
-        "[DONE slice 4] global hotkey \u2303\u2318R (global-hotkey 0.8, Carbon \u2014 no accessibility prompt) toggles capture from anywhere (running -> stop all; else start on selected window), drained in the tray loop. Registration verified (GUI shows the '\u2303\u2318R toggles capture' hint = manager+register succeeded); the live key-press path needs a real hardware press (synthetic keystrokes need Accessibility / don't trigger Carbon hotkeys).",
-        "[DONE slice 5] GUI installs/updates the bundled `capture` skill into a coding agent's home (~/.claude/skills/capture, ~/.codex/skills/capture) with a content-hash status check (\u2014 install / \u2713 / \u2191 update); verified via --skill-status/--install-skill headless flags (not installed\u2192up to date\u2192update available\u2192up to date).",
-        "[DONE slice 6] packaging/build_macos_dmg.sh builds Capture.app (ad-hoc signed, bundles the skill) + Capture-<v>.dmg for macOS testing; README documents the Gatekeeper bypass (right-click Open / Open Anyway / xattr -dr quarantine). NOT notarized \u2014 Developer ID is #31.",
+        "An MCP-agent-started capture appears live in the GUI session list (DONE slice 1: gui/ GPUI app polls /v1/sessions; verified — captures started via the CLI/GUI appear in the GUI list with live shots/segs counts, and history sessions recovered from the disk index show too)",
+        "Quitting the GUI does not stop a running capture (DONE: the GUI is a thin daemon client; the daemon owns the session — verified, captures outlive the GUI process)",
+        "[DONE slices 1-2, macOS, gpui 0.2.2] gui/: daemon client (health/sessions/windows/start/stop/transcript + /v1/events SSE reader) + GPUI window — health header, /v1/windows picker, Start/Stop, live-polled session list, and a LIVE session-detail pane (screenshot preview via img() + transcript streamed over SSE; auto-opens the running capture). Built+ran+screenshotted: transcript grew live and the preview rendered the video frame. docs/specs/gui.md.",
+        "[DONE slice 3] menu-bar (tray) presence via tray-icon 0.24 + muda 0.19 (gui/src/tray.rs): title reflects the running-capture count (● capture / ⦿ N, live-updated from the GPUI poll), Open/Stop-all/Quit menu drained on the main-thread tray loop. Verified: title went ● capture -> ⦿ 1 -> ● capture across a CLI start/stop.",
+        "[DONE slice 4] global hotkey ⌃⌘R (global-hotkey 0.8, Carbon — no accessibility prompt) toggles capture from anywhere (running -> stop all; else start on selected window), drained in the tray loop. Registration verified (GUI shows the '⌃⌘R toggles capture' hint = manager+register succeeded); the live key-press path needs a real hardware press (synthetic keystrokes need Accessibility / don't trigger Carbon hotkeys).",
+        "[DONE slice 5] GUI installs/updates the bundled `capture` skill into a coding agent's home (~/.claude/skills/capture, ~/.codex/skills/capture) with a content-hash status check (— install / ✓ / ↑ update); verified via --skill-status/--install-skill headless flags (not installed→up to date→update available→up to date).",
+        "[DONE slice 6] packaging/build_macos_dmg.sh builds Capture.app (ad-hoc signed, bundles the skill) + Capture-<v>.dmg for macOS testing; README documents the Gatekeeper bypass (right-click Open / Open Anyway / xattr -dr quarantine). NOT notarized — Developer ID is #31.",
         "[DONE slice 7] self-contained bundle: build_macos_dmg.sh now PyInstaller-freezes the daemon into Capture.app/Contents/Resources/captured/ (with the signed audiocap helper beside it, keeping its stable com.local.audiocap identity), and the GUI auto-spawns it (daemon.rs bundled_daemon()/spawn_detached(), called from app.rs new(); poll+SSE re-discover so they attach to the just-spawned daemon). No separate venv / `capture daemon start`. Verified: the frozen daemon copied OUT of the .app boots, /v1/health ok, /v1/windows returns windows (Quartz works frozen); app signature verifies --strict; DMG is 28M. Transcription still needs a configured ASR backend (mlx excluded to keep the bundle small).",
-        "[DONE slice 8] in-GUI Whisper model manager + on-device ASR in the bundle: daemon /v1/asr/* routes (GET models catalog with downloaded/active/downloading flags; POST models/download -> background fetch with asr_download progress over SSE + dup-guard; POST model -> set active, persisted to ~/.capture/config.json via core.config). New core.asr.manager (verified mlx-community repos: whisper-tiny, whisper-base-mlx, whisper-large-v3-turbo-q4, whisper-small-mlx, whisper-medium-mlx, whisper-large-v3-turbo) + whisper_local reads the config. GUI: a Whisper-models panel (Download/Use buttons, live \u2193NN% from SSE asr_progress; asr_download events have NO session_id so SSE handles them before the session filter). build_macos_dmg.sh now BUNDLES mlx (de-risked: frozen Metal kernel + whisper-tiny transcribe OK; --asr-selftest in captured_main); freeze_support() prevents a rogue 2nd daemon (numba multiprocessing). DMG ~166M (mlx metallib ~125M); weights download on demand. Verified live: routes + SSE progress (whisper-base-mlx 0->1->done), config persist, bad/dup handling; bundled daemon reports backend_available:true, single process. Contracts regenned (3 ASR models added), smoke 68/68.",
-        "[DONE slice 9] native macOS menu-bar agent (agent/macos/CaptureBar.swift, NSStatusItem + LSUIElement): the bundle's entry point (CFBundleExecutable=CaptureBar). Owns the PERSISTENT menu-bar presence (\u25cb/\u25cf/\u29bfN reflecting daemon+capture state, polled /v1 every 2s), the daemon lifecycle (spawns the bundled captured detached; Quit gracefully /v1/admin/shutdown the daemon IF idle, freeing the .app to delete/replace), and launches the GPUI window (capture-gui with CAPTURE_AGENT=1 -> skips its own tray + daemon-spawn, exits on window-close via on_window_closed). Why a separate native agent: gpui 0.2.2 forces ActivationPolicy::Regular (no LSUIElement menu-bar mode) and a resident GPUI process is too heavy for an always-on tray; owner chose native per-OS agents (Windows sibling = #36). build_macos_dmg.sh compiles it (swiftc) + lays out MacOS/{CaptureBar,capture-gui}. Verified: launched via LaunchServices it stays resident, spawns the daemon (/v1/health ok), and opens the window; docs/specs/agent.md.",
-        "[DONE slice 10] GUI usability batch (Alex, from the running app): (1) Windows picker + (2) Sessions lists show ALL rows (dropped the top-6 slices) in a single scrolling page with a CUSTOM DRAGGABLE SCROLLBAR (scrollbar()+on_scrollbar_drag() overlay from the root ScrollHandle's bounds/max_offset/offset) \u2014 bare gpui 0.2.2 has no scrollbar widget and nested overflow_scroll regions fight the root for the wheel, so a single scroll context is used (first tried per-list max_h+overflow_y_scroll: scrolled-together + no scrollbar, per Alex; reverted); (3) Launch-and-capture a new process/URL from a minimal single-line text input (focusable div + track_focus/on_key_down: key_char/backspace/\u2318V-paste/Enter; no IME) -> POST /v1/sessions with command (a URL is e.g. `open https://\u2026`); (4) per-session Folder button (open the dir in Finder via `open`); (5) per-session Copy-Prompt button writes a ready-to-paste summarization prompt (points a coding agent at the dir's transcript/screenshots/logs) to the clipboard; (6) per-session Delete (finished only) -> new daemon POST /v1/sessions/{id}/delete (registry.delete + rewrite sessions.jsonl index + rmtree the dir guarded by session.json presence; 400 if live). Verified: delete route live-tested (running->400, stopped->200 + dir gone + de-indexed + 404), smoke 68/68, contracts 4/4, GUI builds clean. The text-input + button UI is a manual visual check (no GPUI harness). NOTE: open-folder uses macOS `open` (Windows/Linux branch owed).",
-        "[DONE slice 11] (Alex, from testing) (a) Sessions list was incomplete: the registry rebuilt history from the index (sessions.jsonl) only, so capture-* folders predating an index reset were orphaned/invisible. registry._load_history now also scans $CAPTURE_RUNS_DIR (else ~/.capture/runs) for capture-*/session.json and recovers any uncovered sid (index wins; idempotent; re-bounds to max_sessions) \u2014 verified 8->15. (b) Window rows showed 'App \u2014 ' because macOS redacts kCGWindowName without Screen Recording; GUI shows just the app name when title is empty. (c) Permissions UI: new core.permissions (Quartz CGPreflight/CGRequestScreenCaptureAccess) + daemon GET /v1/permissions, POST /v1/permissions/request; GUI Permissions row shows Screen Recording status (polled) + Grant (daemon triggers the system prompt; the daemon is the grantee; needs app restart to apply) + Open Settings (x-apple.systempreferences ScreenCapture pane for grant OR revoke \u2014 apps can't toggle TCC). Mic via AVFoundation deferred (not in venv). Verified: routes live (status granted/denied, bad kind->400), smoke 68/68, GUI clean. Needed a daemon RE-FREEZE to ship the Python changes in the bundle.",
-        "[DONE slice 12] permissions UI completion (Alex: \"we need both\"): (a) MICROPHONE permission \u2014 added pyobjc-framework-AVFoundation (pyproject + freeze --collect-all AVFoundation/CoreMedia; works frozen, verified mic status != unknown in the bundled daemon); core.permissions gained microphone_status/request_microphone (AVCaptureDevice authorizationStatus/requestAccess) + a request(kind) dispatcher; daemon GET /v1/permissions now returns screen_recording + microphone; POST request handles kind=microphone. GUI: a per-permission perm_row (status + Grant + Settings) for Screen Recording AND Microphone (Settings -> Privacy_ScreenCapture/Privacy_Microphone). (b) AUTO-RESTART after a grant \u2014 a new Screen Recording grant needs the daemon to restart; GUI 'Restart daemon' POSTs /v1/admin/shutdown and the menu-bar AGENT auto-respawns it (CaptureBar poll: if daemon down AND weStartedDaemon -> ensureDaemon, debounced 6s via lastSpawn; intentional Stop-Daemon clears weStartedDaemon so it isn't respawned). No app quit/reopen. Verified: routes live (sr+mic, bad kind->400), bundled daemon serves both frozen, smoke 68/68, GUI+agent compile clean. Mic grant applies immediately; SR needs the restart.",
-        "[DONE slice 13] FIX: clicking 'Grant' for Screen Recording CRASHED the daemon (Alex: 'permission request failed: Unexpected EOF' + 'no daemon'). Root cause: CGRequestScreenCaptureAccess requires a window-server connection and SIGABRTs a headless process; the daemon called it. Fix: the daemon NEVER prompts for screen recording \u2014 request_screen_recording() returns status only; the GUI shows the prompt itself via CoreGraphics FFI (screen_perm::request() -> CGRequestScreenCaptureAccess; the GUI is a real app, won't crash). Microphone stays in the daemon (requestAccessForMediaType is dispatch-based, headless-safe \u2014 verified). Also made the agent's auto-respawn robust: gated on userStoppedDaemon (set by Stop Daemon) instead of weStartedDaemon, so it recovers regardless of how the daemon started (the 'GUI fails to reconnect on restart' report was the daemon being down from the crash; the poll re-discovers fine once it's back; verified kill-9 -> respawn in ~2s). Verified: daemon request('screen_recording') survives (no crash); smoke 68/68; GUI+agent compile clean; re-froze the bundle.",
-        "[DONE slice 14] (from install testing) (a) FIX: Microphone 'Grant' ALSO crashed the daemon \u2014 AVCaptureDevice.requestAccessForMediaType aborts a headless/backgroundonly process too (not just CGRequest; the earlier test was in an already-granted context). Mic now mirrors screen: daemon returns status without prompting; the GUI mic row has NO Grant button (no block-free Rust prompt) \u2014 only Settings; macOS auto-prompts mic the first time the ffmpeg fallback opens the device. Screen still prompts via the GUI's CoreGraphics FFI. (b) FIX: no visible menu-bar tray on launch \u2014 the agent's text label (\u25cb capture) was too easy to miss; replaced with an SF Symbol ICON (applyIcon: record.circle / record.circle.fill + running count; text fallback) so it's findable in a crowded/notched menu bar. Verified: daemon mic/screen requests survive (return status, no crash); reinstalled to /Applications and launched (agent+daemon+gui up, healthy); smoke 68/68; GUI+agent clean.",
+        "[DONE slice 8] in-GUI Whisper model manager + on-device ASR in the bundle: daemon /v1/asr/* routes (GET models catalog with downloaded/active/downloading flags; POST models/download -> background fetch with asr_download progress over SSE + dup-guard; POST model -> set active, persisted to ~/.capture/config.json via core.config). New core.asr.manager (verified mlx-community repos: whisper-tiny, whisper-base-mlx, whisper-large-v3-turbo-q4, whisper-small-mlx, whisper-medium-mlx, whisper-large-v3-turbo) + whisper_local reads the config. GUI: a Whisper-models panel (Download/Use buttons, live ↓NN% from SSE asr_progress; asr_download events have NO session_id so SSE handles them before the session filter). build_macos_dmg.sh now BUNDLES mlx (de-risked: frozen Metal kernel + whisper-tiny transcribe OK; --asr-selftest in captured_main); freeze_support() prevents a rogue 2nd daemon (numba multiprocessing). DMG ~166M (mlx metallib ~125M); weights download on demand. Verified live: routes + SSE progress (whisper-base-mlx 0->1->done), config persist, bad/dup handling; bundled daemon reports backend_available:true, single process. Contracts regenned (3 ASR models added), smoke 68/68.",
+        "[DONE slice 9] native macOS menu-bar agent (agent/macos/CaptureBar.swift, NSStatusItem + LSUIElement): the bundle's entry point (CFBundleExecutable=CaptureBar). Owns the PERSISTENT menu-bar presence (○/●/⦿N reflecting daemon+capture state, polled /v1 every 2s), the daemon lifecycle (spawns the bundled captured detached; Quit gracefully /v1/admin/shutdown the daemon IF idle, freeing the .app to delete/replace), and launches the GPUI window (capture-gui with CAPTURE_AGENT=1 -> skips its own tray + daemon-spawn, exits on window-close via on_window_closed). Why a separate native agent: gpui 0.2.2 forces ActivationPolicy::Regular (no LSUIElement menu-bar mode) and a resident GPUI process is too heavy for an always-on tray; owner chose native per-OS agents (Windows sibling = #36). build_macos_dmg.sh compiles it (swiftc) + lays out MacOS/{CaptureBar,capture-gui}. Verified: launched via LaunchServices it stays resident, spawns the daemon (/v1/health ok), and opens the window; docs/specs/agent.md.",
+        "[DONE slice 10] GUI usability batch (Alex, from the running app): (1) Windows picker + (2) Sessions lists show ALL rows (dropped the top-6 slices) in a single scrolling page with a CUSTOM DRAGGABLE SCROLLBAR (scrollbar()+on_scrollbar_drag() overlay from the root ScrollHandle's bounds/max_offset/offset) — bare gpui 0.2.2 has no scrollbar widget and nested overflow_scroll regions fight the root for the wheel, so a single scroll context is used (first tried per-list max_h+overflow_y_scroll: scrolled-together + no scrollbar, per Alex; reverted); (3) Launch-and-capture a new process/URL from a minimal single-line text input (focusable div + track_focus/on_key_down: key_char/backspace/⌘V-paste/Enter; no IME) -> POST /v1/sessions with command (a URL is e.g. `open https://…`); (4) per-session Folder button (open the dir in Finder via `open`); (5) per-session Copy-Prompt button writes a ready-to-paste summarization prompt (points a coding agent at the dir's transcript/screenshots/logs) to the clipboard; (6) per-session Delete (finished only) -> new daemon POST /v1/sessions/{id}/delete (registry.delete + rewrite sessions.jsonl index + rmtree the dir guarded by session.json presence; 400 if live). Verified: delete route live-tested (running->400, stopped->200 + dir gone + de-indexed + 404), smoke 68/68, contracts 4/4, GUI builds clean. The text-input + button UI is a manual visual check (no GPUI harness). NOTE: open-folder uses macOS `open` (Windows/Linux branch owed).",
+        "[DONE slice 11] (Alex, from testing) (a) Sessions list was incomplete: the registry rebuilt history from the index (sessions.jsonl) only, so capture-* folders predating an index reset were orphaned/invisible. registry._load_history now also scans $CAPTURE_RUNS_DIR (else ~/.capture/runs) for capture-*/session.json and recovers any uncovered sid (index wins; idempotent; re-bounds to max_sessions) — verified 8->15. (b) Window rows showed 'App — ' because macOS redacts kCGWindowName without Screen Recording; GUI shows just the app name when title is empty. (c) Permissions UI: new core.permissions (Quartz CGPreflight/CGRequestScreenCaptureAccess) + daemon GET /v1/permissions, POST /v1/permissions/request; GUI Permissions row shows Screen Recording status (polled) + Grant (daemon triggers the system prompt; the daemon is the grantee; needs app restart to apply) + Open Settings (x-apple.systempreferences ScreenCapture pane for grant OR revoke — apps can't toggle TCC). Mic via AVFoundation deferred (not in venv). Verified: routes live (status granted/denied, bad kind->400), smoke 68/68, GUI clean. Needed a daemon RE-FREEZE to ship the Python changes in the bundle.",
+        "[DONE slice 12] permissions UI completion (Alex: \"we need both\"): (a) MICROPHONE permission — added pyobjc-framework-AVFoundation (pyproject + freeze --collect-all AVFoundation/CoreMedia; works frozen, verified mic status != unknown in the bundled daemon); core.permissions gained microphone_status/request_microphone (AVCaptureDevice authorizationStatus/requestAccess) + a request(kind) dispatcher; daemon GET /v1/permissions now returns screen_recording + microphone; POST request handles kind=microphone. GUI: a per-permission perm_row (status + Grant + Settings) for Screen Recording AND Microphone (Settings -> Privacy_ScreenCapture/Privacy_Microphone). (b) AUTO-RESTART after a grant — a new Screen Recording grant needs the daemon to restart; GUI 'Restart daemon' POSTs /v1/admin/shutdown and the menu-bar AGENT auto-respawns it (CaptureBar poll: if daemon down AND weStartedDaemon -> ensureDaemon, debounced 6s via lastSpawn; intentional Stop-Daemon clears weStartedDaemon so it isn't respawned). No app quit/reopen. Verified: routes live (sr+mic, bad kind->400), bundled daemon serves both frozen, smoke 68/68, GUI+agent compile clean. Mic grant applies immediately; SR needs the restart.",
+        "[DONE slice 13] FIX: clicking 'Grant' for Screen Recording CRASHED the daemon (Alex: 'permission request failed: Unexpected EOF' + 'no daemon'). Root cause: CGRequestScreenCaptureAccess requires a window-server connection and SIGABRTs a headless process; the daemon called it. Fix: the daemon NEVER prompts for screen recording — request_screen_recording() returns status only; the GUI shows the prompt itself via CoreGraphics FFI (screen_perm::request() -> CGRequestScreenCaptureAccess; the GUI is a real app, won't crash). Microphone stays in the daemon (requestAccessForMediaType is dispatch-based, headless-safe — verified). Also made the agent's auto-respawn robust: gated on userStoppedDaemon (set by Stop Daemon) instead of weStartedDaemon, so it recovers regardless of how the daemon started (the 'GUI fails to reconnect on restart' report was the daemon being down from the crash; the poll re-discovers fine once it's back; verified kill-9 -> respawn in ~2s). Verified: daemon request('screen_recording') survives (no crash); smoke 68/68; GUI+agent compile clean; re-froze the bundle.",
+        "[DONE slice 14] (from install testing) (a) FIX: Microphone 'Grant' ALSO crashed the daemon — AVCaptureDevice.requestAccessForMediaType aborts a headless/backgroundonly process too (not just CGRequest; the earlier test was in an already-granted context). Mic now mirrors screen: daemon returns status without prompting; the GUI mic row has NO Grant button (no block-free Rust prompt) — only Settings; macOS auto-prompts mic the first time the ffmpeg fallback opens the device. Screen still prompts via the GUI's CoreGraphics FFI. (b) FIX: no visible menu-bar tray on launch — the agent's text label (○ capture) was too easy to miss; replaced with an SF Symbol ICON (applyIcon: record.circle / record.circle.fill + running count; text fallback) so it's findable in a crowded/notched menu bar. Verified: daemon mic/screen requests survive (return status, no crash); reinstalled to /Applications and launched (agent+daemon+gui up, healthy); smoke 68/68; GUI+agent clean.",
         "[DONE slice 15] (Alex) menu-bar 'Open Window' now FOCUSES the existing GUI window (agent tracks guiProcess; if isRunning -> NSRunningApplication.activate) instead of launching a duplicate; only launches a fresh one when none is open. Agent compiles clean.",
         "[DONE slice 16] Microphone Grant restored (Alex: 'cannot request it myself') now that Developer-ID signing works: the GUI mic 'Grant' spawns the bundled agent one-shot (CaptureBar --request-mic -> Swift AVCaptureDevice.requestAccess, waits for the answer, exits); shares the Team ID so the grant reaches the daemon. request_permission(kind) dispatches screen (CoreGraphics FFI) vs mic (agent one-shot); both perm rows promptable again. GUI+agent compile clean.",
-        "[DONE slice 17] (Alex: 'settings should not bloat main screen') Settings screen: a \u2699Settings/\u2190Back toggle (show_settings) splits the window into the capture dashboard (Refresh/Start, Launch input, windows/sessions, live detail) and a Settings screen holding Capture quality + Whisper model manager + Permissions + skill installer (each panel via settings.then()/(!settings).then() so only one screen's panels render). NEW Capture quality: chip toggles for screenshot format (PNG/JPEG, shot_format), resolution (RES_PRESETS native/1440/1080/720, shot_res_ix), JPEG quality (60/80/95 when jpeg) \u2014 merged into the /v1/sessions body via shot_settings() so new captures use them (existing daemon StartSessionRequest fields; no daemon change). GUI builds clean. NOT yet deployed \u2014 Alex has a live meeting transcription on the running daemon; will rebuild+reinstall after.",
+        "[DONE slice 17] (Alex: 'settings should not bloat main screen') Settings screen: a ⚙Settings/←Back toggle (show_settings) splits the window into the capture dashboard (Refresh/Start, Launch input, windows/sessions, live detail) and a Settings screen holding Capture quality + Whisper model manager + Permissions + skill installer (each panel via settings.then()/(!settings).then() so only one screen's panels render). NEW Capture quality: chip toggles for screenshot format (PNG/JPEG, shot_format), resolution (RES_PRESETS native/1440/1080/720, shot_res_ix), JPEG quality (60/80/95 when jpeg) — merged into the /v1/sessions body via shot_settings() so new captures use them (existing daemon StartSessionRequest fields; no daemon change). GUI builds clean. NOT yet deployed — Alex has a live meeting transcription on the running daemon; will rebuild+reinstall after.",
         "[REMAINING for passes:true] RenderImage with eviction for the preview (img() cache leak on long runs); a custom branded menu-bar glyph (SF Symbol icon is done); global hotkey moved into the agent (works window-less); delete-confirm + bulk/clear-all captures; onboarding (SMAppService daemon/login-item registration + self-test capture); offline transcription polish (avoid hf revision-check on cached models); the rest of M1 #31 (brew tap, prebuilt helper, capture doctor; TCC daemon-grant via Developer-ID is DONE + notarization working); migrate gpui 0.2.2 -> pinned zed git rev for Linux/a11y"
       ],
       "passes": false,
@@ -510,7 +510,7 @@
       "id": 34,
       "category": "gui",
       "priority": "medium",
-      "description": "M4 \u2014 Windows release: GPUI app on the DX11 backend, Inno Setup installer (+ winget), logon-task daemon install, interactive-station preflight UX, and per-process audio via a NATIVE helper binary (windows-rs, ActivateAudioInterfaceAsync + PROCESS_LOOPBACK with INCLUDE_TARGET_PROCESS_TREE for Chromium-family apps) speaking the frozen 16kHz s16le PCM stdout contract \u2014 closes the per-process half of #21. Ship with honest SmartScreen messaging (Trusted Signing unavailable to individuals; OV cert does not clear cold-start).",
+      "description": "M4 — Windows release: GPUI app on the DX11 backend, Inno Setup installer (+ winget), logon-task daemon install, interactive-station preflight UX, and per-process audio via a NATIVE helper binary (windows-rs, ActivateAudioInterfaceAsync + PROCESS_LOOPBACK with INCLUDE_TARGET_PROCESS_TREE for Chromium-family apps) speaking the frozen 16kHz s16le PCM stdout contract — closes the per-process half of #21. Ship with honest SmartScreen messaging (Trusted Signing unavailable to individuals; OV cert does not clear cold-start).",
       "acceptance_criteria": [
         "CaptureSetup-x64.exe installs and first capture works without a terminal",
         "Per-process loopback isolates a Chromium app's audio while other apps play sound",
@@ -527,7 +527,7 @@
       "id": 35,
       "category": "infrastructure",
       "priority": "medium",
-      "description": "M5 \u2014 Linux: third platform backend (X11 window discovery + screenshots first; Wayland via xdg-desktop-portal ScreenCast \u2014 picker-only targeting, persistent share indicator, re-persisted restore tokens, documented app_name degradation; PipeWire per-app audio with a reconnect-tracking helper using -3805-style semantics), systemd user unit, then GPUI app on wgpu (Vulkan requirement documented; engine artifact must not link GPUI so headless/SSH agents keep working).",
+      "description": "M5 — Linux: third platform backend (X11 window discovery + screenshots first; Wayland via xdg-desktop-portal ScreenCast — picker-only targeting, persistent share indicator, re-persisted restore tokens, documented app_name degradation; PipeWire per-app audio with a reconnect-tracking helper using -3805-style semantics), systemd user unit, then GPUI app on wgpu (Vulkan requirement documented; engine artifact must not link GPUI so headless/SSH agents keep working).",
       "acceptance_criteria": [
         "MCP agent captures screenshots+logs on X11 Linux with no GUI installed",
         "Wayland capture works through the portal flow with documented semantics",
@@ -543,7 +543,7 @@
       "id": 36,
       "category": "gui",
       "priority": "medium",
-      "description": "Windows menu-bar/tray agent \u2014 the native sibling of the macOS CaptureBar (docs/specs/agent.md). A thin always-resident system-tray app (Win32 NOTIFYICON or WinUI/C#) that owns the persistent tray icon, the daemon lifecycle (spawn the bundled captured; stop it on Quit), and launches the GPUI window (capture-gui with CAPTURE_AGENT=1) on demand. Same role + same /v1 contract as the macOS agent; no shared code (native per-OS, owner's decision). Part of the M4 Windows release.",
+      "description": "Windows menu-bar/tray agent — the native sibling of the macOS CaptureBar (docs/specs/agent.md). A thin always-resident system-tray app (Win32 NOTIFYICON or WinUI/C#) that owns the persistent tray icon, the daemon lifecycle (spawn the bundled captured; stop it on Quit), and launches the GPUI window (capture-gui with CAPTURE_AGENT=1) on demand. Same role + same /v1 contract as the macOS agent; no shared code (native per-OS, owner's decision). Part of the M4 Windows release.",
       "acceptance_criteria": [
         "Launching the packaged Windows app shows a persistent system-tray icon that reflects daemon/capture state and survives closing the window",
         "The tray spawns the bundled daemon on launch and stops it on Quit (so the install isn't pinned)",
@@ -559,7 +559,7 @@
       "id": 37,
       "category": "gui",
       "priority": "medium",
-      "description": "Grouped multi-window/multi-app capture picker + microphone selector. The GUI window picker groups windows by application with checkboxes (multi-select across several apps at once); 'Start capture' spawns one /v1/sessions per checked window (per-window screenshots via window_id), deduping app audio per process so only the first checked window of each app records the app audio (macOS audio is per-application, not per-window). A mic selector (GET /v1/audio/mics; devices from the bundled audiocap helper's --list-mics, AVFoundation AVCaptureSession \u2014 NO ffmpeg) attaches ONE chosen input device to ONE app via a per-app mic radio; the mic records as a SEPARATE track (mic.s16le / mic_transcript.jsonl), never mixed with app audio. mic_device persists in gui-settings.json. Daemon: StartSessionRequest.mic_device + GET /v1/audio/mics; CaptureSession runs a second AudioCapture(track='mic'); helper gains --mic <id|default> and --list-mics.",
+      "description": "Grouped multi-window/multi-app capture picker + microphone selector. The GUI window picker groups windows by application with checkboxes (multi-select across several apps at once); 'Start capture' spawns one /v1/sessions per checked window (per-window screenshots via window_id), deduping app audio per process so only the first checked window of each app records the app audio (macOS audio is per-application, not per-window). A mic selector (GET /v1/audio/mics; devices from the bundled audiocap helper's --list-mics, AVFoundation AVCaptureSession — NO ffmpeg) attaches ONE chosen input device to ONE app via a per-app mic radio; the mic records as a SEPARATE track (mic.s16le / mic_transcript.jsonl), never mixed with app audio. mic_device persists in gui-settings.json. Daemon: StartSessionRequest.mic_device + GET /v1/audio/mics; CaptureSession runs a second AudioCapture(track='mic'); helper gains --mic <id|default> and --list-mics.",
       "acceptance_criteria": [
         "The window picker groups windows under per-app headers with a checkbox per window; windows from multiple apps can be checked simultaneously.",
         "Start capture spawns one session per checked window; screenshots are per-window (correct window), and only one session per app process captures app audio.",
@@ -576,10 +576,10 @@
       "id": 38,
       "category": "audio",
       "priority": "medium",
-      "description": "Microphone echo/noise cancellation (without breaking playback). When a mic track is recorded alongside app audio on a device with speakers (a laptop), the built-in mic picks up the speaker output = acoustic echo. First attempt used the macOS voice-processing unit (AVAudioEngine setVoiceProcessingEnabled) which DOES echo-cancel, but it puts the system into a communication audio mode that ducks/mutes other apps' output (user can't hear the captured app) and over-cancels the mic to silence \u2014 REVERTED. #37's mic now uses plain AVCaptureSession; headphones are the interim workaround. A proper fix must remove speaker bleed from the mic track WITHOUT affecting playback \u2014 e.g. offline/streaming NLMS adaptive echo cancellation using the already-captured app audio (audio.s16le) as the reference signal, or a non-invasive AEC config that doesn't engage system audio ducking. Optionally noise suppression for the mic.",
+      "description": "Microphone echo/noise cancellation (without breaking playback). When a mic track is recorded alongside app audio on a device with speakers (a laptop), the built-in mic picks up the speaker output = acoustic echo. First attempt used the macOS voice-processing unit (AVAudioEngine setVoiceProcessingEnabled) which DOES echo-cancel, but it puts the system into a communication audio mode that ducks/mutes other apps' output (user can't hear the captured app) and over-cancels the mic to silence — REVERTED. #37's mic now uses plain AVCaptureSession; headphones are the interim workaround. A proper fix must remove speaker bleed from the mic track WITHOUT affecting playback — e.g. offline/streaming NLMS adaptive echo cancellation using the already-captured app audio (audio.s16le) as the reference signal, or a non-invasive AEC config that doesn't engage system audio ducking. Optionally noise suppression for the mic.",
       "acceptance_criteria": [
         "With a mic track + app audio on laptop speakers, the mic transcript contains the user's voice but NOT the app's audio (no echo).",
-        "App audio playback is unaffected \u2014 the user still hears the captured app normally while recording.",
+        "App audio playback is unaffected — the user still hears the captured app normally while recording.",
         "Works for the built-in mic; degrades gracefully (plain capture) if cancellation can't run."
       ],
       "passes": false,
@@ -614,7 +614,7 @@
         "The session summary exposes capability flags reflecting what remains after pruning.",
         "The GUI shows per-session status icons and disables actions that pruning made impossible (e.g. re-transcribe when audio removed)."
       ],
-      "passes": false,
+      "passes": true,
       "dependencies": [
         39
       ]
@@ -628,9 +628,221 @@
         "POST retranscribe on a session with audio produces a fresh transcript using the requested model.",
         "Attempting it on an audio-pruned session is rejected (can_retranscribe=false)."
       ],
-      "passes": false,
+      "passes": true,
       "dependencies": [
         40
+      ]
+    },
+    {
+      "id": 42,
+      "category": "gui",
+      "priority": "medium",
+      "description": "Toggle visual (screenshot) capture on/off. A GUI control to start a capture with screenshots DISABLED (audio-only session) — the daemon already accepts capture_screenshots at start, so this is a small start-option toggle — and, as a follow-on, pause/resume screenshots MID-session (needs a new daemon endpoint to start/stop the Screenshotter on a live session).",
+      "acceptance_criteria": [
+        "A GUI toggle starts a capture with no screenshots (audio + transcript only); the session reflects capture_screenshots=false.",
+        "(stretch) Screenshot capture can be paused/resumed on a running session."
+      ],
+      "passes": true,
+      "dependencies": [
+        33
+      ]
+    },
+    {
+      "id": 43,
+      "category": "engine",
+      "priority": "medium",
+      "description": "Import an existing audio or video file as a session. Audio: read the file, resample to 16 kHz mono s16le, run ASR → a normal session with transcript.jsonl/.txt (+ the raw audio). Video: ALSO extract periodic frames as screenshots/ and the audio track for transcription, so external recordings get the same session artifacts (playback scrubber, prompts, search). Frame + audio extraction must avoid ffmpeg (the project's no-ffmpeg rule) — use AVFoundation in a Swift helper (AVAssetImageGenerator for frames, AVAssetReader for audio). New POST /v1/sessions/import {path} or capture_import MCP tool + GUI 'Import…' control.",
+      "acceptance_criteria": [
+        "Importing an audio file produces a session with a transcript using the active model.",
+        "Importing a video file produces a session with timestamped screenshots (extracted frames) + a transcript of its audio.",
+        "No ffmpeg dependency — extraction goes through the bundled helper (AVFoundation)."
+      ],
+      "passes": true,
+      "dependencies": [
+        39
+      ]
+    },
+    {
+      "id": 44,
+      "category": "indexing",
+      "priority": "medium",
+      "description": "Hierarchical multimodal index of a session's screenshots via a REMOTE multimodal LLM (LM Studio on the LAN, 192.168.31.217:1234, Qwen vision model, OpenAI-compatible /v1/chat/completions). Divide-and-conquer over the timeline: build a balanced binary tree by midpoint splits, vision-caption the LEAF frames, then conquer by combining children up to a root summary. Each node stores metadata + RAW artifacts (time range, representative frame, raw vision caption, raw time-aligned transcript slice, fused summary, parent/child links) so the session is readable at any zoom level and re-combinable without re-running vision. Leaf frames chosen by a tunable index sampling rate (0<rate<=1, default 0.5 = every other frame) with a max_leaves backstop; the capture interval is also configurable (down to 0.5s). Transcript fused into the combine step when present. DISABLED BY DEFAULT — enabled only when a working LM Studio endpoint is configured (URL set + reachable preflight); no frames are sent otherwise. Resumable background job + SSE progress (the run is lengthy and the LAN server may drop). Stdlib-only OpenAI-compatible vision client. New POST /v1/sessions/{id}/index + GET .../index + capture_index MCP tool + GUI Index action with a progress tree. Spec: docs/specs/indexing.md (APPROVED — D0–D5 resolved).",
+      "acceptance_criteria": [
+        "Indexing a finished session builds index.json: a balanced binary tree of nodes, each with time range + representative frame + raw vision caption + raw transcript slice + fused summary, and a root whole-session summary.",
+        "The run streams progress over SSE (descend/ascend phases, nodes_done/total) and checkpoints so a dropped LAN connection resumes rather than restarts.",
+        "Leaf count is bounded by the tunable sampling rate + max_leaves cap; a session without screenshots is rejected (can_index=false).",
+        "Indexing is disabled unless a working LM Studio endpoint is configured (index_available); the route 400/503s and the GUI control is hidden otherwise.",
+        "Reaches both surfaces: daemon endpoint + Python client + capture_index MCP tool + Rust client + GUI control (parity)."
+      ],
+      "passes": true,
+      "dependencies": [
+        40,
+        43
+      ]
+    },
+    {
+      "id": 45,
+      "category": "asr",
+      "priority": "high",
+      "description": "Transcription quality + settings. Root cause of garbage transcripts (e.g. Russian audio → repeated 'Thank you.'): Whisper hallucinates phantom phrases on SHORT chunks (old 8s default) and on SILENCE (a dead mic looped junk). Fixes: (1) hallucination guards in the mlx + faster-whisper backends (condition_on_previous_text=False, no_speech/logprob/compression thresholds); (2) an RMS silence-gate (asr.is_silent) that skips near-silent chunks in audio.py + retranscribe.py; (3) ASR LANGUAGE as a persisted, on-the-fly SETTING (manager.active_language; POST /v1/asr/language; client; MCP transcription_settings + capture_retranscribe language arg; GUI field in Settings + the live playback pane — a running capture's next chunk picks it up); (4) chunk/sample LENGTH as a persisted SETTING (default 30s, manager.active_chunk_seconds; POST /v1/asr/chunk; GUI chips; StartSessionRequest chunk default None→config; re-transcribe uses the current setting not the old session's 8s). Re-transcribe accepts language + chunk_seconds overrides to fix an existing wrong-language transcript.",
+      "acceptance_criteria": [
+        "A non-English capture transcribes correctly instead of repeated 'Thank you.' (verified: a Russian session re-transcribed at 30s + language=ru produced 219 coherent segments vs 18 'Thank you.').",
+        "A silent/dead mic produces no hallucinated text (silence-gated).",
+        "Language + chunk length are persisted settings reachable from the daemon, the GUI (Settings + live pane), and MCP (transcription_settings); a language change applies to a running capture on the fly.",
+        "Re-transcribe can fix an existing session with a chosen language/chunk length."
+      ],
+      "passes": true,
+      "dependencies": [
+        41
+      ]
+    },
+    {
+      "id": 46,
+      "category": "engine",
+      "priority": "medium",
+      "description": "Switch the active microphone on a LIVE capture without restarting. CaptureSession.set_mic_device(device): stop the running mic AudioCapture, start a new one with the new device, appending to mic.s16le / mic_transcript.* so the recording stays continuous (each capture's epoch is real wall-clock, so iso timestamps align). device id / 'default' = on/switch, null/'' = off. AudioCapture gained an append mode. Surfaces (parity): POST /v1/sessions/{id}/mic {device}; DaemonClient.set_mic; MCP capture_set_mic; GUI live Mic chip row in the playback pane (running sessions) that highlights the active mic_device (now in the summary).",
+      "acceptance_criteria": [
+        "On a running capture, switching the mic device changes the recorded input live and appends to the mic track (verified: switch ON created mic.s16le, switch OFF set mic_status=off).",
+        "Switching on a non-running session is rejected (400); unknown session 404.",
+        "Reaches the daemon, the Python client, the capture_set_mic MCP tool, and the GUI (parity)."
+      ],
+      "passes": true,
+      "dependencies": [
+        8
+      ]
+    },
+    {
+      "id": 47,
+      "category": "skill",
+      "priority": "low",
+      "description": "Keep the bundled `capture` skill current + suggest updating it. Updated skills/capture/SKILL.md + references/quick-actions.md to document the full tool set (list_windows, list_audio_devices, capture_set_mic, capture_prune, capture_retranscribe, transcription_settings, capture_import, capture_index) + the new capture_start options (window_id, mic_device, capture_screenshots) and the hallucination/transcription-settings guidance. The GUI Settings already detects a stale install via a content hash (skill::status → SkillStatus::UpdateAvailable, shown as '↑ update'); editing the bundled skill makes installed copies surface that suggestion. The DMG build bundles the skill into Resources/skill.",
+      "acceptance_criteria": [
+        "The bundled skill documents every current MCP tool + capture_start option.",
+        "Settings shows '↑ update' for an installed skill that differs from the bundled one (verified: edited skill differs from the installed copy)."
+      ],
+      "passes": true,
+      "dependencies": []
+    },
+    {
+      "id": 48,
+      "category": "gui",
+      "priority": "medium",
+      "description": "In-app auto-update from GitHub releases, with confirmation. gui/src/update.rs: at startup check() GETs github.com/repos/alex-nax/capture/releases/latest, semver-compares tag_name to the running CARGO_PKG_VERSION, and finds the .dmg asset; Settings shows 'vX · up to date' or 'vY available → Update…'. Update goes through the shared confirm modal (ConfirmKind::Update); ONLY on confirm, download_and_install fetches the notarized dmg and spawns a detached updater script that quits the app + daemon, mounts the dmg, replaces /Applications/Capture.app, strips quarantine, and relaunches. Never installs without confirmation; same Developer-ID signature preserves the TCC grant.",
+      "acceptance_criteria": [
+        "On startup the app checks GitHub and, when a newer release exists, surfaces it in Settings (verified against the real API: 0.2.0 vs v0.2.0 → no offer; the .dmg asset URL is correctly resolved).",
+        "Installing requires explicit confirmation (a modal); the updater replaces /Applications/Capture.app and relaunches.",
+        "No update is offered or installed when already on the latest version."
+      ],
+      "passes": true,
+      "dependencies": [
+        33
+      ]
+    },
+    {
+      "id": 49,
+      "category": "indexing",
+      "priority": "high",
+      "description": "Resolution-adaptive index max_px. Study (daf420, controlled): same frames/prompt, max_px 1024->2048 lifted UE C++ code_fidelity 0.42->0.88, filename accuracy 0.30->0.95, hallucination 0.55->0.10 — resolution is THE lever for systematic small-font OCR (sampling density is not). vision_client.structured_image gains a per-call max_px override; the AUTO path bumps code/terminal leaves to CAPTURE_INDEX_CODE_MAX_PX (default 2048) while classify + non-code stay at the 1024 base; IndexRequest.max_px overrides the client default for a whole build (reproduces the sweep from GUI/MCP).",
+      "acceptance_criteria": [
+        "Auto-path code/terminal frames are extracted at the higher max_px while slides/meeting/video stay at the base (verified: a code frame's structured_image is called with the bumped max_px).",
+        "IndexRequest.max_px overrides the client default end-to-end (daemon builds the client with it).",
+        "Hermetic + smoke + contract tests stay green; docs/specs/indexing.md updated."
+      ],
+      "passes": true,
+      "dependencies": [
+        44
+      ]
+    },
+    {
+      "id": 50,
+      "category": "indexing",
+      "priority": "high",
+      "description": "Enrich the built-in `meeting` extractor with work content. Study (432498 standup): the default meeting schema (participants/active_speaker/shared_content) missed the user's primary interest — task assignments + data. Add task_assignments, data_points, decisions to CONTENT_PROMPTS['meeting'] schema+prompt so auto-classified meetings capture owner->task, ticket refs, dates, and decisions directly (auto already routes real Meet captures to `meeting`).",
+      "acceptance_criteria": [
+        "CONTENT_PROMPTS['meeting'] schema includes task_assignments/data_points/decisions and the prompt asks for them.",
+        "combine_focus still attributes who-said-what.",
+        "Hermetic/smoke/contract green; spec updated."
+      ],
+      "passes": true,
+      "dependencies": [
+        44
+      ]
+    },
+    {
+      "id": 51,
+      "category": "indexing",
+      "priority": "medium",
+      "description": "Hybrid OCR-escalation for zero-error-tolerant code. Study finding: the local model's code_legible SELF-flag is untrustworthy (rated 38/65 frames 'high' yet confabulated); the reliable trigger is CROSS-FRAME OCR DISAGREEMENT (token instability) on persistent code, plus a prefer-dictated-tokens narration<->OCR reconciliation (1c0c0d: narrated note values recovered tokens OCR garbled). On flagged frames, do a targeted high-res/frontier re-read instead of trusting consensus.",
+      "acceptance_criteria": [
+        "Detect cross-frame token instability for code content and mark those frames for re-read.",
+        "Narration-dictated tokens deterministically win over conflicting OCR.",
+        "Does not regress non-code content."
+      ],
+      "passes": false,
+      "dependencies": [
+        49
+      ]
+    },
+    {
+      "id": 52,
+      "category": "gui",
+      "priority": "medium",
+      "description": "Index endpoint config as HOST:PORT, not a full chat-completions URL. The GUI/Settings index field should take an IP/hostname + port; the daemon builds the OpenAI-compatible path (/v1/chat/completions). Keep a single default provider (LM Studio, OpenAI-compatible) for now — a provider selector is DEFERRED (user undecided) but the host:port split must not preclude adding one later. GUI<->MCP parity (daemon /v1 shared).",
+      "acceptance_criteria": [
+        "Settings accepts host:port; daemon composes the endpoint path; existing full-URL config still works (back-compat).",
+        "No provider selector yet, but the model is structured so one can be added.",
+        "Parity: same config reachable from MCP/daemon."
+      ],
+      "passes": false,
+      "dependencies": [
+        44
+      ]
+    },
+    {
+      "id": 53,
+      "category": "gui",
+      "priority": "medium",
+      "description": "Model selector as a DROPDOWN of the provider's available models, not a text input. Add a daemon route that GETs the provider's /v1/models (via the configured host:port) and returns the list; the GUI populates a dropdown and persists the choice. MCP exposes the same listing for parity.",
+      "acceptance_criteria": [
+        "Daemon route lists models from the configured provider; GUI shows a dropdown populated from it.",
+        "Reachable from MCP/daemon (parity).",
+        "Graceful when the endpoint is unreachable (empty list + hint)."
+      ],
+      "passes": false,
+      "dependencies": [
+        52
+      ]
+    },
+    {
+      "id": 54,
+      "category": "gui",
+      "priority": "medium",
+      "description": "Start-capture PRESET picker. On Start, show a popup of capture presets so the capture meets indexing requirements: e.g. 'Meeting' -> enable mic + screenshots + index preset=meeting (+ task fields from #50); 'Coding tutorial' -> high max_px (#49) + code-aware prompt; 'Lecture', 'General'. The preset wires both capture-time config (mic/screenshots) and the index defaults for that session. Parity with MCP capture_start.",
+      "acceptance_criteria": [
+        "Start opens a preset popup; choosing a preset sets the matching capture + index config (e.g. meeting toggles mic on).",
+        "The chosen preset is recorded on the session and used as the index default.",
+        "MCP capture_start accepts the same preset for parity."
+      ],
+      "passes": false,
+      "dependencies": [
+        49,
+        50
+      ]
+    },
+    {
+      "id": 55,
+      "category": "engine",
+      "priority": "high",
+      "description": "Live/online indexing during capture. The indexer currently runs offline (after capture). When an index endpoint is available, incrementally index frames as they arrive during a LIVE session (rolling leaf captions + periodic combine), so an index exists in near-real-time; fall back to the current post-capture build when no endpoint. Must not block capture or the daemon loop (background worker, SSE progress).",
+      "acceptance_criteria": [
+        "With an endpoint configured, a live session accrues index nodes during capture (not only after stop).",
+        "No endpoint -> unchanged post-capture behavior.",
+        "Live indexing runs off the capture/daemon hot path; SSE reports progress; GUI<->MCP parity."
+      ],
+      "passes": false,
+      "dependencies": [
+        44,
+        49
       ]
     }
   ]

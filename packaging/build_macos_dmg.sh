@@ -15,7 +15,7 @@
 # Output: dist/Capture-<version>.dmg  (dist/ is gitignored)
 #
 # Env knobs:
-#   CAPTURE_GUI_VERSION       bundle version (default 0.2.0)
+#   CAPTURE_GUI_VERSION       bundle version (default 0.2.5)
 #   CAPTURE_SKIP_FREEZE=1     reuse an existing freeze (fast GUI-only iteration)
 #   CAPTURE_SIGN_IDENTITY     "Developer ID Application: NAME (TEAMID)" — sign for
 #                             distribution (hardened runtime + entitlements + shared
@@ -27,7 +27,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Capture"
 BUNDLE_ID="com.capturemcp.gui"
-VERSION="${CAPTURE_GUI_VERSION:-0.2.0}"
+VERSION="${CAPTURE_GUI_VERSION:-0.2.5}"
 DIST="$ROOT/dist"
 APP="$DIST/$APP_NAME.app"
 DMG="$DIST/$APP_NAME-$VERSION.dmg"
@@ -67,6 +67,10 @@ else
     --workpath "$ROOT/packaging/build/work" \
     --specpath "$ROOT/packaging/build" \
     --hidden-import capture_mcp.core.platform.macos \
+    --hidden-import capture_mcp.core.import_media \
+    --hidden-import capture_mcp.core.vision_client \
+    --hidden-import capture_mcp.core.indexer \
+    --hidden-import capture_mcp.core.frames \
     --hidden-import capture_mcp.core.asr.whisper_local \
     --hidden-import capture_mcp.core.asr.openai_compat \
     --collect-all Quartz \

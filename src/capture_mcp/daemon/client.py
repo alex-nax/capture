@@ -94,6 +94,96 @@ class DaemonClient:
     def delete(self, sid: str) -> dict:
         return self._request("POST", f"/v1/sessions/{sid}/delete", body={})
 
+    def prune(self, sid: str, parts: list[str]) -> dict:
+        return self._request("POST", f"/v1/sessions/{sid}/prune", body={"parts": parts})
+
+    def retranscribe(self, sid: str, asr_backend: str | None = None, model: str | None = None,
+                     language: str | None = None, chunk_seconds: float | None = None) -> dict:
+        body: dict = {}
+        if asr_backend:
+            body["asr_backend"] = asr_backend
+        if model:
+            body["model"] = model
+        if language is not None:
+            body["language"] = language
+        if chunk_seconds is not None:
+            body["chunk_seconds"] = chunk_seconds
+        return self._request("POST", f"/v1/sessions/{sid}/retranscribe", body=body)
+
+    def set_mic(self, sid: str, device: str | None) -> dict:
+        return self._request("POST", f"/v1/sessions/{sid}/mic", body={"device": device})
+
+    def asr_set_language(self, language: str | None) -> dict:
+        return self._request("POST", "/v1/asr/language", body={"language": language or ""})
+
+    def asr_set_chunk(self, seconds: float) -> dict:
+        return self._request("POST", "/v1/asr/chunk", body={"seconds": seconds})
+
+    def import_media(self, path: str, output_dir: str | None = None,
+                     asr_backend: str | None = None, screenshot_interval: float | None = None) -> dict:
+        body: dict = {"path": path}
+        if output_dir:
+            body["output_dir"] = output_dir
+        if asr_backend:
+            body["asr_backend"] = asr_backend
+        if screenshot_interval is not None:
+            body["screenshot_interval"] = screenshot_interval
+        return self._request("POST", "/v1/sessions/import", body=body)
+
+    def index(self, sid: str, endpoint: str | None = None, model: str | None = None,
+              sample_rate: float | None = None, max_leaves: int | None = None,
+              fuse_transcript: bool | None = None, prompt_preset: str | None = None,
+              leaf_prompt: str | None = None, leaf_schema: dict | None = None,
+              classify_prompt: str | None = None, max_px: int | None = None,
+              provider: str | None = None, host: str | None = None, port: int | None = None) -> dict:
+        body: dict = {}
+        if provider:
+            body["provider"] = provider
+        if host:
+            body["host"] = host
+        if port is not None:
+            body["port"] = port
+        if endpoint:
+            body["endpoint"] = endpoint
+        if model:
+            body["model"] = model
+        if sample_rate is not None:
+            body["sample_rate"] = sample_rate
+        if max_leaves is not None:
+            body["max_leaves"] = max_leaves
+        if fuse_transcript is not None:
+            body["fuse_transcript"] = fuse_transcript
+        if prompt_preset:
+            body["prompt_preset"] = prompt_preset
+        if leaf_prompt:
+            body["leaf_prompt"] = leaf_prompt
+        if leaf_schema:
+            body["leaf_schema"] = leaf_schema
+        if classify_prompt:
+            body["classify_prompt"] = classify_prompt
+        if max_px is not None:
+            body["max_px"] = max_px
+        return self._request("POST", f"/v1/sessions/{sid}/index", body=body)
+
+    def get_index(self, sid: str) -> dict:
+        return self._request("GET", f"/v1/sessions/{sid}/index")
+
+    def index_providers(self) -> dict:
+        return self._request("GET", "/v1/index/providers")
+
+    def index_models(self, provider: str | None = None, host: str | None = None,
+                     port: int | None = None, key: str | None = None, url: str | None = None) -> dict:
+        params = {"provider": provider, "host": host, "port": port, "key": key, "url": url}
+        return self._request("GET", "/v1/index/models", params=params)
+
+    def index_status(self, url: str | None = None, model: str | None = None) -> dict:
+        params: dict = {}
+        if url:
+            params["url"] = url
+        if model:
+            params["model"] = model
+        return self._request("GET", "/v1/index/status", params=params)
+
     def transcript(self, sid: str, tail: int | None = None) -> dict:
         return self._request("GET", f"/v1/sessions/{sid}/transcript", params={"tail": tail})
 

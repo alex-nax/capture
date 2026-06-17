@@ -57,6 +57,7 @@ class AudioCapture:
         asr_backend: str = "auto",
         t0: float | None = None,
         emit=None,
+        append: bool = False,  # append to existing files instead of truncating (live mic switch)
     ) -> None:
         self.out_dir = out_dir
         self.pid = pid
@@ -73,6 +74,7 @@ class AudioCapture:
         self.chunk_seconds = max(1.0, float(chunk_seconds))
         self.asr_name = asr_backend
         self.t0 = t0 if t0 is not None else now()
+        self._append = append
         # Optional event hook (EventBus.publish-shaped); publishing never raises.
         self._emit = emit
 
@@ -117,9 +119,12 @@ class AudioCapture:
         # Open outputs and launch; roll everything back on any failure so we
         # never leak file handles or an undrained subprocess.
         try:
-            self._jsonl = open(self.out_dir / self._fn_jsonl, "w", buffering=1)
-            self._txt = open(self.out_dir / self._fn_txt, "w", buffering=1)
-            self._raw = open(self.out_dir / self._fn_raw, "wb")
+            # Append (don't truncate) when continuing a track across a live mic switch —
+            # each capture's epoch is real wall-clock, so iso timestamps stay aligned.
+            tmode, bmode = ("a", "ab") if self._append else ("w", "wb")
+            self._jsonl = open(self.out_dir / self._fn_jsonl, tmode, buffering=1)
+            self._txt = open(self.out_dir / self._fn_txt, tmode, buffering=1)
+            self._raw = open(self.out_dir / self._fn_raw, bmode)
             self._proc = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=_NO_WINDOW
             )
@@ -298,6 +303,10 @@ class AudioCapture:
             return
         epoch = self._audio_epoch if self._audio_epoch is not None else self.t0
         pcm = np.frombuffer(pcm_bytes, dtype="<i2").astype(np.float32) / 32768.0
+        # Skip near-silent chunks (a muted/dead mic or a long pause): Whisper hallucinates
+        # phantom phrases on silence. Offsets still advanced above, so the timeline holds.
+        if asr_pkg.is_silent(pcm):
+            return
         try:
             segments = self._asr.transcribe(pcm, SAMPLE_RATE)
         except Exception:

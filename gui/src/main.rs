@@ -6,6 +6,7 @@ mod daemon;
 mod hotkey;
 mod skill;
 mod tray;
+mod update;
 
 use app::CaptureApp;
 use assets::Assets;

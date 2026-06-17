@@ -38,6 +38,17 @@ this spec is only the contract.
   audio.
 - macOS: `audiocap --list-mics` — prints one JSON object per stdout line `{"id","name","default"}`
   for the available input devices, then exits 0 (used by `GET /v1/audio/mics`). Not a PCM stream.
+- macOS **offline import** modes (feature #43 — file readers, NOT capture; AVFoundation only, no
+  ScreenCaptureKit, no permission, no ffmpeg):
+  - `audiocap --extract-audio <file> [--rate <hz>]` — decode+resample the file's first audio track
+    (`AVAssetReader`) and write the **same s16le mono PCM contract** to stdout as a **one-shot** (not a
+    live stream; EOF = done). No `READY` line. Exit `0` ok, `3` no audio track (recoverable — a silent
+    video still imports as frames-only), `4` open/read failure.
+  - `audiocap --extract-frames <file> --out <dir> [--interval <sec>]` — sample frames
+    (`AVAssetImageGenerator`, longest-edge capped) at `0, interval, 2·interval … duration` and write one
+    PNG per timestamp to `<dir>/<offset_ms>.png` (integer-millisecond stem; the importer renames these to
+    `fs_stamp` on the audio timeline). Frame count → stderr. **Does not use stdout.** No video track ⇒ writes
+    nothing, exit `0`. `--out` required (else exit 2).
 - Windows: `python helper/audiocap_win.py [--rate <hz>] [--stall-timeout <s>]`
   (system mix only today; `--stall-timeout` is accepted but currently a no-op —
   see Known limitations).
@@ -71,9 +82,11 @@ this spec is only the contract.
 - `0` — clean shutdown (signal received, or parent closed stdout/EPIPE).
 - `1` — fatal capture failure (macOS: permission error, or reconnect budget
   exhausted with no audio ever received).
-- `2` — usage error (no target).
+- `2` — usage error (no target; or `--extract-frames` without `--out`).
 - macOS-specific startup failures: `3` no app matched pid/bundle, `4` no
   display, `5` shareable-content enumeration failed.
+- **Extract-mode codes are scoped to that mode** (they are file reads, not capture
+  startup): `--extract-audio` uses `3` = no audio track (recoverable), `4` = read failure.
 
 ### Signals
 

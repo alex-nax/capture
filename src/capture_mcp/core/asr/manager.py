@@ -46,7 +46,15 @@ CATALOG: list[dict] = [
 DEFAULT_REPO = "mlx-community/whisper-large-v3-turbo"
 
 _CONFIG_KEY = "whisper_model"
+_LANG_KEY = "whisper_language"
+_CHUNK_KEY = "audio_chunk_seconds"
 _KNOWN_REPOS = {m["repo"] for m in CATALOG}
+
+#: Default transcription chunk length. Whisper is trained on 30 s windows; shorter
+#: chunks (the old 8 s) make it hallucinate phantom phrases ("Thank you.") on pauses /
+#: non-English audio, so 30 s is the reliable default. Tunable via the setting below.
+DEFAULT_CHUNK_SECONDS = 30.0
+CHUNK_BOUNDS = (1.0, 120.0)
 
 
 def runtime_available() -> bool:
@@ -88,6 +96,53 @@ def set_active_model(repo: str) -> str:
     return repo
 
 
+def active_language() -> str | None:
+    """The configured transcription language (ISO code like ``ru``/``en``), or ``None``
+    for auto-detect. Pinning the language stops Whisper mis-detecting a short chunk as
+    English and hallucinating — but it's the user's choice (a persisted setting)."""
+    val = _config.get(_LANG_KEY)
+    return val.strip() if isinstance(val, str) and val.strip() else None
+
+
+def set_active_language(language: str | None) -> str | None:
+    """Persist the transcription language. ``None``/``""``/``"auto"`` = auto-detect.
+    Accepts a short ISO-639 code (loosely validated: 2–5 letters)."""
+    lang = (language or "").strip().lower()
+    if lang in ("", "auto"):
+        _config.set_(_LANG_KEY, "")
+        log.info("transcription language set: auto")
+        return None
+    if not (2 <= len(lang) <= 5 and lang.isalpha()):
+        raise ValueError(f"invalid language {language!r}; use an ISO code like 'ru', 'en' (or 'auto')")
+    _config.set_(_LANG_KEY, lang)
+    log.info("transcription language set: %s", lang)
+    return lang
+
+
+def active_chunk_seconds() -> float:
+    """The configured transcription chunk length (seconds); default 30 s."""
+    val = _config.get(_CHUNK_KEY)
+    try:
+        secs = float(val)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return DEFAULT_CHUNK_SECONDS
+    lo, hi = CHUNK_BOUNDS
+    return min(hi, max(lo, secs))
+
+
+def set_chunk_seconds(seconds: float) -> float:
+    """Persist the transcription chunk length (clamped to ``CHUNK_BOUNDS``)."""
+    try:
+        secs = float(seconds)
+    except (TypeError, ValueError):
+        raise ValueError(f"invalid chunk length {seconds!r}; give seconds (e.g. 30)")
+    lo, hi = CHUNK_BOUNDS
+    secs = min(hi, max(lo, secs))
+    _config.set_(_CHUNK_KEY, secs)
+    log.info("transcription chunk length set: %.0fs", secs)
+    return secs
+
+
 def catalog_status(downloading: object = ()) -> dict:
     """The full payload for ``GET /v1/asr/models``.
 
@@ -99,6 +154,8 @@ def catalog_status(downloading: object = ()) -> dict:
     return {
         "backend_available": runtime_available(),
         "active": active,
+        "language": active_language(),
+        "chunk_seconds": active_chunk_seconds(),
         "models": [
             {
                 **m,

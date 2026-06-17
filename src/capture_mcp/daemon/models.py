@@ -53,7 +53,9 @@ class StartSessionRequest(_Strict):
     #: records that microphone as a SEPARATE track (mic.s16le / mic_transcript.jsonl),
     #: never mixed with the app audio. The GUI sets this on one app's session only.
     mic_device: str | None = None
-    audio_chunk_seconds: float = 8.0
+    #: Transcription chunk length; ``None`` uses the persisted setting (default 30 s).
+    #: 8 s chunks made Whisper hallucinate on pauses / non-English audio.
+    audio_chunk_seconds: float | None = None
     asr_backend: str = "auto"
     cwd: str | None = None
 
@@ -91,6 +93,13 @@ class SessionSummary(_Strict):
     asr_errors: int
     mic_status: str = "off"
     mic_segments: int = 0
+    mic_device: str | None = None
+    # Capability flags from on-disk artifacts (recomputed each read; reflect pruning).
+    has_screenshots: bool = True
+    has_audio: bool = True
+    has_mic: bool = False
+    can_retranscribe: bool = True
+    can_index: bool = True
     notes: list[str]
 
 
@@ -145,6 +154,69 @@ class AsrModelRequest(_Strict):
     repo: str
 
 
+class ImportMediaRequest(_Strict):
+    """Body of POST /v1/sessions/import — turn an existing audio/video file into a session.
+
+    The daemon extracts the file's audio (and, for video, frames) via the bundled helper,
+    then runs ASR, registering the result as a finished session. ``output_dir`` defaults to
+    the daemon's runs dir when omitted."""
+
+    path: str
+    output_dir: str | None = None
+    asr_backend: str = "auto"
+    screenshot_interval: float = 2.0
+
+    @model_validator(mode="after")
+    def _path_required(self) -> "ImportMediaRequest":
+        if not self.path.strip():
+            raise ValueError("path is required")
+        return self
+
+
+class IndexRequest(_Strict):
+    """Body of POST /v1/sessions/{id}/index — build the multimodal index (#44).
+
+    Caption the session's screenshots with a remote vision LLM and summarize the timeline
+    as a binary tree. ``endpoint``/``model`` override the daemon's ``CAPTURE_INDEX_*`` env
+    config (so the GUI can carry the LM Studio URL). ``sample_rate`` (0<rate≤1) decimates
+    the frames to the leaf set; ``max_leaves`` caps it; ``fuse_transcript`` folds the
+    time-aligned transcript into each combine."""
+
+    #: Structured provider config (#52): the daemon composes the chat URL from
+    #: ``provider`` + ``host`` + ``port`` (e.g. lmstudio/ollama/openai/custom). A full
+    #: ``endpoint`` URL still wins when given (back-compat with CAPTURE_INDEX_URL / the old GUI).
+    provider: str | None = None
+    host: str | None = None
+    port: int | None = None
+    endpoint: str | None = None
+    model: str | None = None
+    sample_rate: float = 0.5
+    max_leaves: int = 512
+    fuse_transcript: bool = True
+    #: Per-frame prompt PRESET ("auto"/"meeting"/"lecture"/…) — what's right for a meeting is
+    #: wrong for a lecture. Custom prompts (typically crafted by a frontier model calling
+    #: capture_index, executed cheaply by the LOCAL vision model), saved to the session for tuning:
+    #:   • ``leaf_prompt`` + ``leaf_schema`` → a custom STRUCTURED extractor (one schema per frame).
+    #:   • ``leaf_prompt`` alone → a custom free-text caption.
+    #:   • ``classify_prompt`` → overrides the auto classifier's prompt.
+    prompt_preset: str = "auto"
+    leaf_prompt: str | None = None
+    leaf_schema: dict | None = None
+    classify_prompt: str | None = None
+    #: Override the base longest-edge image downscale for this build (default 1024 via env). Code/
+    #: terminal leaves are auto-bumped to CAPTURE_INDEX_CODE_MAX_PX (2048) regardless; raise this to
+    #: lift the floor for a whole code-heavy build (daf420 study: 1024→2048 took UE code 0.42→0.88).
+    max_px: int | None = None
+
+    @model_validator(mode="after")
+    def _bounds(self) -> "IndexRequest":
+        if not (0.0 < self.sample_rate <= 1.0):
+            raise ValueError("sample_rate must be in (0, 1]")
+        if self.max_leaves < 1:
+            raise ValueError("max_leaves must be >= 1")
+        return self
+
+
 class AsrModelInfo(_Strict):
     repo: str
     name: str
@@ -157,6 +229,8 @@ class AsrModelInfo(_Strict):
 class AsrModelsResponse(_Strict):
     backend_available: bool
     active: str
+    language: str | None = None
+    chunk_seconds: float = 30.0
     models: list[AsrModelInfo]
 
 
@@ -174,6 +248,8 @@ V1_MODELS: dict[str, type[BaseModel]] = {
     "AsrModelRequest": AsrModelRequest,
     "AsrModelInfo": AsrModelInfo,
     "AsrModelsResponse": AsrModelsResponse,
+    "ImportMediaRequest": ImportMediaRequest,
+    "IndexRequest": IndexRequest,
 }
 
 

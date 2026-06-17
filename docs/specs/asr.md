@@ -173,6 +173,32 @@ Runtime steps for the common `create("auto")` path:
   in the temp dir, then deletes it. The file descriptor from `mkstemp` is closed immediately and the
   file is reopened by path through the `wave` module (whisper_local.py:32–43).
 
+## Transcription settings + hallucination guards (#45)
+
+Whisper hallucinates phantom phrases on out-of-window audio: **short chunks** (the old 8 s
+default) and **silence**. A Russian capture transcribed as 18× "Thank you."; a dead mic looped
+"RSSSS…". Three mitigations, plus two persisted settings:
+
+- **Backend guards** (both `MlxWhisper` + `FasterWhisper`): `condition_on_previous_text=False`
+  (no cross-chunk priming → no repetition loops) + `no_speech_threshold=0.6`, `logprob_threshold=-1.0`,
+  `compression_ratio_threshold=2.4` (drop low-confidence / degenerate decodes). FasterWhisper also keeps
+  `vad_filter=True`.
+- **Silence gate** (`asr.is_silent`, `SILENCE_RMS16` default 70, env `CAPTURE_ASR_SILENCE_RMS`): chunks
+  whose int16-RMS is below the threshold are SKIPPED (not sent to Whisper) in `audio.py` + `retranscribe.py`.
+  Offsets still advance, so the timeline holds.
+- **Language** (`manager.active_language`/`set_active_language`, config key `whisper_language`): pin an
+  ISO code (`ru`, `en`) so a short chunk isn't mis-detected as English. Resolved **per `transcribe()` call**
+  from the setting, so a change applies to a running capture's NEXT chunk (on the fly). `None`/`""`/`auto`
+  = auto-detect. A `language` arg to a backend constructor pins it for that instance (e.g. a re-transcribe).
+- **Chunk length** (`manager.active_chunk_seconds`/`set_chunk_seconds`, config key `audio_chunk_seconds`,
+  default **30 s**, bounds 1–120): Whisper's native window is 30 s; shorter = lower latency but more
+  hallucination on pauses. `CaptureSession` + `retranscribe_session` resolve `None` from this setting;
+  re-transcribe uses the CURRENT setting (not the old session's 8 s).
+
+Surfaces (parity): daemon `POST /v1/asr/language` / `POST /v1/asr/chunk` + both in `GET /v1/asr/models`;
+`capture_retranscribe(language?, chunk_seconds?)` + the MCP `transcription_settings` tool; the GUI's
+Settings → Transcription panel + a language field in the playback pane.
+
 ## Configuration
 
 Local Whisper (whisper_local.py):

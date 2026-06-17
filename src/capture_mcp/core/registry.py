@@ -19,7 +19,28 @@ import os
 import threading
 from pathlib import Path
 
-from .session import CaptureSession
+from .session import CaptureSession, prune_session_dir, session_capabilities
+
+
+def _rewrite_session_json_summary(session_dir: str, updates: dict) -> None:
+    """Best-effort: merge ``updates`` into the on-disk session.json summary so a daemon
+    restart sees post-prune counts/flags (capabilities are also recomputed live on read)."""
+    p = Path(session_dir) / "session.json"
+    try:
+        meta = json.loads(p.read_text())
+        meta.setdefault("summary", {}).update(updates)
+        p.write_text(json.dumps(meta, indent=2, ensure_ascii=False))
+    except Exception:
+        pass
+
+
+def _with_caps(rec: dict) -> dict:
+    """A history-record summary refreshed with current on-disk capability flags (so a
+    pruned session reports the truth, not the flags frozen into session.json)."""
+    d = dict(rec)
+    if d.get("dir"):
+        d.update(session_capabilities(d["dir"]))
+    return d
 from .util import iso, now
 
 log = logging.getLogger(__name__)
@@ -57,7 +78,22 @@ class SessionRegistry:
             self._live[session.id] = session
             self._history.pop(session.id, None)
             self._prune_locked()
-        self._append_index(session)
+        self._append_index(session.id, str(session.dir))
+
+    def add_recovered(self, session_id: str, session_dir: str | Path) -> dict | None:
+        """Register a session whose dir already exists on disk (e.g. an import), so it
+        appears in ``summaries()`` immediately without a daemon restart. Appends the index
+        and builds a read-only history record from its ``session.json``. Returns that record
+        (``None`` if no session.json is there to recover)."""
+        d = str(session_dir)
+        if not (Path(d) / "session.json").exists():
+            return None
+        self._append_index(session_id, d)
+        with self._lock:
+            rec = self._recover(session_id, d)
+            self._history[session_id] = rec
+            self._prune_locked()
+        return rec
 
     def get(self, session_id: str) -> CaptureSession | None:
         with self._lock:
@@ -76,12 +112,12 @@ class SessionRegistry:
             if s is not None:
                 return s.summary()
             rec = self._history.get(session_id)
-            return dict(rec) if rec is not None else None
+            return _with_caps(rec) if rec is not None else None
 
     def summaries(self) -> list[dict]:
         """All known sessions, oldest first (ids are timestamp-prefixed)."""
         with self._lock:
-            merged = dict(self._history)
+            merged = {sid: _with_caps(rec) for sid, rec in self._history.items()}
             for sid, s in self._live.items():
                 merged[sid] = s.summary()
             return [merged[sid] for sid in sorted(merged)]
@@ -106,6 +142,40 @@ class SessionRegistry:
             self._rewrite_index_locked(session_id)
             return existed
 
+    def prune_session(self, session_id: str, parts: list[str]) -> dict:
+        """Prune on-disk artifacts of a *finished* session (``session.prune_session_dir``).
+        Returns ``{pruned, freed_bytes, screenshots, <capability flags>}``. Raises ValueError
+        for a live session or an unknown id."""
+        with self._lock:
+            live = self._live.get(session_id)
+            if live is not None and live.state in _LIVE_STATES:
+                raise ValueError("session is live; stop it before pruning")
+            rec = self._history.get(session_id) or (live.summary() if live else None)
+            if rec is None:
+                raise ValueError(f"unknown session_id {session_id!r}")
+            d = rec.get("dir")
+        if not d or not (Path(d) / "session.json").exists():
+            raise ValueError("session dir is missing or not a capture dir")
+        freed, count = prune_session_dir(d, parts)
+        caps = session_capabilities(d)
+        with self._lock:
+            if session_id in self._history:
+                self._history[session_id]["screenshots"] = count
+                self._history[session_id].update(caps)
+        _rewrite_session_json_summary(d, {"screenshots": count, **caps})
+        return {"pruned": list(parts), "freed_bytes": freed, "screenshots": count, **caps}
+
+    def update_summary(self, session_id: str, updates: dict) -> None:
+        """Merge ``updates`` into a finished session's stored summary (in-memory history
+        record + its session.json), e.g. a new transcript_segments count after re-transcribe."""
+        with self._lock:
+            rec = self._history.get(session_id)
+            d = rec.get("dir") if rec else None
+            if rec is not None:
+                rec.update(updates)
+        if d:
+            _rewrite_session_json_summary(d, updates)
+
     # -- internals --------------------------------------------------------------
 
     def _prune_locked(self) -> None:
@@ -127,11 +197,11 @@ class SessionRegistry:
             self._live.pop(sid, None)
             self._history.pop(sid, None)
 
-    def _append_index(self, session: CaptureSession) -> None:
+    def _append_index(self, session_id: str, session_dir: str) -> None:
         """Best-effort append; never breaks a capture (mirrors session.json writes)."""
         try:
             self.index_path.parent.mkdir(parents=True, exist_ok=True)
-            line = json.dumps({"id": session.id, "dir": str(session.dir), "created_at": iso(now())})
+            line = json.dumps({"id": session_id, "dir": session_dir, "created_at": iso(now())})
             with self.index_path.open("a", encoding="utf-8") as f:
                 f.write(line + "\n")
         except Exception:

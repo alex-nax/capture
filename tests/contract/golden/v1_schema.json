@@ -107,6 +107,23 @@
           "title": "Backend Available",
           "type": "boolean"
         },
+        "chunk_seconds": {
+          "default": 30.0,
+          "title": "Chunk Seconds",
+          "type": "number"
+        },
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Language"
+        },
         "models": {
           "items": {
             "$ref": "#/$defs/AsrModelInfo"
@@ -177,6 +194,180 @@
       "title": "HealthResponse",
       "type": "object"
     },
+    "ImportMediaRequest": {
+      "additionalProperties": false,
+      "description": "Body of POST /v1/sessions/import \u2014 turn an existing audio/video file into a session.\n\nThe daemon extracts the file's audio (and, for video, frames) via the bundled helper,\nthen runs ASR, registering the result as a finished session. ``output_dir`` defaults to\nthe daemon's runs dir when omitted.",
+      "properties": {
+        "asr_backend": {
+          "default": "auto",
+          "title": "Asr Backend",
+          "type": "string"
+        },
+        "output_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Dir"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "screenshot_interval": {
+          "default": 2.0,
+          "title": "Screenshot Interval",
+          "type": "number"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "ImportMediaRequest",
+      "type": "object"
+    },
+    "IndexRequest": {
+      "additionalProperties": false,
+      "description": "Body of POST /v1/sessions/{id}/index \u2014 build the multimodal index (#44).\n\nCaption the session's screenshots with a remote vision LLM and summarize the timeline\nas a binary tree. ``endpoint``/``model`` override the daemon's ``CAPTURE_INDEX_*`` env\nconfig (so the GUI can carry the LM Studio URL). ``sample_rate`` (0<rate\u22641) decimates\nthe frames to the leaf set; ``max_leaves`` caps it; ``fuse_transcript`` folds the\ntime-aligned transcript into each combine.",
+      "properties": {
+        "classify_prompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Classify Prompt"
+        },
+        "endpoint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint"
+        },
+        "fuse_transcript": {
+          "default": true,
+          "title": "Fuse Transcript",
+          "type": "boolean"
+        },
+        "host": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Host"
+        },
+        "leaf_prompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Leaf Prompt"
+        },
+        "leaf_schema": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Leaf Schema"
+        },
+        "max_leaves": {
+          "default": 512,
+          "title": "Max Leaves",
+          "type": "integer"
+        },
+        "max_px": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Px"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "port": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Port"
+        },
+        "prompt_preset": {
+          "default": "auto",
+          "title": "Prompt Preset",
+          "type": "string"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider"
+        },
+        "sample_rate": {
+          "default": 0.5,
+          "title": "Sample Rate",
+          "type": "number"
+        }
+      },
+      "title": "IndexRequest",
+      "type": "object"
+    },
     "SessionSummary": {
       "additionalProperties": false,
       "description": "The session summary returned by start/stop/status (mirrors `session.py`).",
@@ -193,13 +384,60 @@
           "title": "Audio Status",
           "type": "string"
         },
+        "can_index": {
+          "default": true,
+          "title": "Can Index",
+          "type": "boolean"
+        },
+        "can_retranscribe": {
+          "default": true,
+          "title": "Can Retranscribe",
+          "type": "boolean"
+        },
         "dir": {
           "title": "Dir",
           "type": "string"
         },
+        "has_audio": {
+          "default": true,
+          "title": "Has Audio",
+          "type": "boolean"
+        },
+        "has_mic": {
+          "default": false,
+          "title": "Has Mic",
+          "type": "boolean"
+        },
+        "has_screenshots": {
+          "default": true,
+          "title": "Has Screenshots",
+          "type": "boolean"
+        },
         "log_lines": {
           "title": "Log Lines",
           "type": "integer"
+        },
+        "mic_device": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mic Device"
+        },
+        "mic_segments": {
+          "default": 0,
+          "title": "Mic Segments",
+          "type": "integer"
+        },
+        "mic_status": {
+          "default": "off",
+          "title": "Mic Status",
+          "type": "string"
         },
         "notes": {
           "items": {
@@ -323,13 +561,60 @@
               "title": "Audio Status",
               "type": "string"
             },
+            "can_index": {
+              "default": true,
+              "title": "Can Index",
+              "type": "boolean"
+            },
+            "can_retranscribe": {
+              "default": true,
+              "title": "Can Retranscribe",
+              "type": "boolean"
+            },
             "dir": {
               "title": "Dir",
               "type": "string"
             },
+            "has_audio": {
+              "default": true,
+              "title": "Has Audio",
+              "type": "boolean"
+            },
+            "has_mic": {
+              "default": false,
+              "title": "Has Mic",
+              "type": "boolean"
+            },
+            "has_screenshots": {
+              "default": true,
+              "title": "Has Screenshots",
+              "type": "boolean"
+            },
             "log_lines": {
               "title": "Log Lines",
               "type": "integer"
+            },
+            "mic_device": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Mic Device"
+            },
+            "mic_segments": {
+              "default": 0,
+              "title": "Mic Segments",
+              "type": "integer"
+            },
+            "mic_status": {
+              "default": "off",
+              "title": "Mic Status",
+              "type": "string"
             },
             "notes": {
               "items": {
@@ -474,9 +759,16 @@
           "type": "string"
         },
         "audio_chunk_seconds": {
-          "default": 8.0,
-          "title": "Audio Chunk Seconds",
-          "type": "number"
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Audio Chunk Seconds"
         },
         "audio_source": {
           "default": "auto",
@@ -529,6 +821,18 @@
           "default": null,
           "title": "Cwd"
         },
+        "mic_device": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mic Device"
+        },
         "output_dir": {
           "title": "Output Dir",
           "type": "string"
@@ -578,6 +882,18 @@
           ],
           "default": null,
           "title": "Screenshot Resolution"
+        },
+        "window_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Window Id"
         }
       },
       "required": [

@@ -22,6 +22,7 @@ use crate::daemon::{self, Daemon, Health, Session, WindowInfo};
 use crate::tray::{self, Tray};
 use crate::hotkey;
 use crate::skill;
+use crate::update;
 
 /// macOS Screen Recording prompt — triggered from THIS GUI process, which is a real
 /// app with a window-server connection. The headless daemon must NOT call this
@@ -47,6 +48,20 @@ struct LiveState {
     transcript: Vec<String>,
     last_shot: Option<String>,
     asr_progress: HashMap<String, f32>,
+    retranscribe: HashMap<String, f32>, // session id -> re-transcribe fraction (0..1)
+    retranscribe_done: Vec<String>,     // session ids that just finished (drained by poll)
+    import_progress: Option<(String, f32)>, // active import: (phase, fraction), one at a time
+    import_result: Option<Result<String, String>>, // Ok(session_id) / Err(msg), drained by poll
+    index_progress: HashMap<String, (String, f32)>, // session id -> (phase, fraction)
+    index_done: Vec<(String, Option<String>)>, // (session id, error?) — Some=failed; drained by poll
+}
+
+/// A destructive action awaiting confirmation in the modal.
+#[derive(Clone)]
+enum ConfirmKind {
+    DeleteSession(String),                    // session id
+    Prune(String, Vec<&'static str>, String), // session id, prune parts, body text
+    Update(update::UpdateInfo),               // a newer GitHub release to install (#48)
 }
 
 /// The session "playback" screen state (loaded from the session's on-disk artifacts).
@@ -61,6 +76,8 @@ struct PlaybackState {
     t0: f64,                               // timeline start (first frame/segment)
     t1: f64,                               // timeline end
     playing: bool,                         // auto-advancing
+    index_summary: Option<String>,         // root summary of the built multimodal index (#44)
+    index_nodes: Option<usize>,            // node count of the built index
 }
 
 pub struct CaptureApp {
@@ -74,7 +91,8 @@ pub struct CaptureApp {
     mics: Vec<daemon::AudioDevice>,    // available input devices (polled)
     mics_loaded: bool,                 // fetched the device list at least once
     selected_session: Option<String>,  // session tracked for live SSE (transcript/shot)
-    confirm_delete: Option<String>,    // session id awaiting a delete confirmation
+    confirm: Option<ConfirmKind>,      // a destructive action awaiting confirmation
+    retranscribing: Option<String>,    // session id currently re-transcribing (SSE-tracked)
     playback: Option<PlaybackState>,   // Some => the playback screen is open
     pb_dragging: bool,                 // scrubber thumb is grabbed
     pb_ticker: bool,                   // an auto-play ticker is running
@@ -93,10 +111,44 @@ pub struct CaptureApp {
     shot_format: String,                   // "png" | "jpeg" — applied to new captures
     shot_res_ix: usize,                    // index into RES_PRESETS (0 = native)
     jpeg_quality: u32,                     // 1..100, only for jpeg
+    capture_screenshots: bool,             // off => audio-only capture (no screenshots)
+    update_info: Option<update::UpdateInfo>, // a newer GitHub release than this build (#48), if any
+    updating: bool,                        // an update download/install is in flight
+    asr_language: String,                  // transcription language filter buffer (#45; searchable dropdown)
+    asr_language_focus: FocusHandle,       // focus for the language field
+    lang_dropdown_open: bool,              // the searchable language dropdown is expanded
+    index_url: String,                     // LM Studio chat endpoint for the multimodal index (#44)
+    index_model: String,                   // LM Studio model id (e.g. "qwen/qwen3.5-9b"); blank = server default
+    index_sample_rate: f64,                // leaf sampling rate for indexing (caption every round(1/rate)-th frame)
+    index_preset: String,                  // index prompt preset: "general" | "meeting" | "lecture"
+    index_focus: FocusHandle,              // focus for the index-URL field
+    index_model_focus: FocusHandle,        // focus for the index-model field
+    index_status: daemon::IndexStatus,     // polled: is the index endpoint configured + reachable
+    indexing: HashSet<String>,             // session ids with an index build in flight (SSE-tracked)
     message: SharedString,
     out_dir: String,
     polling: bool,
 }
+
+/// Transcription languages (Whisper) for the searchable dropdown: `(ISO code, English name)`.
+/// `""` = auto-detect. Filtered by code or name as the user types.
+const LANGUAGES: &[(&str, &str)] = &[
+    ("", "Auto-detect"), ("en", "English"), ("zh", "Chinese"), ("de", "German"), ("es", "Spanish"),
+    ("ru", "Russian"), ("ko", "Korean"), ("fr", "French"), ("ja", "Japanese"), ("pt", "Portuguese"),
+    ("tr", "Turkish"), ("pl", "Polish"), ("ca", "Catalan"), ("nl", "Dutch"), ("ar", "Arabic"),
+    ("sv", "Swedish"), ("it", "Italian"), ("id", "Indonesian"), ("hi", "Hindi"), ("fi", "Finnish"),
+    ("vi", "Vietnamese"), ("he", "Hebrew"), ("uk", "Ukrainian"), ("el", "Greek"), ("ms", "Malay"),
+    ("cs", "Czech"), ("ro", "Romanian"), ("da", "Danish"), ("hu", "Hungarian"), ("ta", "Tamil"),
+    ("no", "Norwegian"), ("th", "Thai"), ("ur", "Urdu"), ("hr", "Croatian"), ("bg", "Bulgarian"),
+    ("lt", "Lithuanian"), ("la", "Latin"), ("ml", "Malayalam"), ("cy", "Welsh"), ("sk", "Slovak"),
+    ("te", "Telugu"), ("fa", "Persian"), ("lv", "Latvian"), ("bn", "Bengali"), ("sr", "Serbian"),
+    ("az", "Azerbaijani"), ("sl", "Slovenian"), ("kn", "Kannada"), ("et", "Estonian"), ("mk", "Macedonian"),
+    ("eu", "Basque"), ("is", "Icelandic"), ("hy", "Armenian"), ("ne", "Nepali"), ("mn", "Mongolian"),
+    ("bs", "Bosnian"), ("kk", "Kazakh"), ("sq", "Albanian"), ("sw", "Swahili"), ("gl", "Galician"),
+    ("mr", "Marathi"), ("pa", "Punjabi"), ("si", "Sinhala"), ("km", "Khmer"), ("af", "Afrikaans"),
+    ("be", "Belarusian"), ("gu", "Gujarati"), ("am", "Amharic"), ("yi", "Yiddish"), ("lo", "Lao"),
+    ("uz", "Uzbek"), ("fo", "Faroese"), ("ps", "Pashto"), ("tg", "Tajik"), ("my", "Burmese"),
+];
 
 /// Screenshot resolution presets for the Settings panel (label, "WxH" or None = native).
 const RES_PRESETS: [(&str, Option<&str>); 4] = [
@@ -117,22 +169,40 @@ fn settings_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".capture").join("gui-settings.json"))
 }
 
+/// Native macOS file picker (osascript) for the "Import…" action: returns the chosen
+/// media file's POSIX path, or None if the user cancelled (or the dialog failed). The
+/// UTI filter shows audio + video files. Blocking — call it off the UI thread.
+fn pick_media_file() -> Option<String> {
+    let script = r#"POSIX path of (choose file with prompt "Import audio or video as a session" of type {"public.audio","public.movie","public.mpeg-4","com.apple.quicktime-movie"})"#;
+    let out = std::process::Command::new("osascript").arg("-e").arg(script).output().ok()?;
+    if !out.status.success() {
+        return None; // user cancelled (AppleScript error -128) or osascript unavailable
+    }
+    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if path.is_empty() { None } else { Some(path) }
+}
+
 /// `(shot_format, shot_res_ix, jpeg_quality)` loaded from `gui-settings.json`, or
 /// the defaults if the file is missing/unreadable. So a chosen quality survives a
 /// GUI relaunch (the settings live in the window process, not the daemon).
-fn load_settings() -> (String, usize, u32, Option<String>) {
+fn load_settings() -> (String, usize, u32, Option<String>, bool, String, String, f64, String) {
     let def = ("png".to_string(), 0usize, 80u32);
     let Some(v) = settings_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
     else {
-        return (def.0, def.1, def.2, None);
+        return (def.0, def.1, def.2, None, true, String::new(), String::new(), 0.25, "auto".into());
     };
     (
         v.get("shot_format").and_then(|x| x.as_str()).unwrap_or(&def.0).to_string(),
         v.get("shot_res_ix").and_then(|x| x.as_u64()).map_or(def.1, |n| n as usize),
         v.get("jpeg_quality").and_then(|x| x.as_u64()).map_or(def.2, |n| n as u32),
         v.get("mic_device").and_then(|x| x.as_str()).map(String::from),
+        v.get("capture_screenshots").and_then(|x| x.as_bool()).unwrap_or(true),
+        v.get("index_url").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        v.get("index_model").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        v.get("index_sample_rate").and_then(|x| x.as_f64()).unwrap_or(0.25),
+        v.get("index_preset").and_then(|x| x.as_str()).unwrap_or("auto").to_string(),
     )
 }
 
@@ -260,7 +330,8 @@ impl CaptureApp {
                 }
             }
         }
-        let (shot_format, shot_res_ix, jpeg_quality, mic_device) = load_settings();
+        let (shot_format, shot_res_ix, jpeg_quality, mic_device, capture_screenshots, index_url, index_model, index_sample_rate, index_preset) =
+            load_settings();
         let mut app = Self {
             daemon: daemon::discover(),
             health: None,
@@ -272,7 +343,8 @@ impl CaptureApp {
             mics: Vec::new(),
             mics_loaded: false,
             selected_session: None,
-            confirm_delete: None,
+            confirm: None,
+            retranscribing: None,
             playback: None,
             pb_dragging: false,
             pb_ticker: false,
@@ -291,6 +363,20 @@ impl CaptureApp {
             shot_format,
             shot_res_ix,
             jpeg_quality,
+            capture_screenshots,
+            update_info: None,
+            updating: false,
+            asr_language: String::new(),
+            asr_language_focus: cx.focus_handle(),
+            lang_dropdown_open: false,
+            index_url,
+            index_model,
+            index_sample_rate,
+            index_preset,
+            index_focus: cx.focus_handle(),
+            index_model_focus: cx.focus_handle(),
+            index_status: daemon::IndexStatus::default(),
+            indexing: HashSet::new(),
             message: "".into(),
             out_dir: default_out_dir(),
             polling: false,
@@ -301,7 +387,9 @@ impl CaptureApp {
         }
         app.refresh_skill_status();
         app.refresh_blocking();
+        app.check_for_update(cx);
         app.start_poll(cx);
+        app.start_index_status_poll(cx);
         app.spawn_sse();
         app.start_tray_loop(cx);
         app
@@ -446,6 +534,67 @@ impl CaptureApp {
                             }
                             continue;
                         }
+                        // Re-transcribe is session-keyed but daemon-wide (no tracked filter).
+                        Some("retranscribe") => {
+                            if let (Some(sid), Some(frac)) = (
+                                ev.get("session_id").and_then(|v| v.as_str()),
+                                ev.get("fraction").and_then(|v| v.as_f64()),
+                            ) {
+                                st.retranscribe.insert(sid.to_string(), frac as f32);
+                            }
+                            continue;
+                        }
+                        Some("retranscribe_done") | Some("retranscribe_error") => {
+                            if let Some(sid) = ev.get("session_id").and_then(|v| v.as_str()) {
+                                st.retranscribe.remove(sid);
+                                st.retranscribe_done.push(sid.to_string());
+                            }
+                            continue;
+                        }
+                        // Import is daemon-wide (no session_id until it finishes).
+                        Some("import") => {
+                            let phase = ev.get("phase").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let frac = ev.get("fraction").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                            st.import_progress = Some((phase, frac));
+                            continue;
+                        }
+                        Some("import_done") => {
+                            st.import_progress = None;
+                            if let Some(sid) = ev.get("session_id").and_then(|v| v.as_str()) {
+                                st.import_result = Some(Ok(sid.to_string()));
+                            }
+                            continue;
+                        }
+                        Some("import_error") => {
+                            st.import_progress = None;
+                            let msg = ev.get("error").and_then(|v| v.as_str()).unwrap_or("import failed");
+                            st.import_result = Some(Err(msg.to_string()));
+                            continue;
+                        }
+                        // Index build is session-keyed but daemon-wide (no tracked filter).
+                        Some("index") => {
+                            if let Some(sid) = ev.get("session_id").and_then(|v| v.as_str()) {
+                                let phase = ev.get("phase").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                let frac = ev.get("fraction").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                                st.index_progress.insert(sid.to_string(), (phase, frac));
+                            }
+                            continue;
+                        }
+                        Some("index_done") => {
+                            if let Some(sid) = ev.get("session_id").and_then(|v| v.as_str()) {
+                                st.index_progress.remove(sid);
+                                st.index_done.push((sid.to_string(), None));
+                            }
+                            continue;
+                        }
+                        Some("index_error") => {
+                            if let Some(sid) = ev.get("session_id").and_then(|v| v.as_str()) {
+                                st.index_progress.remove(sid);
+                                let err = ev.get("error").and_then(|v| v.as_str()).unwrap_or("index failed").to_string();
+                                st.index_done.push((sid.to_string(), Some(err)));
+                            }
+                            continue;
+                        }
                         _ => {}
                     }
                     let sid = ev.get("session_id").and_then(|v| v.as_str());
@@ -470,6 +619,32 @@ impl CaptureApp {
             }
             std::thread::sleep(Duration::from_secs(1)); // reconnect backoff
         });
+    }
+
+    /// Poll the multimodal-index endpoint availability on a slow, separate cadence — its
+    /// `/v1/models` preflight can take seconds (or time out when offline), so it must NOT
+    /// share the 1 s session loop. Drives the Index button's enabled/disabled gate.
+    fn start_index_status_poll(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| loop {
+            Timer::after(Duration::from_millis(8000)).await;
+            let Ok(url) = this.update(cx, |v, _| v.index_url.clone()) else { break };
+            let status = cx
+                .background_executor()
+                .spawn(async move { daemon::discover().and_then(|d| d.index_status(&url).ok()) })
+                .await;
+            if this
+                .update(cx, |v, cx| {
+                    if let Some(s) = status {
+                        v.index_status = s;
+                        cx.notify();
+                    }
+                })
+                .is_err()
+            {
+                break;
+            }
+        })
+        .detach();
     }
 
     fn start_poll(&mut self, cx: &mut Context<Self>) {
@@ -512,6 +687,47 @@ impl CaptureApp {
                     // Fetch the mic list once, the first time a daemon is available.
                     if !v.mics_loaded && v.daemon.is_some() {
                         v.refresh_mics(cx);
+                    }
+                    // A re-transcribe finished (SSE): clear the flag + reload the open session
+                    // so its fresh transcript shows.
+                    let done: Vec<String> = std::mem::take(&mut v.live.lock().unwrap().retranscribe_done);
+                    for sid in done {
+                        if v.retranscribing.as_deref() == Some(sid.as_str()) {
+                            v.retranscribing = None;
+                            v.message = format!("re-transcribed {}", short_id(&sid)).into();
+                        }
+                        if v.playback.as_ref().map(|p| p.sid.as_str()) == Some(sid.as_str()) {
+                            v.select_session(sid.clone(), cx);
+                        }
+                    }
+                    // An import finished (SSE): surface the result; the new session is
+                    // already in v.sessions from this same poll.
+                    let import_result = v.live.lock().unwrap().import_result.take();
+                    match import_result {
+                        Some(Ok(sid)) => {
+                            v.message = format!("imported session {}", short_id(&sid)).into();
+                            v.select_session(sid, cx);
+                        }
+                        Some(Err(e)) => v.message = format!("import failed: {e}").into(),
+                        None => {}
+                    }
+                    // An index build finished (SSE): show success or the real error, clear the
+                    // flag, and reload the open session so a fresh index shows.
+                    let idx_done: Vec<(String, Option<String>)> =
+                        std::mem::take(&mut v.live.lock().unwrap().index_done);
+                    for (sid, err) in idx_done {
+                        if v.indexing.remove(&sid) {
+                            v.message = match &err {
+                                None => format!("indexed {}", short_id(&sid)).into(),
+                                Some(e) => format!("index failed: {e}").into(),
+                            };
+                        }
+                        // Only reload on success; a failed build wrote nothing.
+                        if err.is_none()
+                            && v.playback.as_ref().map(|p| p.sid.as_str()) == Some(sid.as_str())
+                        {
+                            v.select_session(sid.clone(), cx);
+                        }
                     }
                     // Default the live pane to the newest running capture.
                     if v.selected_session.is_none() {
@@ -615,6 +831,29 @@ impl CaptureApp {
             cx.notify();
             return;
         };
+        // Load the built index (if any) so the Manage panel can show its root summary.
+        if finished {
+            let d_idx = d.clone();
+            let want = id.clone();
+            cx.spawn(async move |this, cx| {
+                let idx = cx
+                    .background_executor()
+                    .spawn(async move { d_idx.get_index(&want).ok() })
+                    .await;
+                let _ = this.update(cx, |v, cx| {
+                    if let (Some(pb), Some(idx)) = (v.playback.as_mut(), idx) {
+                        pb.index_summary = idx
+                            .get("root_summary")
+                            .and_then(|s| s.as_str())
+                            .filter(|s| !s.is_empty())
+                            .map(String::from);
+                        pb.index_nodes = idx.get("node_count").and_then(|n| n.as_u64()).map(|n| n as usize);
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
         let live = self.live.clone();
         cx.spawn(async move |_this, cx| {
             let id2 = id.clone();
@@ -635,6 +874,7 @@ impl CaptureApp {
     /// `/v1/sessions` body: format, optional resolution, jpeg quality (jpeg only).
     fn shot_settings(&self) -> serde_json::Value {
         let mut m = serde_json::Map::new();
+        m.insert("capture_screenshots".into(), serde_json::json!(self.capture_screenshots));
         m.insert("screenshot_format".into(), serde_json::json!(self.shot_format));
         if let Some(res) = RES_PRESETS.get(self.shot_res_ix).and_then(|p| p.1) {
             m.insert("screenshot_resolution".into(), serde_json::json!(res));
@@ -747,6 +987,42 @@ impl CaptureApp {
         self.skill_status = skill::AGENTS.iter().map(skill::status).collect();
     }
 
+    /// Check GitHub for a newer release (once, at startup), off the UI thread (#48).
+    fn check_for_update(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let info = cx.background_executor().spawn(async move { update::check() }).await;
+            if let Some(info) = info {
+                let _ = this.update(cx, |v, cx| {
+                    v.update_info = Some(info);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Download + install a confirmed update; the detached updater quits + relaunches the app.
+    fn start_update(&mut self, info: update::UpdateInfo, cx: &mut Context<Self>) {
+        self.updating = true;
+        self.message = format!("downloading update v{}… the app will restart", info.version).into();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn(async move { update::download_and_install(&info) })
+                .await;
+            let _ = this.update(cx, |v, cx| {
+                if let Err(e) = r {
+                    v.updating = false;
+                    v.message = format!("update failed: {e}").into();
+                    cx.notify();
+                }
+                // On success the updater script quits this app shortly; nothing more to do.
+            });
+        })
+        .detach();
+    }
+
     fn install_skill(&mut self, ix: usize, cx: &mut Context<Self>) {
         let Some(agent) = skill::AGENTS.get(ix) else { return };
         self.message = match skill::install(agent) {
@@ -824,6 +1100,11 @@ impl CaptureApp {
             "shot_res_ix": self.shot_res_ix,
             "jpeg_quality": self.jpeg_quality,
             "mic_device": self.mic_device,
+            "capture_screenshots": self.capture_screenshots,
+            "index_url": self.index_url,
+            "index_model": self.index_model,
+            "index_sample_rate": self.index_sample_rate,
+            "index_preset": self.index_preset,
         });
         if let Ok(bytes) = serde_json::to_vec_pretty(&v) {
             let _ = std::fs::write(&p, bytes);
@@ -854,6 +1135,274 @@ impl CaptureApp {
             });
         })
         .detach();
+    }
+
+    /// Key handling for the transcription-language field (#45). Enter applies it.
+    fn on_asr_language_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let ks = &ev.keystroke;
+        let m = &ks.modifiers;
+        if m.platform && ks.key == "v" {
+            if let Some(t) = cx.read_from_clipboard().and_then(|i| i.text()) {
+                self.asr_language.push_str(t.trim());
+                cx.notify();
+            }
+            return;
+        }
+        if m.platform || m.control || m.function {
+            return;
+        }
+        match ks.key.as_str() {
+            "backspace" => {
+                self.asr_language.pop();
+            }
+            "escape" => {
+                self.lang_dropdown_open = false;
+                self.asr_language.clear();
+            }
+            "enter" => {
+                // Pick the top filtered language, else apply the raw text as an ISO code.
+                match self.top_lang_match() {
+                    Some(code) => self.apply_language_code(code.to_string(), cx),
+                    None => self.apply_asr_language(cx),
+                }
+                return;
+            }
+            _ => {
+                if let Some(c) = ks.key_char.as_deref() {
+                    if !c.is_empty() && !c.chars().any(char::is_control) {
+                        self.asr_language.push_str(c);
+                        self.lang_dropdown_open = true; // typing opens/refines the list
+                    }
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Set the transcription language (persisted; applies to running captures on the next
+    /// chunk + to re-transcribes). Blank / "auto" clears it.
+    fn apply_asr_language(&mut self, cx: &mut Context<Self>) {
+        let Some(d) = self.daemon.clone() else { return };
+        let lang = self.asr_language.trim().to_string();
+        self.message = if lang.is_empty() || lang == "auto" {
+            "language: auto-detect".into()
+        } else {
+            format!("language: {lang}").into()
+        };
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let r = cx.background_executor().spawn(async move { d.asr_set_language(&lang) }).await;
+            let _ = this.update(cx, |v, cx| {
+                if let Err(e) = r {
+                    v.message = format!("set language failed: {e}").into();
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The best language match for the current filter text (code/name prefix, then contains).
+    fn top_lang_match(&self) -> Option<&'static str> {
+        let f = self.asr_language.trim().to_lowercase();
+        if f.is_empty() {
+            return None;
+        }
+        LANGUAGES
+            .iter()
+            .find(|(c, n)| c.eq_ignore_ascii_case(&f) || c.starts_with(&f) || n.to_lowercase().starts_with(&f))
+            .or_else(|| LANGUAGES.iter().find(|(c, n)| n.to_lowercase().contains(&f) || c.contains(&f)))
+            .map(|(c, _)| *c)
+    }
+
+    /// Apply a language picked from the dropdown (persisted; on-the-fly for running captures).
+    fn apply_language_code(&mut self, code: String, cx: &mut Context<Self>) {
+        let Some(d) = self.daemon.clone() else { return };
+        self.lang_dropdown_open = false;
+        self.asr_language.clear(); // clear the filter — the field then shows the active value
+        self.message = if code.is_empty() {
+            "language: auto-detect".into()
+        } else {
+            format!("language: {code}").into()
+        };
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let r = cx.background_executor().spawn(async move { d.asr_set_language(&code) }).await;
+            let _ = this.update(cx, |v, cx| {
+                if let Err(e) = r {
+                    v.message = format!("set language failed: {e}").into();
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Set the transcription chunk length in seconds (persisted).
+    fn set_asr_chunk(&mut self, seconds: f64, cx: &mut Context<Self>) {
+        let Some(d) = self.daemon.clone() else { return };
+        self.message = format!("chunk length: {seconds:.0}s").into();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let r = cx.background_executor().spawn(async move { d.asr_set_chunk(seconds) }).await;
+            let _ = this.update(cx, |v, cx| {
+                if let Err(e) = r {
+                    v.message = format!("set chunk failed: {e}").into();
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Switch the microphone on a running capture (#46). `device` = None turns it off.
+    fn switch_mic(&mut self, sid: String, device: Option<String>, cx: &mut Context<Self>) {
+        let Some(d) = self.daemon.clone() else { return };
+        self.message = match &device {
+            Some(_) => "switching microphone…".into(),
+            None => "turning microphone off…".into(),
+        };
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn(async move { d.set_mic(&sid, device.as_deref()) })
+                .await;
+            let _ = this.update(cx, |v, cx| {
+                if let Err(e) = r {
+                    v.message = format!("mic switch failed: {e}").into();
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The transcription-language control (#45): an editable ISO-code field + the active
+    /// value. Shown in Settings and the playback pane (change it on the fly during a live
+    /// capture; the next chunk uses it). `focused` is the field's focus state.
+    fn language_field(&self, focused: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let active = self.asr.language.clone().unwrap_or_default();
+        let active_name = LANGUAGES
+            .iter()
+            .find(|(c, _)| *c == active)
+            .map(|(_, n)| *n)
+            .unwrap_or(if active.is_empty() { "Auto-detect" } else { active.as_str() });
+        // The field shows the active language when idle, or the live filter while typing.
+        let field_text = if self.lang_dropdown_open && !self.asr_language.is_empty() {
+            format!("{}▏", self.asr_language)
+        } else if self.lang_dropdown_open && focused {
+            "type to search…".to_string()
+        } else if active.is_empty() {
+            "Auto-detect ▾".to_string()
+        } else {
+            format!("{active} · {active_name} ▾")
+        };
+        let dim = self.lang_dropdown_open && self.asr_language.is_empty();
+
+        let mut col = div().flex().flex_col().gap_1().child(
+            div()
+                .flex()
+                .gap_2()
+                .items_center()
+                .child(div().min_w(px(70.0)).text_color(rgb(0x9aa0a6)).child("Language"))
+                .child(
+                    div()
+                        .id("asr-lang-input")
+                        .track_focus(&self.asr_language_focus)
+                        .key_context("asr-lang")
+                        .on_key_down(cx.listener(Self::on_asr_language_key))
+                        .w(px(220.0))
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(if focused { rgb(0x3d6a87) } else { rgb(0x2a2a2a) })
+                        .bg(rgb(0x1e1e1e))
+                        .cursor_pointer()
+                        .text_color(if dim { rgb(0x666b6f) } else { rgb(0xe0e0e0) })
+                        .child(field_text)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.lang_dropdown_open = !this.lang_dropdown_open;
+                            this.asr_language.clear();
+                            if this.lang_dropdown_open {
+                                window.focus(&this.asr_language_focus);
+                            }
+                            cx.notify();
+                        })),
+                ),
+        );
+
+        if self.lang_dropdown_open {
+            let filter = self.asr_language.trim().to_lowercase();
+            let mut list = div()
+                .flex()
+                .flex_col()
+                .ml(px(78.0))
+                .w(px(220.0))
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(0x3a3a3a))
+                .bg(rgb(0x16181c));
+            let matches = LANGUAGES.iter().filter(|(c, n)| {
+                filter.is_empty() || c.contains(&filter) || n.to_lowercase().contains(&filter)
+            });
+            // Cap the visible rows — the search filter narrows it, so no scroll is needed.
+            let total = LANGUAGES
+                .iter()
+                .filter(|(c, n)| filter.is_empty() || c.contains(&filter) || n.to_lowercase().contains(&filter))
+                .count();
+            let mut any = false;
+            for (code, name) in matches.take(12) {
+                any = true;
+                let code_s = code.to_string();
+                let is_active = *code == active;
+                list = list.child(
+                    div()
+                        .id(SharedString::from(format!("lang-row-{code}")))
+                        .flex()
+                        .gap_2()
+                        .items_center()
+                        .px_2()
+                        .py_1()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(rgb(0x23262b)))
+                        .when(is_active, |s| s.bg(rgb(0x1d2733)))
+                        .text_color(rgb(0xc8ccd0))
+                        .child(div().min_w(px(28.0)).text_color(rgb(0x8ab4f8)).child(if code.is_empty() { "—" } else { *code }))
+                        .child(div().child(*name))
+                        .on_click(cx.listener(move |this, _, _, cx| this.apply_language_code(code_s.clone(), cx))),
+                );
+            }
+            if !any {
+                list = list.child(div().px_2().py_1().text_color(rgb(0x6a6a6a)).child("no match"));
+            } else if total > 12 {
+                list = list.child(
+                    div().px_2().py_1().text_xs().text_color(rgb(0x6a6a6a)).child(format!("+{} more — keep typing", total - 12)),
+                );
+            }
+            col = col.child(list);
+        }
+        col
+    }
+
+    /// The transcription chunk-length chips (#45). Larger windows avoid Whisper's
+    /// short-chunk hallucination; smaller = lower latency.
+    fn chunk_chips(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let cur = self.asr.chunk_seconds;
+        div()
+            .flex()
+            .gap_2()
+            .items_center()
+            .child(div().min_w(px(70.0)).text_color(rgb(0x9aa0a6)).child("Chunk"))
+            .children([8.0f64, 15.0, 30.0, 60.0].into_iter().map(|s| {
+                chip(
+                    &format!("chunk-{s}"),
+                    &format!("{s:.0}s"),
+                    (cur - s).abs() < 0.5,
+                    cx.listener(move |this, _, _, cx| this.set_asr_chunk(s, cx)),
+                )
+            }))
     }
 
     // -- launch a process/URL ---------------------------------------------------
@@ -893,6 +1442,103 @@ impl CaptureApp {
         cx.notify();
     }
 
+    /// Key handling for the index-endpoint URL field (Settings → Indexing). Same minimal
+    /// editing as the launch field; Enter persists + re-probes availability.
+    fn on_index_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let ks = &ev.keystroke;
+        let m = &ks.modifiers;
+        if m.platform && ks.key == "v" {
+            if let Some(t) = cx.read_from_clipboard().and_then(|i| i.text()) {
+                self.index_url.push_str(t.trim());
+                cx.notify();
+            }
+            return;
+        }
+        if m.platform || m.control || m.function {
+            return;
+        }
+        match ks.key.as_str() {
+            "backspace" => {
+                self.index_url.pop();
+            }
+            "enter" => {
+                self.save_settings();
+                self.probe_index_status(cx);
+                return;
+            }
+            _ => {
+                if let Some(c) = ks.key_char.as_deref() {
+                    if !c.is_empty() && !c.chars().any(char::is_control) {
+                        self.index_url.push_str(c);
+                    }
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Key handling for the index model-id field (Settings → Indexing). Enter persists.
+    fn on_index_model_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let ks = &ev.keystroke;
+        let m = &ks.modifiers;
+        if m.platform && ks.key == "v" {
+            if let Some(t) = cx.read_from_clipboard().and_then(|i| i.text()) {
+                self.index_model.push_str(t.trim());
+                cx.notify();
+            }
+            return;
+        }
+        if m.platform || m.control || m.function {
+            return;
+        }
+        match ks.key.as_str() {
+            "backspace" => {
+                self.index_model.pop();
+            }
+            "enter" => {
+                self.save_settings();
+                cx.notify();
+                return;
+            }
+            _ => {
+                if let Some(c) = ks.key_char.as_deref() {
+                    if !c.is_empty() && !c.chars().any(char::is_control) {
+                        self.index_model.push_str(c);
+                    }
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Re-probe index-endpoint availability now (after editing the URL), off the UI thread.
+    fn probe_index_status(&mut self, cx: &mut Context<Self>) {
+        self.save_settings();
+        let url = self.index_url.clone();
+        self.message = "checking index endpoint…".into();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let status = cx
+                .background_executor()
+                .spawn(async move { daemon::discover().and_then(|d| d.index_status(&url).ok()) })
+                .await;
+            let _ = this.update(cx, |v, cx| {
+                if let Some(s) = status {
+                    v.message = if s.available {
+                        "index endpoint reachable".into()
+                    } else if s.configured {
+                        "index endpoint not reachable".into()
+                    } else {
+                        "index endpoint not set".into()
+                    };
+                    v.index_status = s;
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Launch a command (or URL via e.g. `open https://…`) in capture's launch mode
     /// — the engine runs it and captures its window + stdout/stderr + audio.
     fn launch_command(&mut self, cx: &mut Context<Self>) {
@@ -928,6 +1574,41 @@ impl CaptureApp {
                         v.select_session(s.session_id, cx);
                     }
                     Err(e) => v.message = format!("launch failed: {e}").into(),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Import an existing audio/video file as a session: pick a file via the native
+    /// macOS dialog (osascript), then hand the path to the daemon (extraction + ASR run
+    /// in the background, progress over SSE; the poll loop surfaces the new session).
+    fn import_file(&mut self, cx: &mut Context<Self>) {
+        let Some(d) = self.daemon.clone() else {
+            self.message = "no daemon".into();
+            cx.notify();
+            return;
+        };
+        self.message = "choose a file to import…".into();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            // The picker blocks, so run it (and the request) off the UI thread.
+            let r = cx
+                .background_executor()
+                .spawn(async move {
+                    let path = pick_media_file()?; // None => user cancelled
+                    Some(d.import_media(&path).map(|_| path)) // Some(Ok(path)) | Some(Err(msg))
+                })
+                .await;
+            let _ = this.update(cx, |v, cx| {
+                match r {
+                    Some(Ok(path)) => {
+                        let name = path.rsplit('/').next().unwrap_or(&path);
+                        v.message = format!("importing {name}…").into();
+                    }
+                    Some(Err(e)) => v.message = format!("import failed: {e}").into(),
+                    None => v.message = "import cancelled".into(),
                 }
                 cx.notify();
             });
@@ -996,6 +1677,91 @@ impl CaptureApp {
                     Ok(()) => "deleted capture".into(),
                     Err(e) => format!("delete failed: {e}").into(),
                 };
+                if v.playback.as_ref().map(|p| p.sid.as_str()) == Some(id.as_str()) {
+                    v.playback = None; // close the playback screen for a deleted session
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Prune a finished capture's artifacts (frees disk). Reloads the playback view if
+    /// the pruned session is open, so the new state (fewer frames / no audio) shows.
+    fn prune(&mut self, id: String, parts: Vec<&'static str>, cx: &mut Context<Self>) {
+        let Some(d) = self.daemon.clone() else { return };
+        self.message = format!("pruning {}…", short_id(&id)).into();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let id2 = id.clone();
+            let r = cx
+                .background_executor()
+                .spawn(async move { d.prune(&id2, &parts) })
+                .await;
+            let _ = this.update(cx, |v, cx| {
+                v.message = match r {
+                    Ok(()) => "pruned".into(),
+                    Err(e) => format!("prune failed: {e}").into(),
+                };
+                if v.playback.as_ref().map(|p| p.sid.as_str()) == Some(id.as_str()) {
+                    v.select_session(id.clone(), cx); // reload frames/subs/caps
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Re-transcribe a finished capture's audio (background on the daemon; progress over
+    /// SSE into `LiveState.retranscribe`). The open session reloads when it completes.
+    fn retranscribe(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(d) = self.daemon.clone() else { return };
+        self.retranscribing = Some(id.clone());
+        self.live.lock().unwrap().retranscribe.insert(id.clone(), 0.0);
+        self.message = format!("re-transcribing {}…", short_id(&id)).into();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let id2 = id.clone();
+            let r = cx
+                .background_executor()
+                .spawn(async move { d.retranscribe(&id2, None) })
+                .await;
+            let _ = this.update(cx, |v, cx| {
+                if let Err(e) = r {
+                    v.retranscribing = None;
+                    v.live.lock().unwrap().retranscribe.remove(&id);
+                    v.message = format!("re-transcribe failed: {e}").into();
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Build a finished capture's multimodal index (background on the daemon; progress over
+    /// SSE into `LiveState.index_progress`). Uses the GUI-configured LM Studio endpoint.
+    fn index_session(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(d) = self.daemon.clone() else { return };
+        let endpoint = self.index_url.clone();
+        let model = self.index_model.clone();
+        let rate = self.index_sample_rate;
+        let preset = self.index_preset.clone();
+        self.indexing.insert(id.clone());
+        self.live.lock().unwrap().index_progress.insert(id.clone(), ("starting".into(), 0.0));
+        self.message = format!("indexing {} ({preset})…", short_id(&id)).into();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let id2 = id.clone();
+            let r = cx
+                .background_executor()
+                .spawn(async move { d.index(&id2, &endpoint, &model, rate, &preset) })
+                .await;
+            let _ = this.update(cx, |v, cx| {
+                if let Err(e) = r {
+                    v.indexing.remove(&id);
+                    v.live.lock().unwrap().index_progress.remove(&id);
+                    v.message = format!("index failed: {e}").into();
+                }
                 cx.notify();
             });
         })
@@ -1338,7 +2104,7 @@ impl Render for CaptureApp {
                     let id_del = id.clone();
                     row = row.child(action("del", "trash", 0x4a2a2a, 0xe6a0a0).on_click(
                         cx.listener(move |this, _, _, cx| {
-                            this.confirm_delete = Some(id_del.clone());
+                            this.confirm = Some(ConfirmKind::DeleteSession(id_del.clone()));
                             cx.notify();
                         }),
                     ));
@@ -1476,6 +2242,9 @@ impl Render for CaptureApp {
         }
 
         let cmd_focused = self.cmd_focus.is_focused(window);
+        let index_focused = self.index_focus.is_focused(window);
+        let index_model_focused = self.index_model_focus.is_focused(window);
+        let asr_lang_focused = self.asr_language_focus.is_focused(window);
         let scrollbar = self.scrollbar(cx);
         let settings = self.show_settings;
         // Three top-level screens: dashboard (default), settings, and the session
@@ -1492,6 +2261,23 @@ impl Render for CaptureApp {
             .flex_col()
             .gap_1()
             .child(div().text_color(rgb(0x9aa0a6)).child("Capture quality"))
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .items_center()
+                    .child(div().min_w(px(96.0)).text_color(rgb(0x9aa0a6)).child("Screenshots"))
+                    .child(chip("cap-shots-on", "On", self.capture_screenshots, cx.listener(|this, _, _, cx| {
+                        this.capture_screenshots = true;
+                        this.save_settings();
+                        cx.notify();
+                    })))
+                    .child(chip("cap-shots-off", "Off (audio only)", !self.capture_screenshots, cx.listener(|this, _, _, cx| {
+                        this.capture_screenshots = false;
+                        this.save_settings();
+                        cx.notify();
+                    }))),
+            )
             .child(
                 div()
                     .flex()
@@ -1710,6 +2496,217 @@ impl Render for CaptureApp {
                         cx.listener(|this, _, _, cx| this.launch_command(cx)),
                     ))
             }))
+            .children(dash.then(|| {
+                // Import an existing audio/video file as a session (native file picker →
+                // daemon extracts audio/frames + runs ASR; progress streams over SSE).
+                let importing = self.live.lock().unwrap().import_progress.clone();
+                let mut row = div()
+                    .flex()
+                    .gap_2()
+                    .items_center()
+                    .child(div().text_color(rgb(0x9aa0a6)).child("Import:"))
+                    .child(button(
+                        "Import audio/video…",
+                        cx.listener(|this, _, _, cx| this.import_file(cx)),
+                    ));
+                if let Some((phase, frac)) = importing {
+                    row = row.child(
+                        div()
+                            .text_color(rgb(0x8ab4f8))
+                            .child(format!("{} {}%", phase, (frac * 100.0) as i32)),
+                    );
+                }
+                row
+            }))
+            .children(sett.then(|| {
+                // App update (#48): offer a newer GitHub release; install only after confirm.
+                let mut row = div()
+                    .flex()
+                    .gap_2()
+                    .items_center()
+                    .child(div().min_w(px(70.0)).text_color(rgb(0x9aa0a6)).child("App"));
+                match (&self.update_info, self.updating) {
+                    (_, true) => {
+                        row = row.child(div().text_color(rgb(0x8ab4f8)).child("downloading update… the app will restart"));
+                    }
+                    (Some(info), false) => {
+                        let info2 = info.clone();
+                        row = row
+                            .child(div().text_color(rgb(0xe0c063)).child(format!("v{} available (you have v{})", info.version, update::CURRENT)))
+                            .child(button(
+                                "Update…",
+                                cx.listener(move |this, _, _, cx| {
+                                    this.confirm = Some(ConfirmKind::Update(info2.clone()));
+                                    cx.notify();
+                                }),
+                            ));
+                    }
+                    (None, false) => {
+                        row = row.child(div().text_color(rgb(0x6a6a6a)).child(format!("v{} · up to date", update::CURRENT)));
+                    }
+                }
+                row
+            }))
+            .children(sett.then(|| {
+                // Transcription settings (#45): language + chunk length. Pinning the language
+                // stops Whisper hallucinating "Thank you." on short non-English chunks; a 30s
+                // chunk is the reliable default.
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().text_color(rgb(0x9aa0a6)).child("Transcription"))
+                    .child(self.language_field(asr_lang_focused, cx))
+                    .child(self.chunk_chips(cx))
+            }))
+            .children(sett.then(|| {
+                // Multimodal index endpoint (#44): the LM Studio chat URL. Indexing is OFF
+                // until this is set AND reachable (the dot reflects /v1/index/status).
+                let (dot, label) = if self.index_status.available {
+                    (0x34a853u32, "reachable")
+                } else if self.index_status.configured {
+                    (0xea4335u32, "unreachable")
+                } else {
+                    (0x6a6a6au32, "not set")
+                };
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .items_center()
+                            .child(div().text_color(rgb(0x9aa0a6)).child("Index endpoint"))
+                            .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(rgb(dot)))
+                            .child(div().text_color(rgb(0x9aa0a6)).child(label)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .id("index-input")
+                                    .track_focus(&self.index_focus)
+                                    .key_context("index")
+                                    .on_key_down(cx.listener(Self::on_index_key))
+                                    .flex_1()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(if index_focused { rgb(0x3d6a87) } else { rgb(0x2a2a2a) })
+                                    .bg(rgb(0x1e1e1e))
+                                    .text_color(if self.index_url.is_empty() {
+                                        rgb(0x666b6f)
+                                    } else {
+                                        rgb(0xe0e0e0)
+                                    })
+                                    .child(if self.index_url.is_empty() {
+                                        "http://192.168.31.217:1234/v1/chat/completions  (Enter to check)".to_string()
+                                    } else if index_focused {
+                                        format!("{}▏", self.index_url)
+                                    } else {
+                                        self.index_url.clone()
+                                    })
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        window.focus(&this.index_focus);
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(button("Check", cx.listener(|this, _, _, cx| this.probe_index_status(cx)))),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .items_center()
+                            .child(div().min_w(px(44.0)).text_color(rgb(0x9aa0a6)).child("model"))
+                            .child(
+                                div()
+                                    .id("index-model-input")
+                                    .track_focus(&self.index_model_focus)
+                                    .key_context("index-model")
+                                    .on_key_down(cx.listener(Self::on_index_model_key))
+                                    .flex_1()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(if index_model_focused { rgb(0x3d6a87) } else { rgb(0x2a2a2a) })
+                                    .bg(rgb(0x1e1e1e))
+                                    .text_color(if self.index_model.is_empty() {
+                                        rgb(0x666b6f)
+                                    } else {
+                                        rgb(0xe0e0e0)
+                                    })
+                                    .child(if self.index_model.is_empty() {
+                                        "qwen/qwen3.5-9b  (model id — blank = server default)".to_string()
+                                    } else if index_model_focused {
+                                        format!("{}▏", self.index_model)
+                                    } else {
+                                        self.index_model.clone()
+                                    })
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        window.focus(&this.index_model_focus);
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                    .child(
+                        // Leaf sampling rate: caption every round(1/rate)-th frame. Coarser =
+                        // far fewer vision calls (a long session has thousands of frames).
+                        div()
+                            .flex()
+                            .gap_2()
+                            .items_center()
+                            .child(div().min_w(px(44.0)).text_color(rgb(0x9aa0a6)).child("frames"))
+                            .children([1.0f64, 0.5, 0.25, 0.1, 0.05].into_iter().map(|r| {
+                                let label = if r >= 1.0 {
+                                    "all".to_string()
+                                } else {
+                                    format!("1/{}", (1.0 / r).round() as i32)
+                                };
+                                chip(
+                                    &format!("idx-rate-{r}"),
+                                    &label,
+                                    (self.index_sample_rate - r).abs() < 1e-3,
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.index_sample_rate = r;
+                                        this.save_settings();
+                                        cx.notify();
+                                    }),
+                                )
+                            })),
+                    )
+                    .child(
+                        // Prompt preset: what's right for a meeting is wrong for a lecture.
+                        div()
+                            .flex()
+                            .gap_2()
+                            .items_center()
+                            .child(div().min_w(px(44.0)).text_color(rgb(0x9aa0a6)).child("about"))
+                            .children(
+                                [("auto", "Auto"), ("meeting", "Meeting"), ("lecture", "Lecture"), ("general", "General")]
+                                    .into_iter()
+                                    .map(|(key, label)| {
+                                        chip(
+                                            &format!("idx-preset-{key}"),
+                                            label,
+                                            self.index_preset == key,
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.index_preset = key.to_string();
+                                                this.save_settings();
+                                                cx.notify();
+                                            }),
+                                        )
+                                    }),
+                            ),
+                    )
+            }))
             .children(sett.then(|| {
                 div()
                     .flex()
@@ -1789,8 +2786,24 @@ impl Render for CaptureApp {
             .children(playback.then(|| self.render_playback(window, cx))),
             )
             .children(scrollbar)
-            // Delete confirmation modal — an occluding dim backdrop + a centered card.
-            .children(self.confirm_delete.clone().map(|sid| {
+            // Confirmation modal (delete / destructive prune) — occluding backdrop + card.
+            .children(self.confirm.clone().map(|kind| {
+                let (title, body, label): (&str, String, &str) = match &kind {
+                    ConfirmKind::DeleteSession(sid) => (
+                        "Delete this capture?",
+                        format!("{} — removes the folder and its record. This can't be undone.", short_id(sid)),
+                        "Delete",
+                    ),
+                    ConfirmKind::Prune(_, _, body) => ("Prune this capture?", body.clone(), "Remove"),
+                    ConfirmKind::Update(info) => (
+                        "Update Capture?",
+                        format!(
+                            "Download v{} and install it. The app will quit and relaunch (stop any running captures first).",
+                            info.version
+                        ),
+                        "Update",
+                    ),
+                };
                 div()
                     .absolute()
                     .size_full()
@@ -1804,15 +2817,12 @@ impl Render for CaptureApp {
                             .flex()
                             .flex_col()
                             .gap_3()
-                            .w(px(320.0))
+                            .w(px(340.0))
                             .p_4()
                             .rounded_lg()
                             .bg(rgb(0x1c1c1c))
-                            .child(div().text_lg().child("Delete this capture?"))
-                            .child(div().text_color(rgb(0x9aa0a6)).child(format!(
-                                "{} — removes the folder and its record. This can't be undone.",
-                                short_id(&sid)
-                            )))
+                            .child(div().text_lg().child(title))
+                            .child(div().text_color(rgb(0x9aa0a6)).child(body))
                             .child(
                                 div()
                                     .flex()
@@ -1821,14 +2831,13 @@ impl Render for CaptureApp {
                                     .child(button(
                                         "Cancel",
                                         cx.listener(|this, _, _, cx| {
-                                            this.confirm_delete = None;
+                                            this.confirm = None;
                                             cx.notify();
                                         }),
                                     ))
-                                    .child({
-                                        let s = sid.clone();
+                                    .child(
                                         div()
-                                            .id("del-go")
+                                            .id("confirm-go")
                                             .flex()
                                             .items_center()
                                             .gap_1()
@@ -1838,12 +2847,16 @@ impl Render for CaptureApp {
                                             .cursor_pointer()
                                             .bg(rgb(0x7a2d2d))
                                             .child(icon("trash", 14.0, 0xe6c0c0))
-                                            .child("Delete")
+                                            .child(label)
                                             .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.confirm_delete = None;
-                                                this.delete_session(s.clone(), cx);
-                                            }))
-                                    }),
+                                                this.confirm = None;
+                                                match kind.clone() {
+                                                    ConfirmKind::DeleteSession(sid) => this.delete_session(sid, cx),
+                                                    ConfirmKind::Prune(sid, parts, _) => this.prune(sid, parts, cx),
+                                                    ConfirmKind::Update(info) => this.start_update(info, cx),
+                                                }
+                                            })),
+                                    ),
                             ),
                     )
             }))
@@ -1923,7 +2936,8 @@ impl CaptureApp {
 
     /// The full playback screen: the screenshot at the playhead (or live latest),
     /// time-synced subtitles, and (for finished captures) a scrubber + transport.
-    fn render_playback(&self, _window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_playback(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let asr_lang_focused = self.asr_language_focus.is_focused(window);
         let Some(pb) = self.playback.as_ref() else {
             return div().into_any_element();
         };
@@ -2040,7 +3054,228 @@ impl CaptureApp {
         } else if finished && !pb.loaded {
             root = root.child(div().text_color(rgb(0x6a6a6a)).child("loading…"));
         }
+
+        // Live mic switcher (#46): on a running capture, change the input device (or turn
+        // it off) without restarting — appends to the mic track.
+        if !finished {
+            let sid = pb.sid.clone();
+            let active = self.sessions.iter().find(|s| s.session_id == sid).and_then(|s| s.mic_device.clone());
+            let mut row = div()
+                .flex()
+                .gap_2()
+                .items_center()
+                .flex_wrap()
+                .child(div().min_w(px(40.0)).text_color(rgb(0x9aa0a6)).child("Mic"));
+            let s_off = sid.clone();
+            row = row.child(chip(
+                "live-mic-off",
+                "Off",
+                active.is_none(),
+                cx.listener(move |this, _, _, cx| this.switch_mic(s_off.clone(), None, cx)),
+            ));
+            for dev in &self.mics {
+                let label = truncate(&dev.name, 18);
+                let id = dev.id.clone();
+                let s = sid.clone();
+                row = row.child(chip(
+                    &format!("live-mic-{}", dev.id),
+                    &label,
+                    active.as_deref() == Some(dev.id.as_str()),
+                    cx.listener(move |this, _, _, cx| this.switch_mic(s.clone(), Some(id.clone()), cx)),
+                ));
+            }
+            if self.mics.is_empty() {
+                row = row.child(div().text_color(rgb(0x6a6a6a)).child("(Refresh windows to load devices)"));
+            }
+            root = root.child(row);
+        }
+
+        // Manage: capability status + prune + re-transcribe (finished sessions only).
+        if finished {
+            let sess = self.sessions.iter().find(|s| s.session_id == pb.sid);
+            let has_shots = sess.map_or(true, |s| s.has_screenshots);
+            let has_audio = sess.map_or(true, |s| s.has_audio);
+            let can_retr = sess.map_or(true, |s| s.can_retranscribe);
+            let retr_frac = self.live.lock().unwrap().retranscribe.get(&pb.sid).copied();
+            let sid = pb.sid.clone();
+
+            let status = div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(icon("image", 13.0, if has_shots { 0x88c0a0 } else { 0x5a5a5a }))
+                        .child(div().text_xs().text_color(rgb(if has_shots { 0x9aa0a6 } else { 0x5a5a5a })).child(
+                            if has_shots { "screenshots" } else { "screenshots pruned" },
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(icon(if has_audio { "volume" } else { "volume-x" }, 13.0, if has_audio { 0x88c0a0 } else { 0x5a5a5a }))
+                        .child(div().text_xs().text_color(rgb(if has_audio { 0x9aa0a6 } else { 0x5a5a5a })).child(
+                            if has_audio { "audio" } else { "audio removed" },
+                        )),
+                );
+
+            let mut actions = div().flex().items_center().gap_2().flex_wrap();
+            if let Some(frac) = retr_frac {
+                actions = actions.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .px_2()
+                        .py_1()
+                        .child(icon("refresh", 13.0, 0x66d9a0))
+                        .child(div().text_xs().text_color(rgb(0x66d9a0)).child(format!(
+                            "re-transcribing {:.0}%",
+                            (frac * 100.0).clamp(0.0, 100.0)
+                        ))),
+                );
+            } else if can_retr {
+                let s = sid.clone();
+                actions = actions.child(self.mng_btn(
+                    "mng-retr", "refresh", "Re-transcribe", 0xcfd3d6, 0x2a2a2a,
+                    cx.listener(move |this, _, _, cx| this.retranscribe(s.clone(), cx)),
+                ));
+            } else {
+                actions = actions.child(self.mng_btn("mng-retr", "refresh", "Re-transcribe", 0x5a5a5a, 0x222222, |_, _, _| {}));
+            }
+            if has_shots {
+                let s = sid.clone();
+                actions = actions.child(self.mng_btn(
+                    "mng-halve", "scissors", "Halve frames", 0xcfd3d6, 0x2a2a2a,
+                    cx.listener(move |this, _, _, cx| this.prune(s.clone(), vec!["screenshots_halve"], cx)),
+                ));
+                let s = sid.clone();
+                actions = actions.child(self.mng_btn(
+                    "mng-delshots", "image", "Delete frames", 0xe6c0c0, 0x3a2a2a,
+                    cx.listener(move |this, _, _, cx| {
+                        this.confirm = Some(ConfirmKind::Prune(
+                            s.clone(),
+                            vec!["screenshots"],
+                            "Delete all screenshots? The transcript and audio stay.".into(),
+                        ));
+                        cx.notify();
+                    }),
+                ));
+            }
+            if has_audio {
+                let s = sid.clone();
+                actions = actions.child(self.mng_btn(
+                    "mng-delaudio", "volume-x", "Remove audio", 0xe6c0c0, 0x3a2a2a,
+                    cx.listener(move |this, _, _, cx| {
+                        this.confirm = Some(ConfirmKind::Prune(
+                            s.clone(),
+                            vec!["audio"],
+                            "Remove the audio stream? Frees the most disk but disables re-transcribe (the transcript stays)."
+                                .into(),
+                        ));
+                        cx.notify();
+                    }),
+                ));
+            }
+            // Build index (#44): caption frames with the remote vision LLM → a tree summary.
+            // Off unless the session has frames AND the configured endpoint is reachable.
+            let can_index = sess.map_or(false, |s| s.can_index);
+            let idx_prog = self.live.lock().unwrap().index_progress.get(&pb.sid).cloned();
+            if let Some((phase, frac)) = idx_prog {
+                actions = actions.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .px_2()
+                        .py_1()
+                        .child(icon("list-tree", 13.0, 0x8ab4f8))
+                        .child(div().text_xs().text_color(rgb(0x8ab4f8)).child(format!(
+                            "indexing {} {:.0}%",
+                            phase,
+                            (frac * 100.0).clamp(0.0, 100.0)
+                        ))),
+                );
+            } else if can_index && self.index_status.available {
+                let s = sid.clone();
+                actions = actions.child(self.mng_btn(
+                    "mng-index", "list-tree", "Build index", 0xcfd3d6, 0x2a2a2a,
+                    cx.listener(move |this, _, _, cx| this.index_session(s.clone(), cx)),
+                ));
+            } else {
+                // Disabled: dim it; the Settings → Index endpoint dot says why.
+                actions = actions.child(self.mng_btn(
+                    "mng-index", "list-tree", "Build index", 0x5a5a5a, 0x222222, |_, _, _| {},
+                ));
+            }
+            let mut manage = div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .pt_2()
+                .child(div().text_color(rgb(0x9aa0a6)).child("Manage"))
+                .child(status)
+                // Change the language on the fly (a running capture's next chunk uses it);
+                // then Re-transcribe to fix the part already done with the wrong language.
+                .child(self.language_field(asr_lang_focused, cx))
+                .child(actions);
+            // Show the index's root summary once built (#44).
+            if let Some(summary) = pb.index_summary.clone() {
+                let nodes = pb.index_nodes.unwrap_or(0);
+                manage = manage.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .p_2()
+                        .rounded_md()
+                        .bg(rgb(0x16181c))
+                        .border_1()
+                        .border_color(rgb(0x2a2a2a))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(icon("list-tree", 13.0, 0x8ab4f8))
+                                .child(div().text_xs().text_color(rgb(0x8ab4f8)).child(format!("Index summary · {nodes} nodes"))),
+                        )
+                        .child(div().text_sm().text_color(rgb(0xc8ccd0)).child(summary)),
+                );
+            }
+            root = root.child(manage);
+        }
         root.into_any_element()
+    }
+
+    /// A labeled icon button for the playback "Manage" actions (prune / re-transcribe).
+    fn mng_btn(
+        &self,
+        id: &'static str,
+        name: &'static str,
+        label: &'static str,
+        tint: u32,
+        bg: u32,
+        on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> impl IntoElement {
+        div()
+            .id(id)
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .cursor_pointer()
+            .bg(rgb(bg))
+            .child(icon(name, 13.0, tint))
+            .child(div().text_xs().text_color(rgb(tint)).child(label))
+            .on_click(on_click)
     }
 
     /// A small transport-control icon button.

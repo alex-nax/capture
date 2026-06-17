@@ -1,5 +1,187 @@
 # Progress Log
 
+## Session 54 — 2026-06-17
+**Agent**: builder (macOS box, branch **v2**) — skill optimization + 0.2.2 deploy + local commit.
+- **Skill (skill-creator):** rewrote `skills/capture/SKILL.md` Step 1 to the **app-first distribution**
+  (Capture.app via GitHub Releases, auto-updating, owns the daemon + Screen Recording grant; MCP is
+  daemon-first so it shares the app's daemon; `install.sh` remains for the MCP command / headless).
+  Added a **"fix a wrong/hallucinated transcript"** cookbook recipe (§8) + the full tool set + pushier
+  trigger description. Ran the skill-creator **description-optimization loop** (20 trigger/no-trigger
+  queries, `claude -p`): negatives all correctly rejected (precision 100%), but it found **no improvement**
+  over the hand-written description — the should-trigger queries are install/how-to/"fix it" asks that
+  Claude answers directly without consulting a skill (a documented trigger-eval limitation), so recall
+  pinned at 0% and `best_description` == current. Kept the hand-optimized description.
+- **Deploy:** bumped to **0.2.2** (pyproject / `__init__` / Cargo / packaging), full re-freeze + GUI +
+  helper, Developer-ID signed, **notarized (Accepted) + stapled**, installed to `/Applications`, launched.
+  Verified live: daemon `version=0.2.2`, `/v1/asr/models` carries language+chunk, schema has `IndexRequest`
+  + `SessionSummary.mic_device`. (No GitHub release, no git push — per request.)
+- **Commit:** the whole #40–#48 batch + skill + 0.2.2 committed **locally** on `v2` (`drive_nolf.py`
+  excluded). Not pushed.
+
+---
+
+## Session 53 — 2026-06-17
+**Agent**: builder (macOS box, branch **v2**) — feature **#46** (switch the mic on a live capture).
+- `AudioCapture` gained an **`append`** mode (open files `a`/`ab`). `CaptureSession.set_mic_device(device)`:
+  on a running session, stop the `_mic` track + start a new one with the new device, appending to
+  `mic.s16le`/`mic_transcript.*` (continuous; each capture's epoch is real wall-clock so iso timestamps
+  align). `device`/`"default"` = on/switch, `None`/`""` = off. `mic_device` now in `summary()` + `SessionSummary`.
+- Parity: `POST /v1/sessions/{id}/mic`, `DaemonClient.set_mic`, MCP **`capture_set_mic`** (11th tool), GUI
+  live **Mic** chip row in the playback pane (running sessions) highlighting the active device.
+**Verification**: daemon e2e — unknown→404, switch ON (mic.s16le created by the helper), switch OFF
+(mic_status=off), switch on a stopped session→400. smoke 68/68, contracts 4/4 (golden: +`capture_set_mic`,
+`SessionSummary.mic_device`). GUI `cargo build --release` clean. **feature #46 → passes:true.**
+Also this session: **#47** + **#48** (below).
+
+### #47 — bundled skill update + version check
+Updated `skills/capture/SKILL.md` + `references/quick-actions.md` to document the full tool set
+(`list_windows`, `list_audio_devices`, `capture_set_mic`, `capture_prune`, `capture_retranscribe`,
+`transcription_settings`, `capture_import`, `capture_index`) + new `capture_start` options + the
+transcription/hallucination guidance. The GUI's skill version-check was ALREADY hash-based
+(`skill::status` → `UpdateAvailable` when bundled ≠ installed, shown "↑ update", refreshed at startup +
+after install) — editing the bundled skill makes installed copies surface the update (verified: the edited
+skill differs from the installed copy). DMG build already bundles it into `Resources/skill`. **#47 passes:true.**
+
+### #48 — in-app GitHub auto-update (with confirmation)
+`gui/src/update.rs`: `check()` GETs `repos/alex-nax/capture/releases/latest`, semver-compares `tag_name` to
+`CARGO_PKG_VERSION`, finds the `.dmg` asset. Settings **App** row: `vX · up to date` / `vY available →
+Update…`. Update → shared confirm modal (`ConfirmKind::Update`) → `download_and_install` (fetch notarized
+dmg) → a **detached updater script** quits the app+daemon, mounts the dmg, replaces `/Applications/Capture.app`,
+strips quarantine, relaunches. Never without confirmation. **Verified against the real API**: 0.2.0 vs
+v0.2.0 → no offer; the `.dmg` asset URL resolves correctly. GUI builds clean. **#48 passes:true.**
+NOTE: the update only *offers* once a release newer than the deployed build exists — cut a 0.3.0 release
+(with the version bumped) to exercise it live.
+
+---
+
+## Session 52 — 2026-06-17
+**Agent**: builder (macOS box, branch **v2**) — feature **#45** (transcription quality + settings).
+**Trigger**: a Russian capture (session 0c5c5a) transcribed as 18× "Thank you." — Whisper hallucinating.
+**Root cause** (diagnosed on the real audio): the app audio was fine (rms ~3000, clean Russian on a 30 s
+re-chunk) but the live **8 s chunks** + auto-language made Whisper mis-detect short/pause chunks → phantom
+"Thank you."/"Obrigado."/"Спасибо."; the **silent mic** (rms 43) looped "RSSSS…". Proven: 4 s/8 s/16 s
+chunks hallucinate, **30 s is clean**.
+**Fixes** (all GUI↔MCP↔daemon parity):
+- Backend guards (mlx + faster): `condition_on_previous_text=False` + `no_speech`/`logprob`/`compression`
+  thresholds.
+- **Silence gate** `asr.is_silent` (int16-RMS < `SILENCE_RMS16` 70, env `CAPTURE_ASR_SILENCE_RMS`) — skip
+  near-silent chunks in `audio.py` + `retranscribe.py` (offsets still advance).
+- **Language** as a persisted, ON-THE-FLY setting (`manager.active_language`; resolved per `transcribe()`
+  call so a running capture's next chunk picks it up). `POST /v1/asr/language`; client; GUI field (Settings +
+  playback pane); MCP `transcription_settings` + `capture_retranscribe(language=…)`. NOT env.
+- **Chunk length** as a persisted setting (default **30 s**, bounds 1–120; `manager.active_chunk_seconds`).
+  `POST /v1/asr/chunk`; GUI chips; `StartSessionRequest.audio_chunk_seconds` default `None`→config;
+  `CaptureSession` + `retranscribe` resolve from it; re-transcribe uses the CURRENT setting, not the old
+  session's 8 s. `capture_retranscribe(chunk_seconds=…)`.
+**Verification**: smoke 68/68 (updated to feed non-silent tone — the gate now skips silence), contracts 4/4
+(goldens: +`transcription_settings`, `AsrModelsResponse.language`/`chunk_seconds`, `audio_chunk_seconds`
+nullable). Daemon routes (set/clamp/validate/reflect language+chunk), MCP `transcription_settings`
+(read/set/clear) verified. **Re-transcribed the real session 0c5c5a → 287 coherent Russian segments**
+(garbage kept as `transcript.prev.*`); the user's active language is now `ru`. GUI `cargo build --release`
+clean. **feature #45 → passes:true.** NOT yet redeployed — the installed app still runs the pre-#45 daemon,
+so NEW captures need the rebuild to get the fix.
+NOTE: the mic track for 0c5c5a was a genuinely dead mic (rms 43); its `mic_transcript` still holds the old
+pre-gate garbage (re-transcribe only redoes the app `audio.s16le`), but the gate prevents it going forward.
+
+---
+
+## Session 51 — 2026-06-17
+**Agent**: builder (macOS box, branch **v2**) — feature **#44** (hierarchical multimodal index).
+**Summary**: A session's screenshots are captioned by a remote **LM Studio** vision LLM and the timeline
+is summarized as a **binary tree** (vision at leaves → combine up to a root summary), full GUI↔MCP parity.
+Built per the approved `docs/specs/indexing.md` decisions; **disabled unless a working endpoint is configured**.
+- **`core/vision_client.py`**: stdlib-only OpenAI `/v1/chat/completions` client — `caption_image` (sips
+  downscale→JPEG→base64 data URI, raw-PNG fallback), `combine` (text), `available()` (`/v1/models` preflight),
+  retries. Env `CAPTURE_INDEX_URL/MODEL/KEY/TIMEOUT/MAX_IMAGE_PX` (+ per-request `endpoint`/`model` override).
+- **`core/frames.py`**: list screenshots (fs_stamp→offset), `select_leaves` by tunable **sampling rate**
+  (keep every `round(1/rate)`-th frame, default 0.5) + `max_leaves` cap.
+- **`core/indexer.py`**: balanced binary tree by midpoint; vision-caption leaves, combine children up,
+  **fuse the time-aligned transcript** (capped feed) into each combine; every node keeps **raw artifacts**
+  (`vision_caption`, `transcript_slice`) beside the fused `summary`. Writes `index.json` + `index_summary.txt`,
+  **checkpointed per node** (resume reuses done nodes). `load_index`. `can_index` added to `session_capabilities`.
+- **Daemon**: `IndexRequest`, `start_index` (background + SSE `index`→`index_done`/`_error`),
+  `POST /v1/sessions/{id}/index`, `GET …/index`, `GET /v1/index/status` (availability probe); 503 when the
+  endpoint is unset/unreachable. `DaemonClient.index/get_index/index_status`. MCP `capture_index` (9th tool).
+- **GUI**: Settings **Index endpoint** URL + **model** fields (persisted `index_url`/`index_model`) + a
+  reachability dot (slow separate `index_status` poll, since the probe can time out); playback Manage
+  **Build index** button (`list-tree` icon, gated on `can_index` + `index_status.available`); SSE progress →
+  `LiveState.index_progress`; the built index's **root summary + node count** render in Manage (via `get_index`).
+  A model field is needed because a box can have several models loaded (the user's has qwen + gemma + an embedder).
+**Verification**: `tests/indexing_hermetic.py` (18 checks — tree 2n-1, vision-only-at-leaves, transcript
+fusion, raw artifacts, 8 vision + 7 text calls, **checkpoint resume recomputes only the missing node**);
+daemon e2e (fake endpoint — `index/status` available, `can_index`, POST 202, GET index complete, audio-only → 400).
+**LIVE-VERIFIED against the real `qwen/qwen3.5-9b` on LM Studio @ 192.168.31.217:1234**: a 12 s screen recording
+→ import (6 frames) → index → 6 accurate captions + a coherent root summary (11-node tree, ~230 s); and a
+**model-in-request-body** run (the exact GUI path, no env) built with `model=qwen/qwen3.5-9b`. NOTE: model ids
+carry a publisher prefix (`qwen/qwen3.5-9b`). smoke 68/68, contracts 4/4, GUI `cargo build --release` clean.
+**feature #44 → passes:true.** Not yet deployed to the app (no re-freeze this round) — the new index modules
+are in the PyInstaller hidden-imports for the next build.
+
+---
+
+## Session 50 — 2026-06-17
+**Agent**: builder (macOS box, branch **v2**) — features **#42** (screenshot toggle) + **#43** (import
+audio/video), plus a new **ispec #44** (remote multimodal indexing) queued for later.
+**Summary**: Two capture-flexibility features, full GUI↔MCP parity, verified on the **frozen** artifact.
+- **#42 — screenshot toggle (audio-only capture)**: the daemon already accepted `capture_screenshots`;
+  added a GUI **Screenshots On/Off** chip in Settings→Capture quality (`capture_screenshots` field,
+  persisted in `gui-settings.json`, merged into the start body via `shot_settings()`). Off ⇒ no `screenshots/`.
+- **#43 — import a file as a session**: new helper modes `audiocap --extract-audio <file>` (AVAssetReader →
+  s16le on stdout, exit 3=no-audio-track/4=read-fail) and `--extract-frames <file> --out <dir> --interval`
+  (AVAssetImageGenerator → `<ms>.png`); linked ImageIO+UniformTypeIdentifiers. `core/import_media.py`
+  (`import_file`: mint id at import-time epoch, extract audio→`audio.s16le`, frames→`screenshots/` renamed to
+  `fs_stamp(base+ms/1000)` so frames+subtitles share one timeline, write session.json `audio_source="import"`,
+  reuse `retranscribe_session` for ASR; a **silent video imports as frames-only**, audio-only file ⇒ no frames).
+  `registry.add_recovered`; `daemon.start_import` (background+SSE `import`→`import_done`/`_error`),
+  `POST /v1/sessions/import`, `ImportMediaRequest`, `DaemonClient.import_media`, MCP `capture_import` (8th tool),
+  GUI **Import…** row (native `osascript` file picker off-thread → `import_media`; SSE → `LiveState.import_progress`).
+- **#44 ispec (queued, not built)**: `docs/specs/indexing.md` — hierarchical binary-tree multimodal index of a
+  session's screenshots via a remote **LM Studio** vision LLM (Qwen, OpenAI-compatible) on `192.168.31.217:1234`.
+  Approved decisions: tunable **index sampling rate** (0<rate≤1, default 0.5) + configurable capture interval;
+  **vision at leaves, combine up**; **fuse transcript but keep raw per-node artifacts**; plain-text nodes;
+  resumable background job + SSE; **DISABLED by default unless a working endpoint is configured**. Tracked #44.
+**Verification (FROZEN daemon + bundled helper + ASR, isolated env)**: `--extract-audio` (3.41s s16le),
+`--extract-frames` (4 PNGs by ms / audio-only→0), exit codes 3 vs 4; via `POST /v1/sessions/import`: audio →
+1 segment epoch-aligned, **silent video → 4 fs_stamp frames** (no audio); bad path → 400; **MCP `capture_import`
+→ daemon**; **#42** `capture_screenshots:false` → `has_screenshots:false`, `screenshots:0`. smoke 68/68,
+contracts 4/4 (regenerated goldens: +`capture_import`, +`ImportMediaRequest`, capability flags), GUI `cargo
+build --release` clean. **Built Developer-ID-signed `Capture-0.2.0.dmg` (166M).** **features #42 + #43 → passes:true.**
+**Open**: notarize+staple the new DMG / cut a release if desired (offered, not yet done). `drive_nolf.py` is
+pre-existing + untracked — keep it out of commits.
+
+---
+
+## Session 49 — 2026-06-16
+**Agent**: builder (macOS box, branch **v2**) — features #40 + #41 (the calm-dazzling-harbor leftovers).
+**Summary**: Session **pruning + capability flags** (#40) and **re-transcribe** (#41), with full GUI↔MCP
+parity (owner: every feature reaches both surfaces). Also tracked new ideas: **#42** (toggle visual
+capture) + **#43** (import audio/video — needs an AVFoundation helper, no ffmpeg).
+- **Capability flags** (`session.session_capabilities`, disk-computed): `has_screenshots`/`has_audio`/
+  `has_mic`/`can_retranscribe`, on every summary (live via `CaptureSession.summary`, recovered via
+  `registry._with_caps`) so pruning is reflected immediately. Added to `SessionSummary` + GUI `Session`.
+- **Prune** (#40): `session.prune_session_dir` (delete-all / halve-cadence screenshots / remove audio),
+  `registry.prune_session` (+ updates count & session.json), `POST /v1/sessions/{id}/prune`, `DaemonClient.prune`,
+  MCP `capture_prune`, GUI `daemon.rs prune` + a playback "Manage" section (status icons + Halve/Delete/Remove
+  buttons via the shared `ConfirmKind` modal).
+- **Re-transcribe** (#41): `core/retranscribe.py` replays `audio.s16le` offline (re-chunked like audio.py;
+  audio-epoch recovered from the old transcript's first record so subtitles still align; backs up to
+  `transcript.prev.*`), `daemon.start_retranscribe` (background thread + SSE `retranscribe`→done/error),
+  `POST .../retranscribe`, `DaemonClient.retranscribe`, MCP `capture_retranscribe`, GUI button (uses the
+  active model; SSE %→`LiveState.retranscribe`; poll-loop reloads the session on done).
+- **Icons**: added image/volume/volume-x/refresh/scissors SVGs.
+**Verification**: prune+caps unit (halve→4, audio→can_retranscribe False, delete→has_screenshots False);
+re-transcribe pipeline unit (3 chunks, offsets 0/8/16s, epoch-aligned, backup kept); HTTP routes (caps in
+/v1/sessions, prune 404/400 validation); GUI `cargo build` clean (no warnings); daemon imports + smoke 68/68.
+**DEPLOYED + verified (frozen daemon, notarized):** prune via HTTP on a synthetic session (halve→4 frames,
+remove-audio→`can_retranscribe` false, summary refreshed, retranscribe then 400); **re-transcribe ran
+end-to-end on the deployed daemon** (SSE `retranscribe` 0.70→1.0→done, `transcript.prev.jsonl` backup,
+new transcript). spctl → Notarized Developer ID. **features #40 + #41 → passes:true.**
+NOTE: the `capture-notary` keychain profile was missing + unreadable from the detached build shell; the
+fix was inline notarytool creds — `xcrun notarytool submit <dmg> --apple-id pr0fedt@gmail.com --team-id
+YH3QP44ST4 --password "$(cat .notary-password)" --wait` (run in the foreground; never echo the password).
+
+---
+
 ## Session 48 — 2026-06-16
 **Agent**: builder (macOS box, branch **main**) — feature #39 (plan: calm-dazzling-harbor.md).
 **Summary**: Session-list UX — proper SVG icons, a delete-confirmation modal, and a session **playback

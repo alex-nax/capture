@@ -50,11 +50,18 @@ server's daemon-first mode are **[planned]** (see Known limitations).
 |--------|------|--------------|---------|
 | GET  | `/v1/health` | — (no auth) | `{ok, version, api_version, pid, platform, sessions:{live,history}}` |
 | GET  | `/v1/windows` | `?app_name=&pid=` | `{windows:[...], count}` (via `core.list_windows`) |
-| POST | `/v1/sessions` | `capture_start` args + `output_dir` | session summary (201); exactly-one-target enforced. Optional `window_id` pins screenshots to that exact window (audio stays per-pid); optional `mic_device` ALSO records that input device as a separate mic track (`mic.s16le`/`mic_transcript.jsonl`) |
+| POST | `/v1/sessions` | `capture_start` args + `output_dir` | session summary (201); exactly-one-target enforced. Optional `window_id` pins screenshots to that exact window (audio stays per-pid); optional `mic_device` ALSO records that input device as a separate mic track (`mic.s16le`/`mic_transcript.jsonl`); `capture_screenshots:false` ⇒ an audio-only session (no `screenshots/`) |
+| POST | `/v1/sessions/import` | `{path, output_dir?, asr_backend?, screenshot_interval?}` | import an audio/video file as a finished session (background, 202; progress over `/v1/events`: `import`→`import_done`/`_error`). The bundled helper extracts audio (→`audio.s16le`) and, for video, frames (→`screenshots/`, named on the audio timeline); ASR runs over the audio. A silent video imports as frames-only. 400 if the path is missing/not a file |
 | GET  | `/v1/sessions` | — | `{sessions:[summary,...]}` (live + recovered, oldest first) |
-| GET  | `/v1/sessions/{id}` | — | session summary (404 if unknown) |
+| GET  | `/v1/sessions/{id}` | — | session summary (404 if unknown). Every summary carries **capability flags** `has_screenshots`/`has_audio`/`has_mic`/`can_retranscribe`, recomputed from on-disk artifacts on each read (so pruning is reflected for live + recovered sessions) |
 | POST | `/v1/sessions/{id}/stop` | — | final summary; a recovered (finished) id returns its record |
+| POST | `/v1/sessions/{id}/mic` | `{device}` | switch the microphone on a LIVE capture: a device id / `"default"` = on/switch, `null`/`""` = off. Appends to `mic.s16le`/`mic_transcript.*` (continuous). Returns the updated summary. 404 unknown/finished, 400 if not running |
 | POST | `/v1/sessions/{id}/delete` | — | `{deleted, session_id}`; removes the session dir (guarded: must contain `session.json`) + its registry/index record. 404 unknown, **400 if still live** (stop first) |
+| POST | `/v1/sessions/{id}/prune` | `{parts}` | free disk on a finished session — `parts` ⊆ `screenshots` (delete all), `screenshots_halve` (drop every other frame), `audio` (remove `audio.s16le`/`mic.s16le`). Returns `{pruned, freed_bytes, screenshots, <capability flags>}`. 400 if live/bad parts |
+| POST | `/v1/sessions/{id}/retranscribe` | `{asr_backend?, model?}` | re-run ASR over `audio.s16le` with the active/chosen model, replacing the transcript (background, 202; progress over `/v1/events`: `retranscribe` → `retranscribe_done`/`_error`). 400 if live or audio pruned |
+| POST | `/v1/sessions/{id}/index` | `{endpoint?, model?, sample_rate?, max_leaves?, fuse_transcript?}` | build the multimodal index — caption the screenshots with a remote vision LLM + summarize the timeline as a tree (background, 202; SSE `index`→`index_done`/`_error`). 400 if live / no screenshots (`can_index`), **503 if the endpoint is unset or unreachable** |
+| GET  | `/v1/sessions/{id}/index` | — | the built index tree (`index.json`); 404 if not indexed yet |
+| GET  | `/v1/index/status` | `?url=&model=` | `{available, configured, url, model}` — is indexing usable (a configured + reachable vision endpoint). Drives the GUI gate |
 | GET  | `/v1/sessions/{id}/transcript` | `?tail=N` | `{session_id, segments:[...], count}` from `transcript.jsonl` |
 | GET  | `/v1/asr/models` | — | `{backend_available, active, models:[{repo,name,size_label,downloaded,active,downloading}]}` — Whisper model catalog |
 | POST | `/v1/asr/models/download` | `{repo}` | `{repo, started}` (202); downloads in background, progress over `/v1/events`; dup is `started:false` |

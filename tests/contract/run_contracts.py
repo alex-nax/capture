@@ -125,7 +125,10 @@ def current_pcm_chunking() -> dict:
     import capture_mcp.core.asr as asrpkg
 
     raw = BASE / "pcm.s16le"
-    raw.write_bytes(np.zeros(SAMPLE_RATE * 20, dtype="<i2").tobytes())
+    # A non-silent tone: the ASR pipeline now skips silent chunks (Whisper hallucinates
+    # on silence), so silence would yield zero segments. The stub ASR ignores content.
+    _t = np.arange(SAMPLE_RATE * 20)
+    raw.write_bytes((np.sin(_t * 0.05) * 6000).astype("<i2").tobytes())
     stream_code = "import sys; sys.stdout.buffer.write(open(sys.argv[1],'rb').read())"
 
     orig = asrpkg.create

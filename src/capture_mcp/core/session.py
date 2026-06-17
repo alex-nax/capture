@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import secrets
+import shutil
 import threading
 from pathlib import Path
 
@@ -31,6 +32,86 @@ from .screenshots import Screenshotter, parse_resolution
 from .util import fs_stamp, iso, now
 
 log = logging.getLogger(__name__)
+
+
+#: prune parts a caller may request (see :func:`prune_session_dir`).
+PRUNE_PARTS = ("screenshots", "screenshots_halve", "audio")
+
+
+def prune_session_dir(session_dir: "str | os.PathLike", parts) -> tuple[int, int]:
+    """Apply prune ``parts`` to a finished session's dir. Returns ``(freed_bytes,
+    remaining_screenshot_count)``. Parts: ``screenshots`` (delete all), ``screenshots_halve``
+    (drop every other frame, keeping full timeline coverage at half the cadence), ``audio``
+    (remove ``audio.s16le``/``mic.s16le`` — frees the most disk but disables re-transcribe)."""
+    d = Path(session_dir)
+    shots = d / "screenshots"
+    freed = 0
+
+    def sz(f: Path) -> int:
+        try:
+            return f.stat().st_size
+        except OSError:
+            return 0
+
+    if "screenshots" in parts and shots.is_dir():
+        for f in shots.iterdir():
+            if f.is_file():
+                freed += sz(f)
+        shutil.rmtree(shots, ignore_errors=True)
+    elif "screenshots_halve" in parts and shots.is_dir():
+        files = sorted(f for f in shots.iterdir() if f.is_file())
+        for f in files[1::2]:  # drop every other (keep 0,2,4… → delete 1,3,5…)
+            freed += sz(f)
+            try:
+                f.unlink()
+            except OSError:
+                pass
+    if "audio" in parts:
+        for name in ("audio.s16le", "mic.s16le"):
+            f = d / name
+            if f.is_file():
+                freed += sz(f)
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+
+    count = 0
+    try:
+        if shots.is_dir():
+            count = sum(1 for f in shots.iterdir() if f.is_file())
+    except OSError:
+        pass
+    return freed, count
+
+
+def session_capabilities(session_dir: "str | os.PathLike") -> dict:
+    """What a session can still do, derived from its on-disk artifacts (recomputed on
+    every summary so pruning is reflected immediately): ``has_screenshots`` /
+    ``has_audio`` / ``has_mic`` / ``can_retranscribe`` (= app audio still present)."""
+    d = Path(session_dir)
+
+    def nonempty(name: str) -> bool:
+        try:
+            f = d / name
+            return f.is_file() and f.stat().st_size > 0
+        except OSError:
+            return False
+
+    has_shots = False
+    try:
+        shots = d / "screenshots"
+        has_shots = shots.is_dir() and any(shots.iterdir())
+    except OSError:
+        pass
+    has_audio = nonempty("audio.s16le")
+    return {
+        "has_screenshots": has_shots,
+        "has_audio": has_audio,
+        "has_mic": nonempty("mic.s16le"),
+        "can_retranscribe": has_audio,
+        "can_index": has_shots,  # the multimodal index (#44) needs frames to caption
+    }
 
 
 class CaptureSession:
@@ -51,7 +132,7 @@ class CaptureSession:
         capture_audio: bool = True,
         audio_source: str = "auto",
         mic_device: str | None = None,
-        audio_chunk_seconds: float = 8.0,
+        audio_chunk_seconds: float | None = None,
         asr_backend: str = "auto",
         cwd: str | None = None,
     ) -> None:
@@ -75,6 +156,12 @@ class CaptureSession:
         self.capture_audio = capture_audio
         self.audio_source = audio_source
         self.mic_device = mic_device  # if set, also record this input device as a separate mic track
+        # Chunk length is a persisted setting (manager.active_chunk_seconds) unless the
+        # request pins it; 30 s default avoids the short-chunk hallucination.
+        if audio_chunk_seconds is None:
+            from .asr import manager as _asr_manager
+
+            audio_chunk_seconds = _asr_manager.active_chunk_seconds()
         self.audio_chunk_seconds = audio_chunk_seconds
         self.asr_backend = asr_backend
         self.cwd = cwd
@@ -166,6 +253,55 @@ class CaptureSession:
         self.events.publish("state", state="stopped", session_id=self.id)
         self._close_events()
         log.info("session %s stopped", self.id)
+        return self.summary()
+
+    def set_mic_device(self, device: str | None) -> dict:
+        """Switch the microphone on a RUNNING capture. ``device`` = an input-device id (or
+        ``"default"`` for the system default) turns the mic on / switches it; ``None``/``""``
+        turns it off. The new track APPENDS to ``mic.s16le``/``mic_transcript.*`` so the
+        recording stays continuous. Raises RuntimeError if the session isn't running."""
+        if self.state != "running":
+            raise RuntimeError(f"can only switch the mic on a running capture (state={self.state})")
+        device = device or None
+        if device == self.mic_device:
+            return self.summary()
+
+        # Tear down the current mic track (if any), outside the lock — helper teardown is slow.
+        old = self._mic
+        self._mic = None
+        if old is not None:
+            try:
+                old.stop()
+            except Exception:
+                log.exception("mic switch: stopping old mic track failed")
+
+        self.mic_device = device
+        if device is not None:
+            # Append when a mic.s16le already exists (a prior mic track), so we don't clobber it.
+            append = (self.dir / "mic.s16le").exists()
+            mic = AudioCapture(
+                self.dir,
+                source="mic",
+                mic_device=device,
+                track="mic",
+                chunk_seconds=self.audio_chunk_seconds,
+                asr_backend=self.asr_backend,
+                t0=self.t0,
+                emit=self.events.publish,
+                append=append,
+            )
+            try:
+                mic.start()
+            except Exception:
+                log.exception("mic switch: starting new mic track failed")
+                self.notes.append(f"mic switch to {device!r} failed to start")
+                self._mic = None
+            else:
+                self._mic = mic
+        with self._lock:
+            self._write_metadata()
+        self.events.publish("mic_device", device=device, session_id=self.id)
+        log.info("session %s mic switched to %s", self.id, device)
         return self.summary()
 
     def _close_events(self) -> None:
@@ -307,6 +443,8 @@ class CaptureSession:
             "asr_errors": self._audio.asr_errors if self._audio else 0,
             "mic_status": self._mic.status if self._mic else ("off" if self.mic_device is None else "init"),
             "mic_segments": self._mic.segments if self._mic else 0,
+            "mic_device": self.mic_device,  # active input device id (None = mic off)
+            **session_capabilities(self.dir),
             "notes": list(self.notes),  # snapshot; notes may be appended concurrently
         }
 

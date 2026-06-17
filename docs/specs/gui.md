@@ -106,6 +106,11 @@ each icon to an alpha mask tinted by `text_color`. The `icon(name, size, color)`
   focusable `div` + `track_focus`/`on_key_down`: printable `key_char`, backspace,
   ⌘V paste, Enter = launch — no IME/selection) + a button POST `/v1/sessions` with
   `command` (launch mode). A URL is just a command, e.g. `open https://…`.
+- **Import… (audio/video → session, #43):** an **Import** row whose button runs the native
+  macOS file picker (`osascript choose file`, off the UI thread) and POSTs the chosen path to
+  `/v1/sessions/import`. The daemon extracts audio/frames + runs ASR in the background; progress
+  streams over SSE into `LiveState.import_progress` (shown inline as `<phase> <pct>%`), and on
+  `import_done` the poll loop opens the new session (which arrives in the same `/v1/sessions` poll).
 - **Sessions list:** newest first, all sessions (no 6-row truncate; the page scrolls).
   Each row has compact **SVG icon** actions (Lucide, via the `AssetSource` — see Icons):
   **folder** (`open` the session's `dir` in Finder), **clipboard** (copy a ready-to-paste
@@ -127,6 +132,21 @@ each icon to an alpha mask tinted by `text_color`. The `icon(name, size, color)`
   with the mic icon) through time. Play auto-advances via a ~200 ms ticker. The scrubber maps
   mouse-x to time using the content width (`window.viewport_size()`), drag handled on the root
   like the scrollbar (`pb_dragging`).
+- **Live mic switcher (#46, playback screen, running sessions):** a "Mic" chip row (`switch_mic`
+  → `POST /v1/sessions/{id}/mic`) with **Off** + each input device from `self.mics`, highlighting the
+  session's active `mic_device`. Switching/turning the mic on/off happens live (no restart) and appends to
+  the mic track.
+- **Manage (playback screen, finished sessions):** capability **status icons** (image/volume,
+  dimmed when pruned, from the session's `has_screenshots`/`has_audio` flags) plus action buttons:
+  **Halve frames** / **Delete frames** / **Remove audio** (`prune` → `POST .../prune`; the destructive
+  ones go through the shared confirm modal — `ConfirmKind::Prune`) and **Re-transcribe** (`retranscribe`
+  → `POST .../retranscribe`, disabled when `can_retranscribe` is false). Re-transcribe progress streams
+  over SSE into `LiveState.retranscribe` (shown as a %); on `retranscribe_done` the poll loop reloads the
+  open session so its new transcript appears. The session-list **trash** delete and these prune actions
+  share one modal (`confirm: Option<ConfirmKind>`). The Manage panel also has **Build index** (#44 —
+  `index_session` → `POST .../index`, the `list-tree` icon, enabled only when `can_index` **and**
+  `index_status.available`; progress streams over SSE into `LiveState.index_progress`, and the **root
+  summary + node count** of a built index render below the actions, loaded via `GET .../index` on open).
 - **Menu-bar (tray):** a status item built on the main thread inside the GPUI run
   loop (`tray.rs`). Its title tracks the running-capture count (`● capture` idle,
   `⦿ N` while N run), updated from the GPUI tray loop (`cx.spawn` + 250 ms `Timer`)
@@ -173,12 +193,25 @@ each icon to an alpha mask tinted by `text_color`. The `icon(name, size, color)`
   — gated by `let playback = self.playback.is_some(); let sett = settings && !playback; let dash
   = !settings && !playback;` (panels use `sett.then(|| …)` / `dash.then(|| …)` / `playback.then(||
   render_playback)`). Settings holds: **Capture quality** (`chip` toggles —
-  PNG/JPEG `shot_format`, resolution `shot_res_ix` over `RES_PRESETS`, JPEG quality when
-  jpeg; merged into the `/v1/sessions` body via `shot_settings()` for new captures). These
+  **Screenshots On/Off** `capture_screenshots` (off ⇒ an audio-only capture: the body sends
+  `capture_screenshots:false`, no `screenshots/`), PNG/JPEG `shot_format`, resolution `shot_res_ix`
+  over `RES_PRESETS`, JPEG quality when jpeg; merged into the `/v1/sessions` body via
+  `shot_settings()` for new captures), and the **Index endpoint** (#44 — the LM Studio chat URL
+  `index_url` + a reachability dot polled via `GET /v1/index/status` on a slow separate timer;
+  Enter/Check re-probes). These
   prefs (and the selected `mic_device`) **persist across relaunch**: each change writes
   `~/.capture/gui-settings.json` (`save_settings`) and `new()` seeds the fields from it
   (`load_settings`) — they live in the window process (a UI default), not the daemon. Settings also holds the
-  **Whisper model manager**, the **Permissions** panel, and the **skill installer**. Each
+  **App update** row (#48 — `update.rs`: at startup `update::check()` queries GitHub
+  `repos/alex-nax/capture/releases/latest`, semver-compares the tag to the running `CARGO_PKG_VERSION`,
+  and finds the `.dmg` asset; Settings shows `vX · up to date` or `vY available → Update…`. Update goes
+  through the shared confirm modal (`ConfirmKind::Update`); on confirm, `download_and_install` fetches the
+  notarized dmg and spawns a **detached updater** that quits the app, mounts the dmg, replaces
+  `/Applications/Capture.app`, and relaunches — never without confirmation),
+  the **Whisper model manager**, a **Transcription** panel (#45 — `language_field` + `chunk_chips`: the language
+  and chunk-length settings, written to the DAEMON via `POST /v1/asr/language`/`/v1/asr/chunk` and read back
+  from the polled catalog, since the engine — not the window — consumes them; the language field is mirrored
+  in the playback pane for on-the-fly correction), the **Permissions** panel, and the **skill installer**. Each
   panel is rendered via `settings.then(|| …)` / `(!settings).then(|| …)` so only one
   screen's panels exist at a time.
 - **Layout & scrolling:** the window is **one** vertically-scrolling column (`#root`,

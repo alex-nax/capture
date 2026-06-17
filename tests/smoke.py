@@ -130,11 +130,18 @@ async def test_validation() -> None:
         check("validation: rejects 0 targets", True)
 
 
+def _nonsilent_pcm(secs: int) -> bytes:
+    """`secs` of an audible s16le tone (rms well above the ASR silence gate, which now
+    skips silent chunks). The stub ASR ignores content; this just clears the gate."""
+    t = np.arange(SAMPLE_RATE * secs)
+    return (np.sin(t * 0.05) * 6000).astype("<i2").tobytes()
+
+
 def test_audio_pipeline() -> None:
     out = BASE / "audio"
     shutil.rmtree(out, ignore_errors=True)
     raw = BASE / "smoke.s16le"
-    raw.write_bytes(np.zeros(SAMPLE_RATE * 20, dtype="<i2").tobytes())  # 20s silence
+    raw.write_bytes(_nonsilent_pcm(20))  # 20s tone (non-silent so chunks reach the ASR)
 
     class StubASR:
         name = "stub"
@@ -256,7 +263,7 @@ def test_openai_compat() -> None:
         # Full pipeline: AudioCapture with asr_backend="openai" via env config.
         out = BASE / "openai"
         raw = BASE / "openai.s16le"
-        raw.write_bytes(np.zeros(SAMPLE_RATE * 20, dtype="<i2").tobytes())
+        raw.write_bytes(_nonsilent_pcm(20))  # non-silent so chunks reach the ASR gate
         os.environ["CAPTURE_OPENAI_ASR_URL"] = url
         try:
             ac = AudioCapture(out, source="mic", chunk_seconds=8.0, t0=1000.0, asr_backend="openai")

@@ -5,8 +5,10 @@ _Status: current as of 2026-06-10. Source of truth = the code; update this spec 
 ## Purpose
 
 The MCP server is the entrypoint and orchestration layer for capture-mcp. It exposes
-on-demand process capture to an MCP client over stdio as five tools
-(`capture_start`, `capture_stop`, `capture_status`, `list_windows`, `list_audio_devices`). It validates arguments,
+on-demand process capture to an MCP client over stdio as eleven tools
+(`capture_start`, `capture_stop`, `capture_status`, `capture_prune`, `capture_retranscribe`,
+`capture_import`, `capture_index`, `transcription_settings`, `capture_set_mic`, `list_windows`,
+`list_audio_devices`). It validates arguments,
 constructs `CaptureSession` objects and tracks them via the shared
 `core.registry.SessionRegistry` (bounded live tracking + disk-backed history — see
 [session-registry.md](session-registry.md)), and offloads all blocking work to worker
@@ -62,7 +64,7 @@ Async handler returning a `dict` (the session summary produced by
 - `audio_source: str = "auto"` — `"auto"`, `"app"`, or `"mic"`.
 - `mic_device: str | None = None` — also record this input device as a SEPARATE mic track
   (`mic.s16le`/`mic_transcript.jsonl`) in addition to the app audio; id from
-  `list_audio_devices`, or `"default"`. The helper applies acoustic echo cancellation.
+  `list_audio_devices`, or `"default"`. (No echo cancellation — see `helper-contract.md`, feature #38.)
 - `audio_chunk_seconds: float = 8.0`.
 - `asr_backend: str = "auto"` — `"auto"`, `"local"`/`"whisper"`, or `"nemotron"`/`"riva"`.
 - `cwd: str | None = None` — working directory for a launched command.
@@ -126,6 +128,58 @@ microphone/input devices for `capture_start`'s `mic_device`. Daemon-first
 `platform.current().audio_source.list_input_devices()` (macOS: the bundled
 `audiocap --list-mics`; other platforms: empty list).
 
+### Tool: `capture_prune` (`server.py`)
+
+Free disk on a FINISHED capture. Params: `session_id`, `parts: list[str]` (subset of
+`screenshots` / `screenshots_halve` / `audio` — validated against `PRUNE_PARTS`). Returns
+`{pruned, freed_bytes, screenshots, <capability flags>}`. Daemon-first
+(`POST /v1/sessions/{id}/prune`); embedded calls `registry.prune_session`. Capability flags
+(`has_screenshots`/`has_audio`/`has_mic`/`can_retranscribe`) also appear in every
+`capture_status` summary, so an agent can decide what to prune / whether re-transcribe is possible.
+
+### Tool: `capture_retranscribe` (`server.py`)
+
+Re-run ASR over a saved capture's `audio.s16le` with the active (or a chosen) Whisper model,
+replacing its transcript (the old one is kept as `transcript.prev.*`). Params: `session_id`,
+`asr_backend?`, `model?`. Background on the daemon (progress over `/v1/events`); requires
+`can_retranscribe` (audio still present). **Daemon-only** — the embedded path raises (it
+doesn't run the background job).
+
+### Tool: `capture_set_mic` (`server.py`)
+
+Switch the microphone on a RUNNING capture, live (no restart). Params: `session_id`, `device`
+(an id from `list_audio_devices` / `"default"` = on/switch; `null`/`""` = off). The mic is a
+separate track (`mic.s16le`/`mic_transcript.*`); switching **appends** so it stays continuous.
+Returns the updated summary. **Daemon-only** (live state mutation).
+
+### Tool: `transcription_settings` (`server.py`)
+
+Get or set the persisted transcription settings shared by all new captures + re-transcribes.
+Params `language?` (ISO code, `""`/`auto` = auto-detect) + `chunk_seconds?` (1–120; default 30).
+No args = read current. Applies **on the fly** — a language change takes effect on a running
+capture's next chunk. Returns `{language, chunk_seconds, active_model, backend_available}`.
+**Daemon-only.** (Also surfaced as args on `capture_retranscribe`: `language`/`chunk_seconds` to fix
+a wrong-language or short-chunk transcript.)
+
+### Tool: `capture_import` (`server.py`)
+
+Import an existing audio/video file as a session. Params: `path`, `output_dir?`, `asr_backend?`.
+The daemon extracts the file's audio (and, for video, periodic frames) via the bundled helper
+(AVFoundation, no ffmpeg), runs ASR, and registers a finished session that shows up in
+`capture_status`/the GUI playback scrubber — `audio_source="import"` marks the origin. Audio-only
+files become audio-only sessions; silent videos become frames-only. Background on the daemon
+(progress over `/v1/events`: `import`→`import_done`/`_error`); returns `{path, started}`.
+**Daemon-only** — the embedded path raises.
+
+### Tool: `capture_index` (`server.py`)
+
+Build a multimodal index of a finished capture's screenshots with a remote vision LLM
+(LM Studio): caption the leaf frames, combine up to a whole-session root summary
+(`GET /v1/sessions/{id}/index` returns the tree). Params: `session_id`, `endpoint?`,
+`model?`, `sample_rate?`. Requires `can_index` (screenshots present) **and** a configured,
+reachable endpoint — disabled (503) otherwise. Background (progress over `/v1/events`:
+`index`→`index_done`/`_error`). **Daemon-only.**
+
 ### Errors
 
 Validation/lookup failures are raised as `ValueError`. FastMCP converts a raised
@@ -134,7 +188,7 @@ code raises (see Failure modes).
 
 ## Behavior
 
-### Daemon-first dispatch (all four tools)
+### Daemon-first dispatch (the daemon-backed tools)
 
 `_daemon()` returns a live `DaemonClient` when a `captured` daemon is discoverable
 (`~/.capture/daemon.json`) and answers `/v1/health`, **unless** `CAPTURE_MCP_EMBEDDED`

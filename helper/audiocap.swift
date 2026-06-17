@@ -4,13 +4,23 @@
 //
 // Build:
 //   swiftc -O -o audiocap audiocap.swift -framework ScreenCaptureKit \
-//          -framework AVFoundation -framework CoreMedia
+//          -framework AVFoundation -framework CoreMedia \
+//          -framework ImageIO -framework UniformTypeIdentifiers
 //
 // Usage:
 //   audiocap --pid <PID> [--rate 16000]
 //   audiocap --bundle <bundle.id> [--rate 16000]
 //   audiocap --mic [<deviceUniqueID>] [--rate 16000]   (microphone via AVCaptureSession)
 //   audiocap --list-mics                                (print input devices as JSON lines, exit)
+//   audiocap --extract-audio <file> [--rate 16000]      (decode a file's audio → s16le on stdout)
+//   audiocap --extract-frames <file> --out <dir> [--interval 2.0]  (write <offset_ms>.png frames)
+//
+// The two --extract-* modes are offline file readers for `capture import` (turn an
+// existing audio/video file into a session). They use AVFoundation only — no
+// ScreenCaptureKit, no capture, no ffmpeg — and need no permission. --extract-audio
+// emits the SAME s16le contract as the live paths; --extract-frames writes one PNG
+// per sampled timestamp named by its integer millisecond offset (audio-only files
+// produce zero frames and exit 0).
 //
 // The --mic path uses AVFoundation AVCaptureSession (NOT ScreenCaptureKit), so it
 // needs only the Microphone permission — no Screen Recording — and no ffmpeg. It
@@ -33,7 +43,9 @@
 import AVFoundation
 import CoreMedia
 import Foundation
+import ImageIO
 import ScreenCaptureKit
+import UniformTypeIdentifiers
 
 // ---- argument parsing -------------------------------------------------------
 
@@ -56,8 +68,17 @@ let micDeviceID: String? = {
     return v
 }()
 
-if targetPID == nil && targetBundle == nil && !captureSystem && !micMode && !listMics {
-    FileHandle.standardError.write("usage: audiocap --pid <PID> | --bundle <id> | --system | --mic [<id>] | --list-mics [--rate 16000]\n".data(using: .utf8)!)
+// Offline import: pull a file's audio/frames through AVFoundation (no ffmpeg, no
+// capture). --extract-audio writes s16le to stdout (same contract as the live
+// paths); --extract-frames writes <offset_ms>.png files into --out.
+let extractAudioPath = argValue("--extract-audio")
+let extractFramesPath = argValue("--extract-frames")
+let extractInterval = Double(argValue("--interval") ?? "2.0") ?? 2.0
+let extractOutDir = argValue("--out")
+
+if targetPID == nil && targetBundle == nil && !captureSystem && !micMode && !listMics
+    && extractAudioPath == nil && extractFramesPath == nil {
+    FileHandle.standardError.write("usage: audiocap --pid <PID> | --bundle <id> | --system | --mic [<id>] | --list-mics\n              | --extract-audio <file> | --extract-frames <file> --out <dir> [--interval 2.0] [--rate 16000]\n".data(using: .utf8)!)
     exit(2)
 }
 
@@ -90,6 +111,126 @@ func listMicrophonesAndExit() -> Never {
 }
 
 if listMics { listMicrophonesAndExit() }
+
+// ---- offline import (--extract-audio / --extract-frames) --------------------
+// AVFoundation-only file readers used by `capture import`. No capture, no ffmpeg.
+// AVAssetReader decodes + resamples to our s16le contract; AVAssetImageGenerator
+// pulls frames. Both load tracks via the modern async API (the sync accessors are
+// deprecated and can return stale/empty results), bridged to this synchronous CLI
+// with a semaphore.
+
+func loadFirstTrack(_ asset: AVAsset, _ media: AVMediaType) -> AVAssetTrack? {
+    let sem = DispatchSemaphore(value: 0)
+    var track: AVAssetTrack?
+    Task {
+        track = try? await asset.loadTracks(withMediaType: media).first
+        sem.signal()
+    }
+    sem.wait()
+    return track
+}
+
+func loadDuration(_ asset: AVAsset) -> Double {
+    let sem = DispatchSemaphore(value: 0)
+    var seconds = 0.0
+    Task {
+        if let d = try? await asset.load(.duration) { seconds = d.seconds }
+        sem.signal()
+    }
+    sem.wait()
+    return seconds.isFinite ? seconds : 0
+}
+
+// Exit codes for --extract-audio: 0 ok, 3 = no audio track (recoverable — a silent
+// video still imports as a frames-only session), 4 = genuine open/read failure.
+func extractAudioAndExit(path: String, rate: Double) -> Never {
+    let asset = AVURLAsset(url: URL(fileURLWithPath: path))
+    guard let track = loadFirstTrack(asset, .audio) else {
+        logErr("extract-audio: no audio track in \(path)")
+        exit(3)
+    }
+    let settings: [String: Any] = [
+        AVFormatIDKey: kAudioFormatLinearPCM,
+        AVSampleRateKey: rate,
+        AVNumberOfChannelsKey: 1,
+        AVLinearPCMBitDepthKey: 16,
+        AVLinearPCMIsFloatKey: false,
+        AVLinearPCMIsBigEndianKey: false,
+        AVLinearPCMIsNonInterleaved: false,
+    ]
+    guard let reader = try? AVAssetReader(asset: asset) else {
+        logErr("extract-audio: cannot open \(path)")
+        exit(4)
+    }
+    let output = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
+    output.alwaysCopiesSampleData = false
+    guard reader.canAdd(output) else { logErr("extract-audio: cannot add reader output"); exit(4) }
+    reader.add(output)
+    guard reader.startReading() else {
+        logErr("extract-audio: startReading failed: \(reader.error?.localizedDescription ?? "?")")
+        exit(4)
+    }
+    let out = FileHandle.standardOutput
+    var total = 0
+    while reader.status == .reading {
+        guard let sb = output.copyNextSampleBuffer() else { break }
+        if let bb = CMSampleBufferGetDataBuffer(sb) {
+            var len = 0
+            var dataPtr: UnsafeMutablePointer<Int8>?
+            if CMBlockBufferGetDataPointer(bb, atOffset: 0, lengthAtOffsetOut: nil,
+                                           totalLengthOut: &len, dataPointerOut: &dataPtr) == kCMBlockBufferNoErr,
+               let dp = dataPtr {
+                out.write(Data(bytes: dp, count: len))
+                total += len
+            }
+        }
+        CMSampleBufferInvalidate(sb)
+    }
+    if reader.status == .failed {
+        logErr("extract-audio: read failed: \(reader.error?.localizedDescription ?? "?")")
+        exit(4)
+    }
+    logErr("extract-audio: wrote \(total) bytes s16le @ \(Int(rate))Hz mono")
+    exit(0)
+}
+
+func extractFramesAndExit(path: String, interval: Double, outDir: String?) -> Never {
+    guard let dir = outDir else { logErr("extract-frames: --out <dir> required"); exit(2) }
+    let asset = AVURLAsset(url: URL(fileURLWithPath: path))
+    let duration = loadDuration(asset)
+    // Audio-only files (or zero-length) yield no frames — that's not an error; the
+    // import just becomes an audio-only session.
+    guard loadFirstTrack(asset, .video) != nil, duration > 0 else {
+        logErr("extract-frames: no video track in \(path) — 0 frames")
+        exit(0)
+    }
+    try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    let gen = AVAssetImageGenerator(asset: asset)
+    gen.appliesPreferredTrackTransform = true
+    gen.requestedTimeToleranceBefore = .zero
+    gen.requestedTimeToleranceAfter = .zero
+    gen.maximumSize = CGSize(width: 1920, height: 1080)  // cap 4K frames to a screenshot-sized PNG
+    let step = interval > 0 ? interval : 2.0
+    var t = 0.0
+    var count = 0
+    while t <= duration {
+        let cmt = CMTime(seconds: t, preferredTimescale: 600)
+        if let cg = try? gen.copyCGImage(at: cmt, actualTime: nil) {
+            let ms = Int((t * 1000).rounded())
+            let fileURL = URL(fileURLWithPath: dir).appendingPathComponent("\(ms).png")
+            if let dest = CGImageDestinationCreateWithURL(fileURL as CFURL, UTType.png.identifier as CFString, 1, nil) {
+                CGImageDestinationAddImage(dest, cg, nil)
+                if CGImageDestinationFinalize(dest) { count += 1 }
+            }
+        }
+        t += step
+    }
+    logErr("extract-frames: wrote \(count) frames at \(step)s interval")
+    exit(0)
+}
+
+if let p = extractAudioPath { extractAudioAndExit(path: p, rate: targetRate) }
+if let p = extractFramesPath { extractFramesAndExit(path: p, interval: extractInterval, outDir: extractOutDir) }
 
 // ---- stream output handler --------------------------------------------------
 

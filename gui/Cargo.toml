@@ -1,6 +1,6 @@
 [package]
 name = "capture-gui"
-version = "0.2.0"
+version = "0.2.5"
 edition = "2021"
 description = "Native GPUI desktop app for capture-mcp (daemon client)."
 

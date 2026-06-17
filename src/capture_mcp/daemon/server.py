@@ -9,14 +9,23 @@ Routes:
   GET  /v1/health                        -> liveness + versions + counts (no auth)
   GET  /v1/windows[?app_name=&pid=]      -> window picker (core.list_windows)
   POST /v1/sessions                      -> start a capture (capture_start args)
+  POST /v1/sessions/import {path}        -> import an audio/video file as a session (background; SSE progress)
   GET  /v1/sessions                      -> all sessions (live + recovered)
   GET  /v1/sessions/{id}                 -> one session summary
   POST /v1/sessions/{id}/stop            -> stop a capture
+  POST /v1/sessions/{id}/mic {device}    -> switch the microphone on a LIVE capture (null = off)
+  POST /v1/sessions/{id}/prune {parts}   -> free disk: delete/halve screenshots, remove audio
+  POST /v1/sessions/{id}/retranscribe    -> re-run ASR over audio.s16le (background; SSE progress)
+  POST /v1/sessions/{id}/index           -> build the multimodal index (background; SSE progress)
+  GET  /v1/sessions/{id}/index           -> the built index tree (404 if not indexed)
+  GET  /v1/index/status[?url=&model=]    -> indexing availability (configured + reachable endpoint)
   POST /v1/sessions/{id}/delete          -> delete a finished capture (dir + record)
   GET  /v1/sessions/{id}/transcript?tail=N -> last N transcript segments
-  GET  /v1/asr/models                    -> Whisper model catalog + downloaded/active
+  GET  /v1/asr/models                    -> Whisper model catalog + downloaded/active + language/chunk
   POST /v1/asr/models/download {repo}    -> download a model (progress via /v1/events)
   POST /v1/asr/models/delete {repo}      -> remove a downloaded model's weights
+  POST /v1/asr/language {language}       -> set the transcription language ("" / "auto" = auto-detect)
+  POST /v1/asr/chunk {seconds}           -> set the transcription chunk length (seconds)
   GET  /v1/audio/mics                    -> input devices [{id,name,default}] for the mic selector
   POST /v1/asr/model {repo}              -> set the active Whisper model
   GET  /v1/permissions                   -> macOS TCC status (screen_recording)
@@ -46,10 +55,17 @@ from pydantic import ValidationError
 from .. import __version__
 from ..core import list_windows
 from ..core import permissions as perms
+from ..core import vision_client
 from ..core.asr import manager as asr_manager
 from ..core.registry import SessionRegistry
-from ..core.session import CaptureSession
-from .models import AsrModelRequest, StartSessionRequest, v1_schema
+from ..core.session import PRUNE_PARTS, CaptureSession
+from .models import (
+    AsrModelRequest,
+    ImportMediaRequest,
+    IndexRequest,
+    StartSessionRequest,
+    v1_schema,
+)
 
 log = logging.getLogger("capture_mcp.daemon")
 
@@ -59,6 +75,13 @@ API_VERSION = "1.0"
 def daemon_json_path() -> Path:
     env = os.environ.get("CAPTURE_DAEMON_JSON")
     return Path(env).expanduser() if env else Path.home() / ".capture" / "daemon.json"
+
+
+def default_runs_dir() -> Path:
+    """Where imported/captured sessions land when no output_dir is given (matches the
+    registry's recovery scan: ``CAPTURE_RUNS_DIR`` else ``~/.capture/runs``)."""
+    env = os.environ.get("CAPTURE_RUNS_DIR")
+    return Path(env).expanduser() if env else Path.home() / ".capture" / "runs"
 
 
 class _ApiError(Exception):
@@ -90,6 +113,11 @@ class CaptureDaemon(ThreadingHTTPServer):
         # over /v1/events; the GUI watches those.
         self._asr_lock = threading.Lock()
         self._asr_downloading: set[str] = set()
+        self._retranscribing: set[str] = set()  # session ids being re-transcribed
+        self._import_lock = threading.Lock()
+        self._importing: set[str] = set()  # source paths being imported
+        self._index_lock = threading.Lock()
+        self._indexing: set[str] = set()  # session ids being indexed
 
     @property
     def endpoint(self) -> str:
@@ -191,6 +219,174 @@ class CaptureDaemon(ThreadingHTTPServer):
         threading.Thread(target=run, name=f"asr-dl-{repo}", daemon=True).start()
         return {"repo": repo, "started": True}
 
+    def start_retranscribe(self, session_id: str, session_dir: str, asr_backend: str,
+                           model: str | None, language: str | None = None,
+                           chunk_seconds: float | None = None) -> dict:
+        """Re-transcribe a finished session's audio in the background, progress over SSE.
+
+        Returns ``{session_id, started}`` immediately; watch ``/v1/events`` for
+        ``retranscribe`` (fraction/segments), then ``retranscribe_done`` / ``retranscribe_error``.
+        Optionally switches the active Whisper model / language first (persisted settings). A
+        session already re-transcribing is a no-op (``started: False``).
+        """
+        if model:
+            asr_manager.set_active_model(model)  # raises ValueError if unknown
+        if language is not None:
+            asr_manager.set_active_language(language)  # persist the chosen language ("" = auto)
+        with self._asr_lock:
+            if session_id in self._retranscribing:
+                return {"session_id": session_id, "started": False, "reason": "already re-transcribing"}
+            self._retranscribing.add(session_id)
+
+        # Use the requested chunk length, else the current setting (NOT the old session's
+        # 8 s, which is what produced the hallucinated transcript we're fixing).
+        chunk = chunk_seconds if chunk_seconds else asr_manager.active_chunk_seconds()
+
+        def run() -> None:
+            from ..core.retranscribe import retranscribe_session
+
+            last = -1.0
+
+            def on_progress(done: int, total: int, segs: int) -> None:
+                nonlocal last
+                frac = done / total if total else 0.0
+                if frac - last < 0.02 and frac < 1.0:
+                    return
+                last = frac
+                self.sse_broadcast(
+                    {"type": "retranscribe", "session_id": session_id, "fraction": round(frac, 4), "segments": segs}
+                )
+
+            try:
+                n = retranscribe_session(session_dir, asr_backend, chunk, on_progress)
+                self.registry.update_summary(session_id, {"transcript_segments": n})
+                self.sse_broadcast({"type": "retranscribe_done", "session_id": session_id, "segments": n})
+            except Exception as e:
+                log.warning("retranscribe failed (%s): %s", session_id, e)
+                self.sse_broadcast(
+                    {"type": "retranscribe_error", "session_id": session_id, "error": f"{type(e).__name__}: {e}"}
+                )
+            finally:
+                with self._asr_lock:
+                    self._retranscribing.discard(session_id)
+
+        threading.Thread(target=run, name=f"retranscribe-{session_id}", daemon=True).start()
+        return {"session_id": session_id, "started": True}
+
+    def start_import(self, path: str, output_dir: str, asr_backend: str, screenshot_interval: float) -> dict:
+        """Import an audio/video file as a session in the background, progress over SSE.
+
+        Returns ``{path, started}`` immediately; watch ``/v1/events`` for ``import``
+        (``{phase, fraction}`` — phases ``extract-audio``/``extract-frames``/``transcribe``),
+        then ``import_done`` (``{session_id}``) / ``import_error``. The same file already
+        importing is a no-op (``started: False``)."""
+        src = str(Path(path).expanduser())
+        with self._import_lock:
+            if src in self._importing:
+                return {"path": src, "started": False, "reason": "already importing"}
+            self._importing.add(src)
+
+        def run() -> None:
+            from ..core.import_media import import_file
+
+            last = -1.0
+
+            def on_progress(phase: str, frac: float) -> None:
+                nonlocal last
+                # Always emit phase boundaries (0.0/1.0); throttle within a phase.
+                if 0.0 < frac < 1.0 and frac - last < 0.02:
+                    return
+                last = frac
+                self.sse_broadcast(
+                    {"type": "import", "path": src, "phase": phase, "fraction": round(frac, 4)}
+                )
+
+            try:
+                summary = import_file(
+                    src,
+                    output_dir,
+                    asr_backend=asr_backend,
+                    screenshot_interval=screenshot_interval,
+                    on_progress=on_progress,
+                )
+                sid = summary["session_id"]
+                self.registry.add_recovered(sid, summary["dir"])
+                self.sse_broadcast({"type": "import_done", "path": src, "session_id": sid})
+            except Exception as e:
+                log.warning("import failed (%s): %s", src, e)
+                self.sse_broadcast(
+                    {"type": "import_error", "path": src, "error": f"{type(e).__name__}: {e}"}
+                )
+            finally:
+                with self._import_lock:
+                    self._importing.discard(src)
+
+        threading.Thread(target=run, name=f"import-{Path(src).name}", daemon=True).start()
+        return {"path": src, "started": True}
+
+    def start_index(self, session_id: str, session_dir: str, req: IndexRequest) -> dict:
+        """Build a session's multimodal index in the background, progress over SSE.
+
+        Returns ``{session_id, started}`` immediately; watch ``/v1/events`` for ``index``
+        (``{phase, done, total, fraction}`` — phase ``caption``/``combine``) then
+        ``index_done`` (``{node_count, leaf_count}``) / ``index_error``. A session already
+        indexing is a no-op (``started: False``)."""
+        with self._index_lock:
+            if session_id in self._indexing:
+                return {"session_id": session_id, "started": False, "reason": "already indexing"}
+            self._indexing.add(session_id)
+
+        def run() -> None:
+            from ..core import indexer
+
+            last = [-1.0]
+
+            def on_progress(phase: str, done: int, total: int, t_range) -> None:
+                frac = done / total if total else 0.0
+                # Throttle within a build; always emit the final node.
+                if done < total and frac - last[0] < 0.02:
+                    return
+                last[0] = frac
+                self.sse_broadcast({
+                    "type": "index", "session_id": session_id, "phase": phase,
+                    "done": done, "total": total, "fraction": round(frac, 4),
+                })
+
+            try:
+                endpoint = req.endpoint
+                if not endpoint and req.provider:  # compose from structured provider config (#52)
+                    from ..core import providers as prov
+
+                    endpoint = prov.chat_url(req.provider, req.host, req.port)
+                client = vision_client.load(endpoint, req.model)
+                if req.max_px:  # raise the base downscale for a whole (code-heavy) build
+                    client.max_px = req.max_px
+                if not client.available():
+                    raise RuntimeError("index endpoint not reachable (configure a working LM Studio URL)")
+                idx = indexer.build_index(
+                    session_dir, client,
+                    sample_rate=req.sample_rate, max_leaves=req.max_leaves,
+                    fuse_transcript=req.fuse_transcript,
+                    prompt_preset=req.prompt_preset, leaf_prompt=req.leaf_prompt,
+                    leaf_schema=req.leaf_schema, classify_prompt=req.classify_prompt,
+                    model_label=client.model, on_progress=on_progress,
+                )
+                self.sse_broadcast({
+                    "type": "index_done", "session_id": session_id,
+                    "node_count": idx["node_count"], "leaf_count": idx["leaf_count"],
+                })
+            except Exception as e:
+                log.warning("index failed (%s): %s", session_id, e)
+                self.sse_broadcast(
+                    {"type": "index_error", "session_id": session_id, "error": f"{type(e).__name__}: {e}"}
+                )
+            finally:
+                with self._index_lock:
+                    self._indexing.discard(session_id)
+
+        threading.Thread(target=run, name=f"index-{session_id}", daemon=True).start()
+        return {"session_id": session_id, "started": True}
+
 
 class _Handler(BaseHTTPRequestHandler):
     server_version = "captured/" + __version__
@@ -264,6 +460,8 @@ class _Handler(BaseHTTPRequestHandler):
             return 200, {"windows": wins, "count": len(wins)}
         if method == "POST" and rest == ["sessions"]:
             return 201, self._start_session(self._read_json())
+        if method == "POST" and rest == ["sessions", "import"]:
+            return 202, self._import_session(self._read_json())
         if method == "GET" and rest == ["sessions"]:
             return 200, {"sessions": reg.summaries()}
         if rest[:1] == ["sessions"] and len(rest) >= 2:
@@ -277,6 +475,16 @@ class _Handler(BaseHTTPRequestHandler):
                 return 200, self._stop_session(sid)
             if method == "POST" and rest[2:] == ["delete"]:
                 return 200, self._delete_session(sid)
+            if method == "POST" and rest[2:] == ["prune"]:
+                return 200, self._prune_session(sid, self._read_json())
+            if method == "POST" and rest[2:] == ["retranscribe"]:
+                return 202, self._retranscribe_session(sid, self._read_json())
+            if method == "POST" and rest[2:] == ["mic"]:
+                return 200, self._set_mic(sid, self._read_json())
+            if method == "POST" and rest[2:] == ["index"]:
+                return 202, self._index_session(sid, self._read_json())
+            if method == "GET" and rest[2:] == ["index"]:
+                return 200, self._index_get(sid)
             if method == "GET" and rest[2:] == ["transcript"]:
                 tail = int(q["tail"][0]) if "tail" in q else None
                 return 200, self._transcript(sid, tail)
@@ -286,6 +494,15 @@ class _Handler(BaseHTTPRequestHandler):
             from ..core import platform as _platform
 
             return 200, {"devices": _platform.current().audio_source.list_input_devices()}
+        if method == "GET" and rest == ["index", "status"]:
+            return 200, self._index_status(q)
+        if method == "GET" and rest == ["index", "models"]:
+            return 200, self._index_models(q)
+        if method == "GET" and rest == ["index", "providers"]:
+            from ..core import providers as _prov
+
+            return 200, {"providers": [{"id": k, **{x: v[x] for x in v if x != "fixed_base"}}
+                                       for k, v in _prov.PROVIDERS.items()], "default": _prov.DEFAULT_PROVIDER}
         if method == "GET" and rest == ["permissions"]:
             return 200, perms.status()
         if method == "POST" and rest == ["permissions", "request"]:
@@ -322,6 +539,20 @@ class _Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 raise _ApiError(400, str(e))
             return 200, {"active": repo}
+        if method == "POST" and rest == ["asr", "language"]:
+            body = self._read_json()
+            try:
+                lang = asr_manager.set_active_language(body.get("language"))
+            except ValueError as e:
+                raise _ApiError(400, str(e))
+            return 200, {"language": lang}
+        if method == "POST" and rest == ["asr", "chunk"]:
+            body = self._read_json()
+            try:
+                secs = asr_manager.set_chunk_seconds(body.get("seconds"))
+            except ValueError as e:
+                raise _ApiError(400, str(e))
+            return 200, {"chunk_seconds": secs}
         raise _ApiError(404, "not found")
 
     def _asr_repo(self) -> str:
@@ -453,6 +684,162 @@ class _Handler(BaseHTTPRequestHandler):
         except ValueError as e:
             raise _ApiError(400, str(e))
         return {"deleted": True, "session_id": sid}
+
+    def _prune_session(self, sid: str, body: dict) -> dict:
+        """Free disk on a finished capture: delete/halve screenshots and/or remove the
+        audio stream. Returns freed bytes + the refreshed capability flags. 404 unknown,
+        400 if still live or for bad parts."""
+        reg = self.server.registry
+        summary = reg.summary(sid)
+        if summary is None:
+            raise _ApiError(404, f"unknown session_id {sid!r}")
+        if summary.get("state") in ("starting", "running", "stopping"):
+            raise _ApiError(400, "stop the capture before pruning it")
+        parts = body.get("parts")
+        if not isinstance(parts, list) or not parts:
+            raise _ApiError(400, "specify 'parts': a non-empty list of " + ", ".join(PRUNE_PARTS))
+        bad = [p for p in parts if p not in PRUNE_PARTS]
+        if bad:
+            raise _ApiError(400, f"unknown prune part(s) {bad}; choose from {list(PRUNE_PARTS)}")
+        try:
+            return reg.prune_session(sid, parts)
+        except ValueError as e:
+            raise _ApiError(400, str(e))
+
+    def _retranscribe_session(self, sid: str, body: dict) -> dict:
+        """Re-run ASR over a finished session's audio with the active/chosen model,
+        replacing its transcript (background; progress over SSE). 404 unknown, 400 if live
+        or audio was pruned."""
+        reg = self.server.registry
+        summary = reg.summary(sid)
+        if summary is None:
+            raise _ApiError(404, f"unknown session_id {sid!r}")
+        if summary.get("state") in ("starting", "running", "stopping"):
+            raise _ApiError(400, "stop the capture before re-transcribing it")
+        if not summary.get("can_retranscribe"):
+            raise _ApiError(400, "no audio to re-transcribe (it was pruned or never captured)")
+        d = summary.get("dir")
+        if not d:
+            raise _ApiError(400, "session dir is missing")
+        try:
+            return self.server.start_retranscribe(
+                sid, d, body.get("asr_backend") or "auto", body.get("model"),
+                language=body.get("language"), chunk_seconds=body.get("chunk_seconds"),
+            )
+        except ValueError as e:
+            raise _ApiError(400, str(e))
+
+    def _set_mic(self, sid: str, body: dict) -> dict:
+        """Switch the microphone on a RUNNING capture (live). Body ``{device}``: an
+        input-device id / ``"default"`` = on/switch, ``null``/``""`` = off. 404 unknown,
+        400 if the session isn't live."""
+        s = self.server.registry.get(sid)
+        if s is None:
+            raise _ApiError(404, f"unknown or finished session_id {sid!r}")
+        try:
+            return s.set_mic_device(body.get("device"))
+        except RuntimeError as e:
+            raise _ApiError(400, str(e))
+
+    def _index_session(self, sid: str, body: dict) -> dict:
+        """Build a finished session's multimodal index (background; progress over SSE).
+        404 unknown, 400 live / no screenshots / bad params, 503 if the endpoint is
+        unset or unreachable (indexing is off unless a working LM Studio URL is configured)."""
+        reg = self.server.registry
+        summary = reg.summary(sid)
+        if summary is None:
+            raise _ApiError(404, f"unknown session_id {sid!r}")
+        if summary.get("state") in ("starting", "running", "stopping"):
+            raise _ApiError(400, "stop the capture before indexing it")
+        if not summary.get("can_index"):
+            raise _ApiError(400, "no screenshots to index (capture some, or this session has none)")
+        try:
+            req = IndexRequest.model_validate(body)
+        except ValidationError as e:
+            errs = e.errors()
+            msg = errs[0].get("msg", "invalid request") if errs else "invalid request"
+            raise _ApiError(400, msg.removeprefix("Value error, "))
+        if not vision_client.configured_url(req.endpoint):
+            raise _ApiError(503, "indexing is disabled: set CAPTURE_INDEX_URL (or pass 'endpoint') to an LM Studio server")
+        try:
+            if not vision_client.load(req.endpoint, req.model).available():
+                raise _ApiError(503, "index endpoint not reachable; check the LM Studio server is running")
+        except _ApiError:
+            raise
+        except Exception as e:
+            raise _ApiError(503, f"index endpoint error: {e}")
+        d = summary.get("dir")
+        if not d:
+            raise _ApiError(400, "session dir is missing")
+        return self.server.start_index(sid, d, req)
+
+    def _index_get(self, sid: str) -> dict:
+        """The built index tree for a session (404 if not indexed yet)."""
+        from ..core import indexer
+
+        reg = self.server.registry
+        summary = reg.summary(sid)
+        if summary is None:
+            raise _ApiError(404, f"unknown session_id {sid!r}")
+        idx = indexer.load_index(summary["dir"])
+        if idx is None:
+            raise _ApiError(404, "session is not indexed yet")
+        return idx
+
+    def _index_status(self, q: dict) -> dict:
+        """Whether indexing is available: a configured endpoint (env or ``?url=``) that
+        answers a ``/v1/models`` preflight. Drives the GUI's gate (off unless reachable)."""
+        url = q.get("url", [None])[0]
+        model = q.get("model", [None])[0]
+        configured = vision_client.configured_url(url)
+        if not configured:
+            return {"available": False, "configured": False, "url": None, "model": None}
+        available = False
+        used_model = model or os.environ.get(vision_client.ENV_MODEL)
+        try:
+            client = vision_client.load(url, model)
+            available = client.available()
+            used_model = client.model
+        except Exception:
+            pass
+        return {"available": available, "configured": True, "url": configured, "model": used_model}
+
+    def _index_models(self, q: dict) -> dict:
+        """List a provider's available models (populates the GUI model dropdown, #53).
+        ``?provider=&host=&port=&key=`` — or ``?url=`` to list from a full base/chat URL.
+        Always 200 with ``{models, provider, reachable}`` ([] + reachable:false if unreachable)."""
+        from ..core import providers as prov
+
+        provider = q.get("provider", [prov.DEFAULT_PROVIDER])[0]
+        host = q.get("host", [None])[0]
+        port = q.get("port", [None])[0]
+        key = q.get("key", [None])[0] or os.environ.get(vision_client.ENV_KEY)
+        url = q.get("url", [None])[0]
+        try:
+            if url:  # explicit URL (full chat or base) → derive the models URL
+                base = url.rsplit("/chat/completions", 1)[0].rstrip("/")
+                models = prov.list_models("custom", base, None, key)
+            else:
+                port_i = int(port) if port else None
+                models = prov.list_models(provider, host, port_i, key)
+        except Exception:
+            models = []
+        return {"models": models, "provider": provider, "reachable": bool(models)}
+
+    def _import_session(self, body: dict) -> dict:
+        """Import an audio/video file as a finished session (background; SSE progress).
+        400 for a missing/blank path or a path that isn't a file."""
+        try:
+            req = ImportMediaRequest.model_validate(body)
+        except ValidationError as e:
+            errs = e.errors()
+            msg = errs[0].get("msg", "invalid request") if errs else "invalid request"
+            raise _ApiError(400, msg.removeprefix("Value error, "))
+        src = Path(req.path).expanduser()
+        if not src.is_file():
+            raise _ApiError(400, f"file not found: {req.path}")
+        out = req.output_dir or str(default_runs_dir())
+        return self.server.start_import(str(src), out, req.asr_backend or "auto", req.screenshot_interval)
 
     def _transcript(self, sid: str, tail: int | None) -> dict:
         reg = self.server.registry

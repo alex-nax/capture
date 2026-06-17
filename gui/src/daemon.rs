@@ -43,6 +43,33 @@ pub struct Session {
     pub window_title: Option<String>,
     #[serde(default)]
     pub dir: String,
+    // Capability flags (what the session can still do, disk-computed by the daemon).
+    #[serde(default = "default_true")]
+    pub has_screenshots: bool,
+    #[serde(default = "default_true")]
+    pub has_audio: bool,
+    #[serde(default)]
+    pub has_mic: bool,
+    #[serde(default)]
+    pub mic_device: Option<String>, // active mic input id (None = off), for the live switcher
+    #[serde(default = "default_true")]
+    pub can_retranscribe: bool,
+    #[serde(default = "default_true")]
+    pub can_index: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Availability of the multimodal-index endpoint (GET /v1/index/status). Extra response
+/// fields (url/model) are ignored — the GUI only needs the gate.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+pub struct IndexStatus {
+    #[serde(default)]
+    pub available: bool,
+    #[serde(default)]
+    pub configured: bool,
 }
 
 #[derive(Deserialize)]
@@ -101,7 +128,15 @@ pub struct AsrModels {
     #[allow(dead_code)] // wire shape; UI reads the per-model `active` flag instead
     pub active: String,
     #[serde(default)]
+    pub language: Option<String>, // transcription language setting (None = auto)
+    #[serde(default = "default_chunk")]
+    pub chunk_seconds: f64, // transcription chunk length setting
+    #[serde(default)]
     pub models: Vec<AsrModel>,
+}
+
+fn default_chunk() -> f64 {
+    30.0
 }
 
 #[derive(Deserialize, Clone, Default)]
@@ -271,6 +306,100 @@ impl Daemon {
         }
     }
 
+    /// Prune a finished capture's artifacts (parts: screenshots / screenshots_halve / audio).
+    pub fn prune(&self, id: &str, parts: &[&str]) -> Result<(), String> {
+        Self::ok_or_error(
+            Self::agent()
+                .post(&format!("{}/v1/sessions/{}/prune", self.endpoint, id))
+                .set("Authorization", &self.auth())
+                .send_json(serde_json::json!({ "parts": parts })),
+            "prune failed",
+        )
+    }
+
+    /// Re-transcribe a finished capture's audio with the active (or given) model.
+    pub fn retranscribe(&self, id: &str, model: Option<&str>) -> Result<(), String> {
+        let mut body = serde_json::json!({});
+        if let Some(m) = model {
+            body["model"] = serde_json::json!(m);
+        }
+        Self::ok_or_error(
+            Self::agent()
+                .post(&format!("{}/v1/sessions/{}/retranscribe", self.endpoint, id))
+                .set("Authorization", &self.auth())
+                .send_json(body),
+            "retranscribe failed",
+        )
+    }
+
+    /// Import an audio/video file as a session (background; progress over /v1/events).
+    pub fn import_media(&self, path: &str) -> Result<(), String> {
+        Self::ok_or_error(
+            Self::agent()
+                .post(&format!("{}/v1/sessions/import", self.endpoint))
+                .set("Authorization", &self.auth())
+                .send_json(serde_json::json!({ "path": path })),
+            "import failed",
+        )
+    }
+
+    /// Build a session's multimodal index (background; progress over /v1/events). The
+    /// `endpoint`/`model` overrides carry the GUI-configured LM Studio URL + model id.
+    pub fn index(&self, id: &str, endpoint: &str, model: &str, sample_rate: f64, preset: &str) -> Result<(), String> {
+        let mut body = serde_json::json!({ "sample_rate": sample_rate });
+        if !endpoint.trim().is_empty() {
+            body["endpoint"] = serde_json::json!(endpoint.trim());
+        }
+        if !model.trim().is_empty() {
+            body["model"] = serde_json::json!(model.trim());
+        }
+        if !preset.trim().is_empty() {
+            body["prompt_preset"] = serde_json::json!(preset.trim());
+        }
+        Self::ok_or_error(
+            Self::agent()
+                .post(&format!("{}/v1/sessions/{}/index", self.endpoint, id))
+                .set("Authorization", &self.auth())
+                .send_json(body),
+            "index failed",
+        )
+    }
+
+    /// Whether indexing is available against `url` (configured + a reachable preflight).
+    pub fn index_status(&self, url: &str) -> Result<IndexStatus, String> {
+        let mut req = Self::agent()
+            .get(&format!("{}/v1/index/status", self.endpoint))
+            .set("Authorization", &self.auth());
+        if !url.trim().is_empty() {
+            req = req.query("url", url.trim());
+        }
+        req.call().map_err(|e| e.to_string())?.into_json().map_err(|e| e.to_string())
+    }
+
+    /// The built index tree for a session (Err if not indexed yet).
+    pub fn get_index(&self, id: &str) -> Result<serde_json::Value, String> {
+        Self::agent()
+            .get(&format!("{}/v1/sessions/{}/index", self.endpoint, id))
+            .set("Authorization", &self.auth())
+            .call()
+            .map_err(|e| e.to_string())?
+            .into_json()
+            .map_err(|e| e.to_string())
+    }
+
+    /// Map a ureq response to `Ok(())` or the daemon's `{"error": …}` message.
+    fn ok_or_error(resp: Result<ureq::Response, ureq::Error>, fallback: &str) -> Result<(), String> {
+        match resp {
+            Ok(_) => Ok(()),
+            Err(ureq::Error::Status(_, r)) => Err(r
+                .into_json::<serde_json::Value>()
+                .ok()
+                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+                .unwrap_or_else(|| fallback.into())),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
     /// Available microphone/input devices for the mic selector.
     pub fn audio_mics(&self) -> Result<AudioDevices, String> {
         Self::agent()
@@ -306,6 +435,39 @@ impl Daemon {
     /// Remove a downloaded model's weights from the HF cache (frees disk).
     pub fn asr_delete(&self, repo: &str) -> Result<(), String> {
         self.asr_post("/v1/asr/models/delete", repo)
+    }
+
+    /// Switch the microphone on a LIVE capture (empty = off). Appends to the mic track.
+    pub fn set_mic(&self, id: &str, device: Option<&str>) -> Result<(), String> {
+        Self::ok_or_error(
+            Self::agent()
+                .post(&format!("{}/v1/sessions/{}/mic", self.endpoint, id))
+                .set("Authorization", &self.auth())
+                .send_json(serde_json::json!({ "device": device })),
+            "mic switch failed",
+        )
+    }
+
+    /// Set the transcription language ("" / "auto" = auto-detect). Applies on the fly.
+    pub fn asr_set_language(&self, language: &str) -> Result<(), String> {
+        Self::ok_or_error(
+            Self::agent()
+                .post(&format!("{}/v1/asr/language", self.endpoint))
+                .set("Authorization", &self.auth())
+                .send_json(serde_json::json!({ "language": language })),
+            "set language failed",
+        )
+    }
+
+    /// Set the transcription chunk length (seconds).
+    pub fn asr_set_chunk(&self, seconds: f64) -> Result<(), String> {
+        Self::ok_or_error(
+            Self::agent()
+                .post(&format!("{}/v1/asr/chunk", self.endpoint))
+                .set("Authorization", &self.auth())
+                .send_json(serde_json::json!({ "seconds": seconds })),
+            "set chunk failed",
+        )
     }
 
     /// Ask the daemon to stop (the menu-bar agent respawns it — used to restart so a

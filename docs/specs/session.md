@@ -14,6 +14,15 @@ Dependencies it imports (owned by other scopes, not specced here): `capture_mcp.
 
 ## Public contract
 
+### `set_mic_device(device)` (#46)
+
+Switch the microphone on a **running** session: `device` = an input-device id / `"default"` turns
+the mic on or switches it; `None`/`""` turns it off. Stops the current `_mic` `AudioCapture` and starts
+a new one with `append=True` (when `mic.s16le` already exists) so the mic track stays continuous — each
+`AudioCapture`'s epoch is real wall-clock, so iso timestamps line up across the switch. Updates
+`self.mic_device` (surfaced in `summary()`), rewrites `session.json`, emits a `mic_device` event. Raises
+`RuntimeError` if the session isn't running. Heavy teardown/start runs outside `self._lock`.
+
 ### Constructor: `CaptureSession(output_dir, *, ...)` (lines 34–85)
 
 Positional:

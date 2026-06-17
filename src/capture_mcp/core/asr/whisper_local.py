@@ -46,7 +46,7 @@ def _write_wav(pcm: np.ndarray, sample_rate: int) -> str:
 class MlxWhisper(ASRBackend):
     name = "mlx-whisper"
 
-    def __init__(self, model: str | None = None) -> None:
+    def __init__(self, model: str | None = None, language: str | None = None) -> None:
         import mlx_whisper  # noqa: F401  (validate availability early)
 
         from .. import config as _config
@@ -59,6 +59,19 @@ class MlxWhisper(ASRBackend):
             or _config.get("whisper_model")
             or _MLX_DEFAULT
         )
+        # An explicit per-call pin (e.g. a re-transcribe with a chosen language); when
+        # None the language is resolved FRESH per transcribe() from the persisted setting
+        # (manager.active_language) so a user can change it ON THE FLY during a live
+        # capture and the next chunk picks it up. Auto-detect (None) on a SHORT chunk
+        # often mis-fires to English and hallucinates ("Thank you.") — hence the setting.
+        self._language_pin = language
+
+    def _language(self) -> str | None:
+        if self._language_pin is not None:
+            return self._language_pin
+        from . import manager as _manager
+
+        return _manager.active_language()
 
     def transcribe(self, pcm: np.ndarray, sample_rate: int) -> list[Segment]:
         import mlx_whisper
@@ -67,6 +80,14 @@ class MlxWhisper(ASRBackend):
             pcm.astype(np.float32),
             path_or_hf_repo=self._model,
             word_timestamps=False,
+            language=self._language(),
+            # Hallucination guards (Whisper emits phantom phrases / token loops on
+            # silence-heavy or out-of-window audio): don't carry context across chunks,
+            # and drop low-confidence / non-speech / degenerate-repetition decodes.
+            condition_on_previous_text=False,
+            no_speech_threshold=0.6,
+            logprob_threshold=-1.0,
+            compression_ratio_threshold=2.4,
         )
         return [
             Segment(start=float(s["start"]), end=float(s["end"]), text=s["text"].strip())
@@ -133,6 +154,7 @@ class FasterWhisper(ASRBackend):
         model: str | None = None,
         device: str | None = None,
         compute_type: str | None = None,
+        language: str | None = None,
     ) -> None:
         _add_nvidia_dll_dirs()
         from faster_whisper import WhisperModel
@@ -158,12 +180,25 @@ class FasterWhisper(ASRBackend):
                 raise
         self.device = device
         self.compute_type = compute_type
+        self._language_pin = language  # None => resolve per-call from the live setting
         log.info("faster-whisper loaded: model=%s device=%s compute=%s", model, device, compute_type)
+
+    def _language(self) -> str | None:
+        if self._language_pin is not None:
+            return self._language_pin
+        from . import manager as _manager
+
+        return _manager.active_language()
 
     def transcribe(self, pcm: np.ndarray, sample_rate: int) -> list[Segment]:
         path = _write_wav(pcm, sample_rate)
         try:
-            segments, _ = self._model.transcribe(path, vad_filter=True)
+            # vad_filter drops non-speech; pin the language (resolved live, so an on-the-fly
+            # change applies next chunk) + disable cross-chunk conditioning to avoid the
+            # phantom-phrase hallucination on short chunks.
+            segments, _ = self._model.transcribe(
+                path, vad_filter=True, language=self._language(), condition_on_previous_text=False
+            )
             return [
                 Segment(start=float(s.start), end=float(s.end), text=s.text.strip())
                 for s in segments
