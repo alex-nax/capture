@@ -1,10 +1,10 @@
 # Spec: Windows release (packaging, installer, daemon lifecycle, signing, auto-update)
 
-_Status: **PLANNED / design** as of 2026-06-17 — this scope is **not yet implemented**. Source of
-truth for *shipped* behavior remains the code; this spec is the agreed **intent** for the M4 Windows
-release (`features.json` #34, with the tray agent #36 in [agent-windows.md](agent-windows.md)). Like
-[product-architecture.md](product-architecture.md), sections mark **[current]** (true today) vs
-**[planned]** (the target). Update each section to **[current]** in the same change that lands it._
+_Status: **partially implemented**, 2026-06-17 — core portability, per-process audio, GUI usability, the
+native tray agent, and the **Inno Setup installer** have landed + are verified on the Windows box (Phases
+0–4); cross-platform **auto-update** + **release/CI** remain (Phase 5). Source of truth = the code; this
+spec marks **[current]/[done]** vs **[planned]** per section. (`features.json` #34, with the tray agent
+#36 in [agent-windows.md](agent-windows.md).)_
 
 ## Purpose
 
@@ -44,11 +44,13 @@ mile**: packaging, installer, signing/SmartScreen, daemon lifecycle, and auto-up
   and `packaging/register_logon_task.ps1` — interactive logon-task registration. See
   [agent-windows.md](agent-windows.md).
 - `packaging/captured_main.py` — the PyInstaller entry (shared; calls `multiprocessing.freeze_support()`).
+- `packaging/build_windows.ps1` — the parallel of `build_macos_dmg.sh` (**landed + verified 2026-06-17**):
+  builds GUI + agent + native helper, PyInstaller-freezes the daemon, stages the install tree,
+  (optionally) signs, and compiles the Inno Setup script → `dist/CaptureSetup-<v>-x64.exe`.
+- `packaging/capture.iss` — Inno Setup script (**landed**): per-user install, Start-Menu/desktop
+  shortcuts, logon-task registration, uninstall + cleanup.
 
 **[planned]**
-- `packaging/build_windows.ps1` — the parallel of `build_macos_dmg.sh`: build GUI + agent, freeze the
-  daemon, lay out the install tree, (optionally) sign, compile the Inno Setup script.
-- `packaging/capture.iss` — Inno Setup script (layout, shortcuts, logon-task registration, uninstall).
 - `packaging/winget/` — winget manifest referencing the GitHub-release `.exe`.
 - `gui/src/update.rs` — generalize the macOS-only updater to a cross-platform asset/installer flow.
 - `.github/workflows/release.yml` — cross-platform release CI (macOS DMG + Windows installer under
@@ -102,7 +104,7 @@ Already correct (no change): `audio.py` spawns the audio helper with `creationfl
 `util.descendant_pids` guards on `os.name` (POSIX `ps` only); `Path.home()/".capture"` resolves to
 `C:\Users\<user>\.capture` (works; idiomatic `%APPDATA%` is an open item).
 
-### 2. Packaging / freeze [planned]
+### 2. Packaging / freeze [done 2026-06-17]
 
 `packaging/build_windows.ps1` (parallel to `build_macos_dmg.sh`):
 1. `cargo build --release` the GUI (`gui/`) → `capture-gui.exe`.
@@ -124,7 +126,7 @@ Already correct (no change): `audio.py` spawns the audio helper with `creationfl
 pack on Windows is an on-demand download, not part of the installer"). At runtime the daemon picks
 CUDA if available, else CPU `int8`, else a configured remote endpoint — see [asr.md](asr.md).
 
-### 3. Installer — Inno Setup [planned]
+### 3. Installer — Inno Setup [done 2026-06-17]
 
 `packaging/capture.iss`:
 - **Per-user install** to `%LOCALAPPDATA%\Programs\Capture` by default (no UAC). A per-machine
@@ -311,6 +313,12 @@ Live backlog for the Windows release (tracked: `features.json` #34, #36):
   `capture-gui.exe` (`CAPTURE_AGENT=1`) — `agent_alive=true, gui_count=1, daemon_running=true`.
   `register_logon_task.ps1` register/verify/unregister round-trips clean. Tray icon/menu visuals are a
   manual check.
+- **[current, Phase 4, 2026-06-17]** `build_windows.ps1` produced **`CaptureSetup-0.2.5-x64.exe`
+  (74 MB)** — PyInstaller freeze (faster-whisper CPU, no CUDA libs) + Inno compile (67 s). Verified
+  end-to-end: silent install lays out the full tree (agent + GUI + frozen daemon + native helper + skill
+  + logon-task script), the **frozen daemon runs** and serves `/v1/health` (`version=0.2.5,
+  platform=win32` — SAC does **not** block it), and the uninstaller cleans up. (Built from DEBUG binaries
+  via `CAPTURE_WIN_DEBUG=1`; a release build is the same script with the flag off.)
 - **[planned] packaged-bundle acceptance** (manual checklist; no GPUI UI harness): install from
   `CaptureSetup-<v>-x64.exe` on a clean Windows 10/11 box → tray icon appears and persists across
   closing the window → `/v1/health` ok → `list_windows` returns real windows → a ~5 s self-test

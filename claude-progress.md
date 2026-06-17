@@ -1,5 +1,37 @@
 # Progress Log
 
+## Session 60 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **Phase 4**: **Windows installer**
+(#34). Produced + verified a real `CaptureSetup-x64.exe`.
+- **`packaging/build_windows.ps1`** (parallel of `build_macos_dmg.sh`): cargo-builds GUI + agent +
+  native audio helper (into the shared `gui/target`, SAC-safe), **PyInstaller-freezes** the daemon
+  (`--collect-all faster_whisper ctranslate2 huggingface_hub`, exclude mlx/torch; **CUDA libs NOT
+  bundled** → CPU faster-whisper out of box), stages the install tree, optional `signtool` signing
+  (`CAPTURE_WIN_SIGN_*`), and compiles Inno Setup. Knobs: `CAPTURE_WIN_DEBUG` (reuse debug bins),
+  `CAPTURE_SKIP_FREEZE`, `CAPTURE_SKIP_CARGO`, `CAPTURE_ISCC`.
+- **`packaging/capture.iss`** (Inno Setup): per-user install to `%LOCALAPPDATA%\Programs\Capture` (no
+  UAC), Start-Menu/desktop shortcuts, **registers the interactive logon task** (via
+  `register_logon_task.ps1`) as a checkbox task, uninstall unregisters it + removes the tree.
+- **Tooling installed on this box** (Phase 4 prereqs): PyInstaller 6.21 into the venv; **Inno Setup**
+  via `winget` (ISCC at `%LOCALAPPDATA%\Programs\Inno Setup 6`).
+- **Two PowerShell gotchas fixed:** non-ASCII (`…`/`—`) in `.ps1` string literals break the PS 5.1
+  parser (it reads BOM-less files as cp1252) → stripped to ASCII; and `$ErrorActionPreference='Stop'`
+  turns a native tool's **stderr** (PyInstaller INFO logs) into a terminating error → switched to
+  `Continue` + explicit `$LASTEXITCODE` checks (cmdlets use `-ErrorAction Stop`).
+- **Verified end-to-end:** `CaptureSetup-0.2.5-x64.exe` (74 MB; freeze + Inno compile 67 s). Silent
+  install (`/VERYSILENT /DIR=… /TASKS=""`) laid out the full tree; the **PyInstaller-frozen daemon runs
+  on Windows** and serves `/v1/health` (`version=0.2.5, platform=win32` — **SAC does not block it**);
+  the uninstaller cleaned up. Built from DEBUG binaries (`CAPTURE_WIN_DEBUG=1`) for speed — a release
+  build is the same script with the flag off.
+- Specs synced: windows-release.md (status → partially-implemented; Files/§2/§3 done; §Tests Phase 4),
+  features.json #34. `dist/` + `packaging/build/` are gitignored (no installer/freeze committed).
+- **Next:** Phase 5 — cross-platform in-app **auto-update** (generalize `gui/src/update.rs` for the
+  `.exe` asset + a PowerShell updater) + **release/CI** (bump_version across the Windows build, one
+  GitHub release carrying both `.dmg` and `.exe`, GH Actions matrix). Then a release build + a manual
+  tray pass to flip #34/#36 `passes:true`.
+
+---
+
 ## Session 59 — 2026-06-17
 **Agent**: builder (**Windows box**, branch **windows-support**) — **Phase 3**: native **tray agent**
 (#36) + daemon **logon task**. Built + verified.
