@@ -791,6 +791,7 @@ dependencies = [
 name = "capture-gui"
 version = "0.2.6"
 dependencies = [
+ "capture-core",
  "dirs 5.0.1",
  "global-hotkey",
  "gpui",

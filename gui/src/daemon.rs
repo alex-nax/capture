@@ -8,6 +8,10 @@ use serde::Deserialize;
 use std::path::PathBuf;
 use std::time::Duration;
 
+// The /v1 contract types now live in capture-core (the v3 source of truth). Re-export them so the
+// GUI's call sites (`daemon::Session`, `daemon::AsrModels`, …) keep resolving unchanged.
+pub use capture_core::v1::*;
+
 #[derive(Clone)]
 pub struct Daemon {
     pub endpoint: String,
@@ -18,58 +22,6 @@ pub struct Daemon {
 struct DaemonJson {
     endpoint: String,
     token: String,
-}
-
-#[derive(Deserialize, Clone, Default)]
-pub struct Health {
-    pub ok: bool,
-    pub version: String,
-    pub api_version: String,
-    pub pid: u32,
-}
-
-#[derive(Deserialize, Clone, Default)]
-#[allow(dead_code)] // mirrors the /v1 SessionSummary wire shape; not all fields are shown yet
-pub struct Session {
-    pub session_id: String,
-    pub state: String,
-    #[serde(default)]
-    pub screenshots: i64,
-    #[serde(default)]
-    pub transcript_segments: i64,
-    #[serde(default)]
-    pub audio_status: String,
-    #[serde(default)]
-    pub window_title: Option<String>,
-    #[serde(default)]
-    pub dir: String,
-    // Capability flags (what the session can still do, disk-computed by the daemon).
-    #[serde(default = "default_true")]
-    pub has_screenshots: bool,
-    #[serde(default = "default_true")]
-    pub has_audio: bool,
-    #[serde(default)]
-    pub has_mic: bool,
-    #[serde(default)]
-    pub mic_device: Option<String>, // active mic input id (None = off), for the live switcher
-    #[serde(default = "default_true")]
-    pub can_retranscribe: bool,
-    #[serde(default = "default_true")]
-    pub can_index: bool,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-/// Availability of the multimodal-index endpoint (GET /v1/index/status). Extra response
-/// fields (url/model) are ignored — the GUI only needs the gate.
-#[derive(Clone, Debug, Default, serde::Deserialize)]
-pub struct IndexStatus {
-    #[serde(default)]
-    pub available: bool,
-    #[serde(default)]
-    pub configured: bool,
 }
 
 #[derive(Deserialize)]
@@ -84,116 +36,9 @@ struct IndexModels {
     models: Vec<String>,
 }
 
-#[derive(Deserialize, Clone)]
-#[allow(dead_code)] // mirrors the /v1 WindowInfo wire shape (window_id/width/height for slice 2)
-pub struct WindowInfo {
-    pub window_id: i64,
-    pub pid: i64,
-    pub app_name: String,
-    pub title: String,
-    pub width: i64,
-    pub height: i64,
-}
-
 #[derive(Deserialize)]
 struct Windows {
     windows: Vec<WindowInfo>,
-}
-
-#[derive(Deserialize, Clone)]
-pub struct TranscriptSeg {
-    pub text: String,
-}
-
-#[derive(Deserialize, Clone)]
-pub struct AsrModel {
-    pub repo: String,
-    pub name: String,
-    pub size_label: String,
-    pub downloaded: bool,
-    pub active: bool,
-    #[serde(default)]
-    pub downloading: bool,
-}
-
-#[derive(Deserialize, Clone, Default)]
-pub struct Permissions {
-    #[serde(default)]
-    #[allow(dead_code)] // wire shape; UI keys off the per-permission fields
-    pub platform: String,
-    #[serde(default)]
-    pub screen_recording: String,
-    #[serde(default)]
-    pub microphone: String,
-}
-
-#[derive(Deserialize, Clone, Default)]
-pub struct AsrModels {
-    #[serde(default)]
-    pub backend_available: bool,
-    #[serde(default)]
-    #[allow(dead_code)] // wire shape; UI reads the per-model `active` flag instead
-    pub active: String,
-    #[serde(default)]
-    pub language: Option<String>, // transcription language setting (None = auto)
-    #[serde(default = "default_chunk")]
-    pub chunk_seconds: f64, // transcription chunk length setting
-    #[serde(default)]
-    pub models: Vec<AsrModel>,
-}
-
-fn default_chunk() -> f64 {
-    30.0
-}
-
-/// A selectable ASR runtime (GET /v1/asr/runtimes) — engine + hardware requirement + state.
-#[derive(Deserialize, Clone, Default)]
-#[allow(dead_code)] // mirrors the wire shape; the UI reads a subset
-pub struct AsrRuntime {
-    pub id: String,
-    pub label: String,
-    #[serde(default)]
-    pub kind: String,
-    #[serde(default)]
-    pub engine: String,
-    #[serde(default)]
-    pub device: Option<String>,
-    #[serde(default)]
-    pub requires: String,
-    #[serde(default)]
-    pub installed: bool,
-    #[serde(default)]
-    pub active: bool,
-}
-
-#[derive(Deserialize, Clone, Default)]
-pub struct AsrGpu {
-    #[serde(default)]
-    pub nvidia: bool,
-}
-
-#[derive(Deserialize, Clone, Default)]
-pub struct AsrRuntimes {
-    #[serde(default)]
-    pub active: Option<String>,
-    #[serde(default)]
-    pub gpu: AsrGpu,
-    #[serde(default)]
-    pub runtimes: Vec<AsrRuntime>,
-}
-
-#[derive(Deserialize, Clone, Default)]
-pub struct AudioDevice {
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub default: bool,
-}
-
-#[derive(Deserialize, Clone, Default)]
-pub struct AudioDevices {
-    #[serde(default)]
-    pub devices: Vec<AudioDevice>,
 }
 
 #[derive(Deserialize)]

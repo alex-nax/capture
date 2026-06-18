@@ -9,6 +9,7 @@ name = "capture-gui"
 path = "src/main.rs"
 
 [dependencies]
+capture-core = { path = "../crates/capture-core" }
 gpui = "0.2.2"
 ureq = { version = "2", features = ["json"] }
 serde = { version = "1", features = ["derive"] }

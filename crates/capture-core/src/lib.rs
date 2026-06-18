@@ -8,5 +8,7 @@
 //! See `docs/specs/v3-architecture.md`. The contract type modules (`v1` requests/responses,
 //! `ondisk` session formats) land in #61's type-port phase.
 
+pub mod v1;
+
 /// The `/v1` API version this contract describes (matches `HealthResponse.api_version`).
 pub const API_VERSION: u32 = 1;

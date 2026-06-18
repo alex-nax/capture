@@ -105,7 +105,12 @@ hiding the real local models. Tracked as **#77** (depends on #58 + #64).
 
 ## Migration order (incremental, always-shippable)
 1. **Workspace skeleton** + `capture-core` contract types (serde) → regenerate the GUI's types from these;
-   keep the v1 golden green.
+   keep the v1 golden green. **DONE (#61):** root `Cargo.toml` workspace (members `gui` + `crates/capture-core`,
+   shared `./target`); `capture-core::v1` holds all 14 `/v1` types — the proven response structs moved out of
+   `gui/src/daemon.rs` (now `Serialize+Deserialize`, lenient) + the 4 request types ported from `models.py`
+   (`deny_unknown_fields`, serde defaults); the GUI re-exports them (`pub use capture_core::v1::*;`), its HTTP
+   client stays in `daemon.rs`; round-trip tests in `capture-core`. The Python `models.py`/`v1_schema` golden
+   stays the v2 daemon's contract until cutover (#67).
 2. **`capture-index`** — pure logic + HTTP; **fully testable against the 7 existing eval corpora** (no
    capture/permissions needed). High-value, low-risk first port; proves the toolchain.
 3. **`capture-daemon` + `capture-mcp`** — serve the same `/v1` + MCP; GUI flips to the Rust daemon.

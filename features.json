@@ -915,7 +915,7 @@
       "id": 61,
       "category": "v3",
       "priority": "high",
-      "passes": false,
+      "passes": true,
       "dependencies": [],
       "description": "v3 workspace skeleton + capture-core contract types. Stand up the cargo workspace; define the /v1 + on-disk CONTRACT TYPES in capture-core (serde) as the source of truth (replacing the pydantic v1_schema golden) and regenerate the GUI's types from them. Keeps the contract firewall stable for the incremental port."
     },
