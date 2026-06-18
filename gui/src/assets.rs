@@ -17,6 +17,9 @@ const ICONS: &[(&str, &[u8])] = icons![
     "folder", "clipboard", "stop", "trash", "settings", "chevron-left", "mic",
     "play", "pause", "skip-back", "skip-forward", "rewind", "fast-forward",
     "image", "volume", "volume-x", "refresh", "scissors", "list-tree",
+    // Redesign glyphs (#70). These had .svg files but were never registered here, so they
+    // rendered blank — e.g. the Voice (waveform) + Permissions (shield) left-nav icons.
+    "waveform", "shield", "check", "x", "chevron-down", "alert-triangle",
 ];
 
 pub struct Assets;
