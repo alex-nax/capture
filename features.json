@@ -986,6 +986,95 @@
         66
       ],
       "description": "v3 cutover — retire the Python package + the Swift/Python helpers, drop PyInstaller; finalize cargo-dist packaging for mac+win. selenium→chromiumoxide (or keep optional) for the browser-capture flow. v3 becomes the default branch."
+    },
+    {
+      "id": 68,
+      "category": "gui",
+      "priority": "high",
+      "passes": false,
+      "dependencies": [],
+      "description": "Decompose gui/src/app.rs (4116 lines) into modules by SCREEN/COMPONENT/DOMAIN: theme.rs, components/ (button/chip/list_row/dropdown/modal/progress/section/icon as free fns), screens/ (dashboard, settings/{shell+sections}, playback, preset_picker as impl CaptureApp blocks), domain/ (capture/indexing/asr/sessions action methods), state.rs. Make CaptureApp fields pub(crate). BEHAVIOR-PRESERVING — same screens/actions relocated, cargo build clean. Foundation for the redesign. Spec: gui-redesign.md."
+    },
+    {
+      "id": 69,
+      "category": "gui",
+      "priority": "high",
+      "passes": false,
+      "dependencies": [
+        68
+      ],
+      "description": "theme.rs design tokens — the locked palette (indigo #6366f1 accent, pure-gray ramp on #1b1b1d, semantic colors), type scale (Inter + JetBrains Mono mono), 4px spacing scale, tight radii (5/6/8) — as named constants (handoff §3). Replace ad-hoc rgb/px literals app-wide; one source of truth (grep acceptance: no raw hex/px outside theme.rs in components/screens)."
+    },
+    {
+      "id": 70,
+      "category": "gui",
+      "priority": "high",
+      "passes": false,
+      "dependencies": [
+        69
+      ],
+      "description": "Component primitives (handoff §4) with full hover/selected/disabled state matrices: button(Primary/Secondary/Ghost/Destructive), chip(idle/hover/selected/disabled), selectable list_row (+2px accent left-bar, checkbox, action icons), dropdown (field+menu), modal+backdrop, progress bar, section header/eyebrow/status pill. Plus the icon set standardized (single-tint SVG) + new glyphs (shield, waveform, alert-triangle, stop, check, caret-down, x)."
+    },
+    {
+      "id": 71,
+      "category": "gui",
+      "priority": "high",
+      "passes": false,
+      "dependencies": [
+        70
+      ],
+      "description": "Settings shell redesign — replace the long dense scroll with a LEFT NAV pane (nav_bg + 1px right border; active item accent_subtle/accent_text_strong) + a single content panel that switches on the selected section. Move brand + daemon line + hotkey hint + status pill into the nav."
+    },
+    {
+      "id": 72,
+      "category": "gui",
+      "priority": "high",
+      "passes": false,
+      "dependencies": [
+        70,
+        71
+      ],
+      "description": "Settings sections — restyle Capture quality / Transcription / Index endpoint to the new system, and add: VOICE RECOGNITION (runtime selector CPU·whisper.cpp / Core ML / CUDA / Remote → runtime-DEPENDENT model manager: rows of name·size with downloaded/active/available states + Use/Remove/Download; CUDA=installable-pack/unavailable; Remote=endpoint config), SKILLS (install/update rows), PERMISSIONS (granted + not-granted rows + restart daemon), APP & UPDATES (version + the download progress bar). Wires the existing ASR-model + runtime-pack (#58) + permissions APIs."
+    },
+    {
+      "id": 73,
+      "category": "gui",
+      "priority": "high",
+      "passes": false,
+      "dependencies": [
+        70
+      ],
+      "description": "Dashboard redesign — header (Settings button); per-app START CAPTURE in each Windows group header, enabled IFF a window of that app is selected (replaces the per-app mic pill); Refresh moved into the Windows section header; Import moved into the Sessions section header; restyled Windows picker + Sessions list using the new selectable-row pattern (mono id, meta, folder/copy/delete actions)."
+    },
+    {
+      "id": 74,
+      "category": "gui",
+      "priority": "medium",
+      "passes": false,
+      "dependencies": [
+        73
+      ],
+      "description": "Dashboard permission states — wire /v1/permissions checks to: a red BLOCKING BANNER (Screen Recording required) + Open System Settings / Re-check; the Windows column as a BLOCKED EMPTY STATE (alert + CTA) when screen-recording denied; mic chips + Launch disabled when mic denied (with a 'Microphone denied' note); Sessions remain usable throughout."
+    },
+    {
+      "id": 75,
+      "category": "gui",
+      "priority": "high",
+      "passes": false,
+      "dependencies": [
+        70
+      ],
+      "description": "Playback redesign — SAVED: real frame image + time-aligned transcript caption + scrubber/transport (skip/rewind/play/ff + volume + time) + Manage (screenshots/audio toggles, language, Re-transcribe / Halve / Delete frames / Remove audio / Build index) + Index summary (node count + root summary). LIVE: REC badge on the frame, streaming transcript (settled muted, current bright + caret), Stop capture (red) + elapsed timer + level meter + segment count + live mic & language; no scrubber/post-actions. Shared layout, branch on state."
+    },
+    {
+      "id": 76,
+      "category": "gui",
+      "priority": "medium",
+      "passes": false,
+      "dependencies": [
+        70
+      ],
+      "description": "Preset picker + confirm modals to the new modal/card spec (width 380, panel+1px border, radius 8, backdrop #000@66%, title 15/600, body text_secondary, right-aligned ghost Cancel + primary/destructive action). Preset rows = label + one-line hint, one selected (accent_subtle)."
     }
   ]
 }
