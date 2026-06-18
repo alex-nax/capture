@@ -112,7 +112,17 @@ hiding the real local models. Tracked as **#77** (depends on #58 + #64).
    client stays in `daemon.rs`; round-trip tests in `capture-core`. The Python `models.py`/`v1_schema` golden
    stays the v2 daemon's contract until cutover (#67).
 2. **`capture-index`** — pure logic + HTTP; **fully testable against the 7 existing eval corpora** (no
-   capture/permissions needed). High-value, low-risk first port; proves the toolchain.
+   capture/permissions needed). High-value, low-risk first port; proves the toolchain. **DONE (#62):** the
+   whole indexer ported — `vision` (OpenAI-compatible client, `reasoning_effort:"none"`/json_schema/retry,
+   `image` downscale), `prompts` (the classify/extract prompts in an editable embedded `prompts.toml`),
+   `build` (the classify→extract→combine merge-tree + checkpoint-resume + `#49` code-res + `#51` confab
+   flagging + content-aware `AGENTS.md`), `live` (the `#55` binary-counter incremental tree); the
+   frames/time/transcript foundation lives in `capture-core`. Validated with hermetic tests + a **golden-replay**
+   harness (`examples/golden_replay.rs`): replaying 4 corpora's leaf data through the Rust `build_index`
+   reproduces the current Python's deterministic output (tree, `content_type`, `#51` flags) byte-for-byte —
+   the only diffs were *stale* corpus fixtures predating the current `#51` logic (confirmed by recomputing
+   with today's Python, which matches the Rust). The live end-to-end against LM Studio is blocked only by the
+   macOS Local-Network gate on shell binaries — it runs once the granted v3 daemon (#63) drives it.
 3. **`capture-daemon` + `capture-mcp`** — serve the same `/v1` + MCP; GUI flips to the Rust daemon.
 4. **`capture-asr`** (`whisper-rs`) — benchmark vs mlx-whisper using the existing `docs/asr-benchmark.md`
    harness before deleting the Python ASR.
