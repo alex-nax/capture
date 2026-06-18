@@ -4,7 +4,7 @@
 //! Markup/styling only — every listener, focus handle, and the section gating below
 //! is preserved verbatim from the prior single-column implementation (#68/#71).
 
-use gpui::{div, prelude::*, px, rgb, rgba, Context, SharedString, Window};
+use gpui::{deferred, div, prelude::*, px, relative, rgb, rgba, Context, SharedString, Window};
 
 use crate::app::CaptureApp;
 use crate::components::{
@@ -1049,7 +1049,7 @@ impl CaptureApp {
         let dim = self.lang_dropdown_open && self.asr_language.is_empty();
         let open = self.lang_dropdown_open;
 
-        let mut col = div().flex().flex_col().gap_1().child(
+        let mut col = div().flex().flex_col().gap_1().relative().child(
             self.field_row("Language").child(
                 div()
                     .id("asr-lang-input")
@@ -1086,11 +1086,15 @@ impl CaptureApp {
 
         if self.lang_dropdown_open {
             let filter = self.asr_language.trim().to_lowercase();
-            // §4 dropdown menu surface: ELEVATED / 1px BORDER, radius 6, pad 4.
+            // §4 dropdown menu surface, floated as an absolute popover below the field
+            // (top:100% of the relative col, left = label width) so it overlays the chunk
+            // row below instead of pushing it down.
             let mut list = div()
+                .absolute()
+                .top(relative(1.0))
+                .left(px(132.0))
                 .flex()
                 .flex_col()
-                .ml(px(132.0))
                 .w(px(240.0))
                 .p(px(theme::SP_1))
                 .rounded(px(theme::RADIUS_MD))
@@ -1137,7 +1141,7 @@ impl CaptureApp {
                     div().py(px(7.0)).px(px(10.0)).text_xs().text_color(rgb(theme::TEXT_MUTED)).child(format!("+{} more — keep typing", total - 12)),
                 );
             }
-            col = col.child(list);
+            col = col.child(deferred(list));
         }
         col
     }

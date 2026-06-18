@@ -41,7 +41,7 @@ impl CaptureApp {
     pub(crate) fn index_model_field(&self, cx: &mut Context<Self>) -> impl IntoElement {
         use crate::components::{button, icon, ButtonVariant};
         use crate::theme;
-        use gpui::{div, px, rgb, rgba};
+        use gpui::{deferred, div, px, relative, rgb, rgba};
         let field_text = if self.index_model.is_empty() {
             "server default".to_string()
         } else {
@@ -51,7 +51,8 @@ impl CaptureApp {
         let open = self.model_dropdown_open;
 
         // Label (118px `.lbl`) + the `.fld` dropdown field + a secondary Refresh button.
-        let mut col = div().flex().flex_col().gap_1().child(
+        // `relative` so the open menu can float as an absolute popover (see below).
+        let mut col = div().flex().flex_col().gap_1().relative().child(
             div()
                 .flex()
                 .items_center()
@@ -99,11 +100,15 @@ impl CaptureApp {
         );
 
         if self.model_dropdown_open {
-            // §4 dropdown menu surface: ELEVATED / 1px BORDER, radius 6, pad 4.
+            // §4 dropdown menu surface: ELEVATED / 1px BORDER, radius 6, pad 4. Floated as an
+            // absolute popover below the field (top:100% of the relative col, left = label width)
+            // so it overlays the rows below instead of pushing them down.
             let mut list = div()
+                .absolute()
+                .top(relative(1.0))
+                .left(px(132.0))
                 .flex()
                 .flex_col()
-                .ml(px(132.0))
                 .w(px(280.0))
                 .p(px(theme::SP_1))
                 .rounded(px(theme::RADIUS_MD))
@@ -155,7 +160,8 @@ impl CaptureApp {
                     );
                 }
             }
-            col = col.child(list);
+            // `deferred` paints the popover after (on top of) the rows below it.
+            col = col.child(deferred(list));
         }
         col
     }
