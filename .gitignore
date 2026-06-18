@@ -19,6 +19,9 @@ agent/build/
 /capture-*/
 /_capture_raw/
 
+# v3 cargo workspace build output (shared target at the repo root)
+/target/
+
 # v3 spike build artifacts
 spikes/*/target/
 spikes/whisper-bench/*.bin

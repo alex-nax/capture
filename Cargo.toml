@@ -1,0 +1,7 @@
+# v3: the single cargo workspace that will hold capture-core / -platform / -asr / -index /
+# -daemon / -mcp / -gui (see docs/specs/v3-architecture.md). Built incrementally — today it
+# holds the existing GPUI app (gui) plus the first new crate (capture-core, the /v1 + on-disk
+# contract types). One shared ./target for the whole workspace.
+[workspace]
+resolver = "2"
+members = ["gui", "crates/capture-core"]

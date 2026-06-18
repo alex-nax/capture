@@ -35,8 +35,9 @@ VENV_PY="$ROOT/.venv/bin/python"
 FREEZE_DIR="$ROOT/packaging/build/dist/captured"
 
 echo "==> Building the GUI (release; gpui's first compile is heavy)…"
+# v3: gui is now a workspace member, so the binary lands in the shared workspace target.
 cargo build --release --manifest-path "$ROOT/gui/Cargo.toml"
-BIN="$ROOT/gui/target/release/capture-gui"
+BIN="$ROOT/target/release/capture-gui"
 [ -x "$BIN" ] || { echo "build failed: $BIN missing" >&2; exit 1; }
 
 echo "==> Building the native menu-bar agent (CaptureBar.swift)…"
