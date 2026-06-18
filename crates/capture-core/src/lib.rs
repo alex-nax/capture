@@ -9,6 +9,7 @@
 //! `ondisk` session formats) land in #61's type-port phase.
 
 pub mod frames;
+pub mod sessions;
 pub mod time;
 pub mod transcript;
 pub mod v1;
