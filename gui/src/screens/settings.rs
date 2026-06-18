@@ -345,7 +345,13 @@ impl CaptureApp {
 
         let mut out = vec![runtime_card];
 
-        if active_remote {
+        if self.asr.backend_available {
+            // A local engine with a model catalog is available (mlx on this daemon). Always show the
+            // Whisper model manager so the downloaded/selectable models stay reachable — the runtime
+            // registry's `active` flag (e.g. "remote") is NOT wired to the mlx backend in this daemon,
+            // so gating the model list on it wrongly hid the user's local models.
+            out.push(self.asr_models_card(&asr_progress, cx));
+        } else if active_remote {
             // Remote-config card. No backend wiring exists for editing the remote endpoint
             // yet, so the fields are read-only (mirrors the frame; invents no calls).
             out.push(
@@ -436,9 +442,6 @@ impl CaptureApp {
                     .child(button_disabled("Install runtime pack"))
                     .into_any_element(),
             );
-        } else {
-            // Whisper models card.
-            out.push(self.asr_models_card(&asr_progress, cx));
         }
 
         // The runtime-install progress is surfaced inline per-runtime in the frame's intent;
