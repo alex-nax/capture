@@ -81,6 +81,18 @@ stays a clean future backend behind the trait. **MLX note:** MLX has C++/Swift b
 (FFI-able from Rust) but no turnkey Rust binding, and `mlx-whisper` (weights + mel/tokenizer/decode pipeline)
 is Python — so an MLX backend is reimplementation/sidecar work, deferred until justified.
 
+**Unify the two ASR systems — one source of truth (#77).** v2 ended up with the runtime *registry*
+(`core/asr/runtimes.py`, #58 — faster-cpu/faster-cuda/remote, `remote` active by default) **disconnected**
+from the *backend* that actually serves+runs models (the mlx model manager / `GET /v1/asr/models`). They can
+disagree — the registry reporting `remote` active while mlx is the engine actually transcribing — which made
+the GUI's runtime flag and the model list contradict each other (the Voice section had to stop gating the
+model list on the active runtime to avoid silently hiding local models). v3's `AsrBackend` trait + manager
+**is** the unification: the **active runtime owns its model catalog + active model**, exposed as one coherent
+`/v1/asr` surface (runtime ⇒ its compatible models ⇒ the active model). Fold mlx in as a *first-class
+runtime* (not an out-of-band default), make the model catalog runtime-derived, and keep `active runtime`
+always equal to the engine actually in use — so a client can gate the model list on the runtime without ever
+hiding the real local models. Tracked as **#77** (depends on #58 + #64).
+
 ## Bundling target (the payoff)
 - One `cargo build` → daemon + MCP + GUI. No PyInstaller, no embedded Python runtime, no Swift compile/sign
   step, no hidden-imports list.

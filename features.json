@@ -1075,6 +1075,22 @@
         70
       ],
       "description": "Preset picker + confirm modals to the new modal/card spec (width 380, panel+1px border, radius 8, backdrop #000@66%, title 15/600, body text_secondary, right-aligned ghost Cancel + primary/destructive action). Preset rows = label + one-line hint, one selected (accent_subtle)."
+    },
+    {
+      "id": 77,
+      "category": "v3",
+      "priority": "medium",
+      "description": "Unify the two disconnected ASR systems behind one abstraction (surfaced 2026-06-18 dogfood). Today the runtime REGISTRY (core/asr/runtimes.py, #58 — faster-cpu/faster-cuda/remote, with `remote` active by DEFAULT) is independent of the BACKEND that actually serves+runs models (the mlx model manager: GET /v1/asr/models, backend_available, active=mlx-community/whisper-large-v3-turbo). They disagree: the registry can report `remote` active while mlx is the engine actually transcribing, so the GUI's runtime-active flag and the model list contradict each other — the Voice section had to STOP gating the model list on the active runtime (commit: always show the model manager when backend_available) to avoid silently hiding the user's local mlx models. v3 capture-asr (#64) must make the AsrBackend trait the SINGLE source of truth: the active runtime OWNS its model catalog + active model, exposed as one coherent /v1/asr surface (runtime => its compatible models => the active model). Fold mlx in as a first-class runtime (not a disconnected default), make the model catalog runtime-derived, and ensure `active runtime` always reflects the engine actually in use — so the GUI can gate the model list on the runtime without ever hiding the real local models.",
+      "acceptance_criteria": [
+        "/v1/asr exposes a single source of truth: the active runtime, its compatible models, and the active model are mutually consistent — no state where a `remote` runtime is 'active' while a local engine actually serves+runs the models.",
+        "Switching the runtime switches its model catalog atomically; the active model always belongs to the active runtime; mlx (Apple-silicon) appears as a first-class runtime, not an out-of-band default.",
+        "The GUI Voice section can gate the model manager on the active runtime WITHOUT hiding local models, because the active runtime always reflects the engine actually transcribing."
+      ],
+      "passes": false,
+      "dependencies": [
+        58,
+        64
+      ]
     }
   ]
 }
