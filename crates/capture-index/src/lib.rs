@@ -11,3 +11,5 @@
 //! - `build` — build_index: classify → extract → binary combine-to-root; #49/#51 image handling.
 //! - `live` — the incremental append→O(log n) merge-tree (#55).
 //! - `agents` — AGENTS.md generation (#57).
+
+pub mod vision;
