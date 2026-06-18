@@ -59,20 +59,13 @@ impl CaptureApp {
     pub(crate) fn set_active_model(&mut self, repo: String, cx: &mut Context<Self>) {
         let Some(d) = self.daemon.clone() else { return };
         let short = repo.rsplit('/').next().unwrap_or(&repo).to_string();
-        // Activating a model unloads the old one and loads the new one, which takes a few
-        // seconds — mark the row "switching…" immediately so the click is acknowledged
-        // instead of looking frozen until the next poll flips the active flag.
-        self.asr_switching = Some(repo.clone());
-        self.message = format!("switching to {short}…").into();
-        cx.notify();
         cx.spawn(async move |this, cx| {
             let r = cx
                 .background_executor()
                 .spawn({
                     let repo = repo.clone();
-                    // Refetch the catalog in the same background hop so the fresh active
-                    // flag and the cleared pending state land in one update (no flicker
-                    // back to the old active model in the ~1s before the next poll).
+                    // set_active_model is a fast config write; refetch the catalog in the same
+                    // hop so the row flips to "active" immediately, not on the next 1s poll.
                     async move { (d.asr_set_model(&repo), d.asr_models().ok()) }
                 })
                 .await;
@@ -87,7 +80,6 @@ impl CaptureApp {
                     }
                     Err(e) => v.message = format!("set model failed: {e}").into(),
                 }
-                v.asr_switching = None;
                 cx.notify();
             });
         })

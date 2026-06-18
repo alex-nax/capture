@@ -8,8 +8,8 @@ use gpui::{div, prelude::*, px, rgb, rgba, Context, SharedString, Window};
 
 use crate::app::CaptureApp;
 use crate::components::{
-    button, button_disabled, button_sm, card, chip, eyebrow, icon, progress_bar, status_pill,
-    ButtonVariant,
+    button, button_disabled, button_id, button_sm_id, card, chip, eyebrow, icon, progress_bar,
+    status_pill, ButtonVariant,
 };
 use crate::skill;
 use crate::state::{ConfirmKind, IndexField, SettingsSection, INDEX_PROVIDERS, LANGUAGES, RES_PRESETS};
@@ -306,8 +306,14 @@ impl CaptureApp {
             .unwrap_or(false);
         let cuda_unavailable = active_needs_nvidia && !nvidia;
 
-        // Runtime selector card: eyebrow + note + the runtimes as wrapping chips.
-        let note = if active_remote {
+        // The ACTUAL local engine on this Mac (Apple MLX) serves the models below, but it isn't
+        // in the runtime registry (which only lists the pluggable faster-whisper/remote packs),
+        // whose default "remote" otherwise looks active. Surface mlx explicitly so the runtime
+        // isn't lying about where transcription runs. Proper unification of the two = #77.
+        let mlx_active = self.asr.backend_available;
+        let note = if mlx_active {
+            "Transcription runs locally on Apple MLX (Metal), the Apple-silicon GPU engine. The runtimes below are alternative/cross-platform engines."
+        } else if active_remote {
             "Transcription runs on the configured remote endpoint."
         } else if cuda_unavailable {
             "The active runtime needs an NVIDIA GPU. Switch to CPU or a remote endpoint."
@@ -315,13 +321,17 @@ impl CaptureApp {
             "Choose where transcription runs. Local engines download models on demand; remote sends audio to an endpoint."
         };
         let mut chips = div().flex().gap(px(theme::SP_2)).flex_wrap();
+        if mlx_active {
+            chips = chips.child(chip("rt-mlx", "Apple MLX · Metal", true, cx.listener(|_, _, _, _| {})));
+        }
         for rt in &self.runtimes.runtimes {
             let id = rt.id.clone();
-            // Selecting a runtime = activating it (set_runtime). Selected = the active one.
+            // Selecting a registry runtime = activating it (set_runtime). Don't show one as
+            // active while mlx is actually serving (the registry's flag is disconnected — #77).
             chips = chips.child(chip(
                 &format!("rt-{id}"),
                 &rt.label,
-                rt.active,
+                rt.active && !mlx_active,
                 cx.listener(move |this, _, _, cx| this.set_runtime(id.clone(), cx)),
             ));
         }
@@ -489,24 +499,8 @@ impl CaptureApp {
                 let prog = asr_progress.get(&repo).copied();
                 let downloading = prog.is_some() || m.downloading;
 
-                let switching = self.asr_switching.as_deref() == Some(repo.as_str());
                 let mut right = div().flex().flex_none().items_center().gap(px(theme::SP_2));
-                if switching {
-                    // Loading the model takes a few seconds; show an accent "switching…"
-                    // indicator so the row is acknowledged instead of looking frozen until
-                    // the active flag flips (the state transition switching… → active is
-                    // the honest progress — a fixed-fraction bar would just look stuck).
-                    right = right.child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.0))
-                            .text_size(px(theme::TS_SMALL))
-                            .text_color(rgb(theme::ACCENT_TEXT))
-                            .child(icon("refresh", 13.0, theme::ACCENT_TEXT))
-                            .child("switching…"),
-                    );
-                } else if downloading {
+                if downloading {
                     let f = prog.unwrap_or(0.0).clamp(0.0, 1.0);
                     right = right
                         .child(div().w(px(140.0)).child(progress_bar(f, false)))
@@ -531,14 +525,16 @@ impl CaptureApp {
                         );
                     if m.downloaded {
                         let r = repo.clone();
-                        right = right.child(button_sm(
+                        right = right.child(button_sm_id(
+                            &format!("rm-{repo}"),
                             "Remove",
                             ButtonVariant::Destructive,
                             cx.listener(move |this, _, _, cx| this.delete_model(r.clone(), cx)),
                         ));
                     } else {
                         let r = repo.clone();
-                        right = right.child(button_sm(
+                        right = right.child(button_sm_id(
+                            &format!("dl-{repo}"),
                             "Download",
                             ButtonVariant::Primary,
                             cx.listener(move |this, _, _, cx| this.download_model(r.clone(), cx)),
@@ -558,12 +554,14 @@ impl CaptureApp {
                                 .child(icon("check", 13.0, theme::SUCCESS))
                                 .child("downloaded"),
                         )
-                        .child(button_sm(
+                        .child(button_sm_id(
+                            &format!("use-{repo}"),
                             "Use",
                             ButtonVariant::Secondary,
                             cx.listener(move |this, _, _, cx| this.set_active_model(r_use.clone(), cx)),
                         ))
-                        .child(button_sm(
+                        .child(button_sm_id(
+                            &format!("rm-{repo}"),
                             "Remove",
                             ButtonVariant::Destructive,
                             cx.listener(move |this, _, _, cx| this.delete_model(r_rm.clone(), cx)),
@@ -571,7 +569,8 @@ impl CaptureApp {
                 } else {
                     // Available: a Download action.
                     let r = repo.clone();
-                    right = right.child(button(
+                    right = right.child(button_sm_id(
+                        &format!("dl-{repo}"),
                         "Download",
                         ButtonVariant::Primary,
                         cx.listener(move |this, _, _, cx| this.download_model(r.clone(), cx)),
@@ -582,9 +581,10 @@ impl CaptureApp {
                 // buttons (flex_none) always stay on-screen when the window is narrow.
                 let left = div()
                     .flex()
+                    .flex_1() // GROW to fill + SHRINK-truncate when tight, so the action buttons
+                    .min_w_0() // (flex_none, right) always stay on-screen instead of being pushed off
                     .items_center()
                     .gap(px(6.0))
-                    .min_w_0()
                     .child(
                         div()
                             .min_w_0()
@@ -612,7 +612,6 @@ impl CaptureApp {
                         .rounded(px(theme::RADIUS_MD))
                         .when(m.active, |d| d.bg(rgb(theme::ACTIVE_ROW)))
                         .child(left)
-                        .child(div().flex_1())
                         .child(right),
                 );
             }
@@ -831,14 +830,16 @@ impl CaptureApp {
                 Some(skill::SkillStatus::UpdateAvailable) => {
                     right = right
                         .child(status_pill("update available", theme::WARNING, theme::WARNING_SUBTLE))
-                        .child(button(
+                        .child(button_id(
+                            &format!("skill-update-{ix}"),
                             "Update",
                             ButtonVariant::Primary,
                             cx.listener(move |this, _, _, cx| this.install_skill(ix, cx)),
                         ));
                 }
                 _ => {
-                    right = right.child(button(
+                    right = right.child(button_id(
+                        &format!("skill-install-{ix}"),
                         "Install",
                         ButtonVariant::Secondary,
                         cx.listener(move |this, _, _, cx| this.install_skill(ix, cx)),
@@ -1215,13 +1216,15 @@ impl CaptureApp {
 
         let mut right = div().flex().items_center().gap(px(theme::SP_2));
         if prompt_btn && can_prompt {
-            right = right.child(button(
+            right = right.child(button_id(
+                &format!("grant-{kind}"),
                 "Grant",
                 ButtonVariant::Primary,
                 cx.listener(move |this, _, _, cx| this.request_permission(kind, cx)),
             ));
         }
-        right = right.child(button(
+        right = right.child(button_id(
+            &format!("perm-settings-{kind}"),
             "Settings",
             ButtonVariant::Secondary,
             cx.listener(move |this, _, _, cx| this.open_privacy_settings(pane, cx)),

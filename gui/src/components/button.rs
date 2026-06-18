@@ -75,6 +75,28 @@ pub(crate) fn button_sm(
     base(label, &variant, true).child(label.to_string()).on_click(on_click)
 }
 
+/// `button` with an EXPLICIT element id (decoupled from the label). Use in any list where
+/// the same label repeats across rows — GPUI keys interactivity by id, so two buttons that
+/// share an id (e.g. every row's "Use"/"Remove") collide and only the first receives clicks.
+pub(crate) fn button_id(
+    id: &str,
+    label: &str,
+    variant: ButtonVariant,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    base(id, &variant, false).child(label.to_string()).on_click(on_click)
+}
+
+/// Compact (`button_sm`) variant with an explicit id — for repeated actions in dense rows.
+pub(crate) fn button_sm_id(
+    id: &str,
+    label: &str,
+    variant: ButtonVariant,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    base(id, &variant, true).child(label.to_string()).on_click(on_click)
+}
+
 /// A button with a leading icon (gap 7px) sized to the label. The icon is tinted
 /// to the variant's text color via the element's inherited `text_color`.
 #[allow(dead_code)] // consumed by an icon-button call site in #71–#76
