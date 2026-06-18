@@ -489,8 +489,24 @@ impl CaptureApp {
                 let prog = asr_progress.get(&repo).copied();
                 let downloading = prog.is_some() || m.downloading;
 
+                let switching = self.asr_switching.as_deref() == Some(repo.as_str());
                 let mut right = div().flex().flex_none().items_center().gap(px(theme::SP_2));
-                if downloading {
+                if switching {
+                    // Loading the model takes a few seconds; show an accent "switching…"
+                    // indicator so the row is acknowledged instead of looking frozen until
+                    // the active flag flips (the state transition switching… → active is
+                    // the honest progress — a fixed-fraction bar would just look stuck).
+                    right = right.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .text_size(px(theme::TS_SMALL))
+                            .text_color(rgb(theme::ACCENT_TEXT))
+                            .child(icon("refresh", 13.0, theme::ACCENT_TEXT))
+                            .child("switching…"),
+                    );
+                } else if downloading {
                     let f = prog.unwrap_or(0.0).clamp(0.0, 1.0);
                     right = right
                         .child(div().w(px(140.0)).child(progress_bar(f, false)))

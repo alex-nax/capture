@@ -59,19 +59,35 @@ impl CaptureApp {
     pub(crate) fn set_active_model(&mut self, repo: String, cx: &mut Context<Self>) {
         let Some(d) = self.daemon.clone() else { return };
         let short = repo.rsplit('/').next().unwrap_or(&repo).to_string();
+        // Activating a model unloads the old one and loads the new one, which takes a few
+        // seconds — mark the row "switching…" immediately so the click is acknowledged
+        // instead of looking frozen until the next poll flips the active flag.
+        self.asr_switching = Some(repo.clone());
+        self.message = format!("switching to {short}…").into();
+        cx.notify();
         cx.spawn(async move |this, cx| {
             let r = cx
                 .background_executor()
                 .spawn({
                     let repo = repo.clone();
-                    async move { d.asr_set_model(&repo) }
+                    // Refetch the catalog in the same background hop so the fresh active
+                    // flag and the cleared pending state land in one update (no flicker
+                    // back to the old active model in the ~1s before the next poll).
+                    async move { (d.asr_set_model(&repo), d.asr_models().ok()) }
                 })
                 .await;
             let _ = this.update(cx, |v, cx| {
-                v.message = match r {
-                    Ok(()) => format!("active model: {short}").into(),
-                    Err(e) => format!("set model failed: {e}").into(),
-                };
+                let (set, models) = r;
+                match set {
+                    Ok(()) => {
+                        if let Some(m) = models {
+                            v.asr = m;
+                        }
+                        v.message = format!("active model: {short}").into();
+                    }
+                    Err(e) => v.message = format!("set model failed: {e}").into(),
+                }
+                v.asr_switching = None;
                 cx.notify();
             });
         })

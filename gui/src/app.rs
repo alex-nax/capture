@@ -68,6 +68,7 @@ pub struct CaptureApp {
     pub(crate) hotkey_id: u32,
     pub(crate) skill_status: Vec<skill::SkillStatus>, // per skill::AGENTS, cached
     pub(crate) asr: daemon::AsrModels,                // Whisper model catalog, polled
+    pub(crate) asr_switching: Option<String>,         // repo being made active (unload+load takes time) → "switching…" row state
     pub(crate) runtimes: daemon::AsrRuntimes,         // ASR runtime registry (install/select), polled
     pub(crate) perms: daemon::Permissions,            // macOS TCC status, polled
     pub(crate) cmd_input: String,                     // "launch a command/URL" field buffer
@@ -153,6 +154,7 @@ impl CaptureApp {
             hotkey_id: 0,
             skill_status: Vec::new(),
             asr: daemon::AsrModels::default(),
+            asr_switching: None,
             runtimes: daemon::AsrRuntimes::default(),
             perms: daemon::Permissions::default(),
             cmd_input: String::new(),
@@ -447,6 +449,13 @@ impl CaptureApp {
                     v.sessions = result.2;
                     v.asr = result.3;
                     v.perms = result.4;
+                    // Drop the "switching…" model state once the target is actually active
+                    // (covers the case the in-flight set_active_model task hasn't cleared it).
+                    if let Some(sw) = v.asr_switching.clone() {
+                        if v.asr.models.iter().any(|m| m.repo == sw && m.active) {
+                            v.asr_switching = None;
+                        }
+                    }
                     // Fetch the mic list once, the first time a daemon is available.
                     if !v.mics_loaded && v.daemon.is_some() {
                         v.refresh_mics(cx);
