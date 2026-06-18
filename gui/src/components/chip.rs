@@ -1,5 +1,7 @@
 use gpui::{div, prelude::*, rgb, App, ClickEvent, SharedString, Window};
 
+use crate::theme;
+
 /// A selectable "chip" for Settings toggles (highlighted when `selected`).
 pub(crate) fn chip(
     id: &str,
@@ -13,8 +15,8 @@ pub(crate) fn chip(
         .py_1()
         .rounded_md()
         .cursor_pointer()
-        .bg(if selected { rgb(0x2d4f67) } else { rgb(0x2a2a2a) })
-        .text_color(if selected { rgb(0xe0e0e0) } else { rgb(0x9aa0a6) })
+        .bg(if selected { rgb(theme::ACCENT_SUBTLE) } else { rgb(theme::CHIP_IDLE) })
+        .text_color(if selected { rgb(theme::ACCENT_TEXT_STRONG) } else { rgb(theme::TEXT_MUTED) })
         .child(label.to_string())
         .on_click(on_click)
 }

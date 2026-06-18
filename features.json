@@ -999,7 +999,7 @@
       "id": 69,
       "category": "gui",
       "priority": "high",
-      "passes": false,
+      "passes": true,
       "dependencies": [
         68
       ],

@@ -8,6 +8,7 @@ use crate::app::CaptureApp;
 use crate::components::{button, chip, icon};
 use crate::daemon::WindowInfo;
 use crate::state::{short_id, truncate, ConfirmKind};
+use crate::theme;
 
 impl CaptureApp {
     /// Build the dashboard screen's children, in render order: window/session prep, the
@@ -42,7 +43,7 @@ impl CaptureApp {
                 .justify_between()
                 .gap_2()
                 .pt_1()
-                .child(div().text_color(rgb(0x9aa0a6)).child(format!("{}  ({})", app, ws.len())))
+                .child(div().text_color(rgb(theme::TEXT_SECONDARY)).child(format!("{}  ({})", app, ws.len())))
                 .child(
                     // 🎤 radio: mic attaches to exactly one app (only takes effect when a
                     // device is also chosen in the mic selector below).
@@ -55,9 +56,9 @@ impl CaptureApp {
                         .py(px(2.0))
                         .rounded_md()
                         .cursor_pointer()
-                        .bg(if is_mic_app { rgb(0x3a5f3a) } else { rgb(0x242424) })
-                        .text_color(if is_mic_app { rgb(0xc8e6c8) } else { rgb(0x808080) })
-                        .child(icon("mic", 12.0, if is_mic_app { 0xc8e6c8 } else { 0x808080 }))
+                        .bg(if is_mic_app { rgb(theme::SUCCESS_SUBTLE) } else { rgb(theme::CHIP_IDLE) })
+                        .text_color(if is_mic_app { rgb(theme::SUCCESS) } else { rgb(theme::TEXT_MUTED) })
+                        .child(icon("mic", 12.0, if is_mic_app { theme::SUCCESS } else { theme::TEXT_MUTED }))
                         .child(if is_mic_app { "mic ✓" } else { "mic" })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.mic_app = if this.mic_app.as_deref() == Some(an.as_str()) {
@@ -88,7 +89,7 @@ impl CaptureApp {
                         .py_1()
                         .rounded_md()
                         .cursor_pointer()
-                        .bg(if checked { rgb(0x2d4f67) } else { rgb(0x1e1e1e) })
+                        .bg(if checked { rgb(theme::ACCENT_SUBTLE) } else { rgb(theme::PANEL) })
                         .child(div().child(if checked { "☑" } else { "☐" }))
                         .child(div().flex_1().child(title))
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -127,7 +128,7 @@ impl CaptureApp {
                         .py_1()
                         .rounded_md()
                         .cursor_pointer()
-                        .bg(if open { rgb(0x24323b) } else { rgb(0x1a1a1a) })
+                        .bg(if open { rgb(theme::ACCENT_SUBTLE) } else { rgb(theme::PANEL) })
                         .child(line)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.select_session(id_sel.clone(), cx);
@@ -149,22 +150,22 @@ impl CaptureApp {
                         .child(icon(icon_name, 14.0, tint))
                 };
                 let d_folder = dir.clone();
-                row = row.child(action("folder", "folder", 0x2a2a2a, 0xcfd3d6).on_click(
+                row = row.child(action("folder", "folder", theme::CHIP_IDLE, theme::TEXT_SECONDARY).on_click(
                     cx.listener(move |this, _, _, cx| this.open_folder(d_folder.clone(), cx)),
                 ));
                 let d_prompt = dir.clone();
-                row = row.child(action("prompt", "clipboard", 0x2a2a2a, 0xcfd3d6).on_click(
+                row = row.child(action("prompt", "clipboard", theme::CHIP_IDLE, theme::TEXT_SECONDARY).on_click(
                     cx.listener(move |this, _, _, cx| this.copy_summary_prompt(d_prompt.clone(), cx)),
                 ));
                 if running {
                     let id_stop = id.clone();
-                    row = row.child(action("stop", "stop", 0x7a2d2d, 0xe6c0c0).on_click(
+                    row = row.child(action("stop", "stop", theme::ERROR_SUBTLE, theme::ERROR).on_click(
                         cx.listener(move |this, _, _, cx| this.stop_capture(id_stop.clone(), cx)),
                     ));
                 } else {
                     // Delete asks first (modal); the icon opens the confirmation.
                     let id_del = id.clone();
-                    row = row.child(action("del", "trash", 0x4a2a2a, 0xe6a0a0).on_click(
+                    row = row.child(action("del", "trash", theme::ERROR_SUBTLE, theme::ERROR).on_click(
                         cx.listener(move |this, _, _, cx| {
                             this.confirm = Some(ConfirmKind::DeleteSession(id_del.clone()));
                             cx.notify();
@@ -201,7 +202,7 @@ impl CaptureApp {
                 .gap_2()
                 .items_center()
                 .flex_wrap()
-                .child(div().min_w(px(60.0)).text_color(rgb(0x9aa0a6)).child("Mic:"))
+                .child(div().min_w(px(60.0)).text_color(rgb(theme::TEXT_SECONDARY)).child("Mic:"))
                 .child(chip(
                     "mic-none",
                     "No mic",
@@ -230,7 +231,7 @@ impl CaptureApp {
             if self.mics.is_empty() {
                 row = row.child(
                     div()
-                        .text_color(rgb(0x6a6a6a))
+                        .text_color(rgb(theme::TEXT_MUTED))
                         .child("(no devices yet — Refresh windows)"),
                 );
             }
@@ -244,7 +245,7 @@ impl CaptureApp {
                 .flex()
                 .gap_2()
                 .items_center()
-                .child(div().text_color(rgb(0x9aa0a6)).child("Launch:"))
+                .child(div().text_color(rgb(theme::TEXT_SECONDARY)).child("Launch:"))
                 .child(
                     div()
                         .id("cmd-input")
@@ -256,12 +257,12 @@ impl CaptureApp {
                         .py_1()
                         .rounded_md()
                         .border_1()
-                        .border_color(if cmd_focused { rgb(0x3d6a87) } else { rgb(0x2a2a2a) })
-                        .bg(rgb(0x1e1e1e))
+                        .border_color(if cmd_focused { rgb(theme::ACCENT_BORDER) } else { rgb(theme::BORDER) })
+                        .bg(rgb(theme::PANEL))
                         .text_color(if self.cmd_input.is_empty() {
-                            rgb(0x666b6f)
+                            rgb(theme::TEXT_MUTED)
                         } else {
-                            rgb(0xe0e0e0)
+                            rgb(theme::TEXT_PRIMARY)
                         })
                         .child(if self.cmd_input.is_empty() {
                             #[cfg(target_os = "macos")]
@@ -293,7 +294,7 @@ impl CaptureApp {
                 .flex()
                 .gap_2()
                 .items_center()
-                .child(div().text_color(rgb(0x9aa0a6)).child("Import:"))
+                .child(div().text_color(rgb(theme::TEXT_SECONDARY)).child("Import:"))
                 .child(button(
                     "Import audio/video…",
                     cx.listener(|this, _, _, cx| this.import_file(cx)),
@@ -301,7 +302,7 @@ impl CaptureApp {
             if let Some((phase, frac)) = importing {
                 row = row.child(
                     div()
-                        .text_color(rgb(0x8ab4f8))
+                        .text_color(rgb(theme::ACCENT_TEXT))
                         .child(format!("{} {}%", phase, (frac * 100.0) as i32)),
                 );
             }
@@ -318,7 +319,7 @@ impl CaptureApp {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(div().text_color(rgb(0x9aa0a6)).child("Windows"))
+                        .child(div().text_color(rgb(theme::TEXT_PRIMARY)).child("Windows"))
                         .children(window_rows),
                 )
                 .child(
@@ -327,7 +328,7 @@ impl CaptureApp {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(div().text_color(rgb(0x9aa0a6)).child("Sessions"))
+                        .child(div().text_color(rgb(theme::TEXT_PRIMARY)).child("Sessions"))
                         .children(session_rows),
                 )
                 .into_any_element(),

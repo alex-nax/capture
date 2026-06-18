@@ -9,6 +9,7 @@ use crate::app::CaptureApp;
 use crate::components::{button, chip};
 use crate::skill;
 use crate::state::{ConfirmKind, IndexField, INDEX_PROVIDERS, LANGUAGES, RES_PRESETS};
+use crate::theme;
 use crate::update;
 
 impl CaptureApp {
@@ -38,17 +39,17 @@ impl CaptureApp {
                 // An active model that isn't downloaded yet still needs a Download —
                 // call that out (amber) so "active" doesn't look ready when it isn't.
                 let (status, status_color) = if let Some(f) = prog {
-                    (format!("↓ {:.0}%", (f * 100.0).clamp(0.0, 100.0)), 0x66d9a0)
+                    (format!("↓ {:.0}%", (f * 100.0).clamp(0.0, 100.0)), theme::SUCCESS)
                 } else if m.downloading {
-                    ("↓ downloading…".to_string(), 0x66d9a0)
+                    ("↓ downloading…".to_string(), theme::SUCCESS)
                 } else if m.active && m.downloaded {
-                    ("● active".to_string(), 0x66d9a0)
+                    ("● active".to_string(), theme::SUCCESS)
                 } else if m.active {
-                    ("● active · needs download".to_string(), 0xffcc66)
+                    ("● active · needs download".to_string(), theme::WARNING)
                 } else if m.downloaded {
-                    ("✓ downloaded".to_string(), 0x66d9a0)
+                    ("✓ downloaded".to_string(), theme::SUCCESS)
                 } else {
-                    (String::new(), 0x9aa0a6)
+                    (String::new(), theme::TEXT_MUTED)
                 };
                 let busy = prog.is_some() || m.downloading;
                 let mut header = div()
@@ -71,7 +72,7 @@ impl CaptureApp {
                             .py_1()
                             .rounded_md()
                             .cursor_pointer()
-                            .bg(rgb(0x2d4f67))
+                            .bg(rgb(theme::ACCENT))
                             .child("Download")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.download_model(r.clone(), cx)
@@ -90,7 +91,7 @@ impl CaptureApp {
                                 .py_1()
                                 .rounded_md()
                                 .cursor_pointer()
-                                .bg(rgb(0x2d4f67))
+                                .bg(rgb(theme::ACCENT))
                                 .child("Use")
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.set_active_model(r.clone(), cx)
@@ -105,8 +106,8 @@ impl CaptureApp {
                             .py_1()
                             .rounded_md()
                             .cursor_pointer()
-                            .bg(rgb(0x3a2a2a))
-                            .text_color(rgb(0xe6a0a0))
+                            .bg(rgb(theme::ERROR_SUBTLE))
+                            .text_color(rgb(theme::ERROR))
                             .child("Remove")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.delete_model(r.clone(), cx)
@@ -123,13 +124,13 @@ impl CaptureApp {
                             .w_full()
                             .h(px(4.0))
                             .rounded_full()
-                            .bg(rgb(0x2a2a2a))
+                            .bg(rgb(theme::ELEVATED))
                             .child(
                                 div()
                                     .h(px(4.0))
                                     .w(relative(frac))
                                     .rounded_full()
-                                    .bg(rgb(0x66d9a0)),
+                                    .bg(rgb(theme::SUCCESS)),
                             ),
                     );
                 }
@@ -153,13 +154,13 @@ impl CaptureApp {
                 let id = rt.id.clone();
                 let prog = rt_install.get(&id).copied();
                 let (status, color) = if rt.active {
-                    ("● active".to_string(), 0x66d9a0)
+                    ("● active".to_string(), theme::SUCCESS)
                 } else if let Some(f) = prog {
-                    (format!("↓ {:.0}%", (f * 100.0).clamp(0.0, 100.0)), 0x66d9a0)
+                    (format!("↓ {:.0}%", (f * 100.0).clamp(0.0, 100.0)), theme::SUCCESS)
                 } else if rt.installed {
-                    ("✓ installed".to_string(), 0x9aa0a6)
+                    ("✓ installed".to_string(), theme::TEXT_MUTED)
                 } else {
-                    (String::new(), 0x9aa0a6)
+                    (String::new(), theme::TEXT_MUTED)
                 };
                 let busy = prog.is_some();
                 let mut header = div()
@@ -174,21 +175,21 @@ impl CaptureApp {
                     let i = id.clone();
                     header = header.child(
                         div().id(SharedString::from(format!("rt-use-{id}"))).px_2().py_1().rounded_md()
-                            .cursor_pointer().bg(rgb(0x2d4f67)).child("Use")
+                            .cursor_pointer().bg(rgb(theme::ACCENT)).child("Use")
                             .on_click(cx.listener(move |this, _, _, cx| this.set_runtime(i.clone(), cx))),
                     );
                 } else if rt.kind != "remote" && !rt.installed && !busy {
                     let i = id.clone();
                     header = header.child(
                         div().id(SharedString::from(format!("rt-inst-{id}"))).px_2().py_1().rounded_md()
-                            .cursor_pointer().bg(rgb(0x2d4f67)).child("Install")
+                            .cursor_pointer().bg(rgb(theme::ACCENT)).child("Install")
                             .on_click(cx.listener(move |this, _, _, cx| this.install_runtime(i.clone(), cx))),
                     );
                 } else if rt.installed && !rt.active {
                     let i = id.clone();
                     header = header.child(
                         div().id(SharedString::from(format!("rt-use-{id}"))).px_2().py_1().rounded_md()
-                            .cursor_pointer().bg(rgb(0x2d4f67)).child("Use")
+                            .cursor_pointer().bg(rgb(theme::ACCENT)).child("Use")
                             .on_click(cx.listener(move |this, _, _, cx| this.set_runtime(i.clone(), cx))),
                     );
                 }
@@ -197,12 +198,12 @@ impl CaptureApp {
                     .flex_col()
                     .gap_1()
                     .child(header)
-                    .child(div().text_color(rgb(0x6b7075)).child(rt.requires.clone()));
+                    .child(div().text_color(rgb(theme::TEXT_MUTED)).child(rt.requires.clone()));
                 if busy {
                     let frac = prog.unwrap_or(0.0).clamp(0.0, 1.0);
                     row = row.child(
-                        div().w_full().h(px(4.0)).rounded_full().bg(rgb(0x2a2a2a)).child(
-                            div().h(px(4.0)).w(relative(frac)).rounded_full().bg(rgb(0x66d9a0)),
+                        div().w_full().h(px(4.0)).rounded_full().bg(rgb(theme::ELEVATED)).child(
+                            div().h(px(4.0)).w(relative(frac)).rounded_full().bg(rgb(theme::SUCCESS)),
                         ),
                     );
                 }
@@ -218,14 +219,14 @@ impl CaptureApp {
             .flex()
             .flex_col()
             .gap_2()
-            .child(div().text_color(rgb(0x9aa0a6)).child(rt_hint.to_string()))
+            .child(div().text_color(rgb(theme::TEXT_PRIMARY)).child(rt_hint.to_string()))
             .children(rt_rows);
 
         let mut asr_panel = div()
             .flex()
             .flex_col()
             .gap_1()
-            .child(div().text_color(rgb(0x9aa0a6)).child(asr_label));
+            .child(div().text_color(rgb(theme::TEXT_PRIMARY)).child(asr_label));
         if self.asr.backend_available {
             asr_panel = asr_panel.children(model_rows);
         }
@@ -237,13 +238,13 @@ impl CaptureApp {
             .flex()
             .flex_col()
             .gap_1()
-            .child(div().text_color(rgb(0x9aa0a6)).child("Capture quality"))
+            .child(div().text_color(rgb(theme::TEXT_PRIMARY)).child("Capture quality"))
             .child(
                 div()
                     .flex()
                     .gap_2()
                     .items_center()
-                    .child(div().min_w(px(96.0)).text_color(rgb(0x9aa0a6)).child("Screenshots"))
+                    .child(div().min_w(px(96.0)).text_color(rgb(theme::TEXT_SECONDARY)).child("Screenshots"))
                     .child(chip("cap-shots-on", "On", self.capture_screenshots, cx.listener(|this, _, _, cx| {
                         this.capture_screenshots = true;
                         this.save_settings();
@@ -260,7 +261,7 @@ impl CaptureApp {
                     .flex()
                     .gap_2()
                     .items_center()
-                    .child(div().min_w(px(96.0)).text_color(rgb(0x9aa0a6)).child("Format"))
+                    .child(div().min_w(px(96.0)).text_color(rgb(theme::TEXT_SECONDARY)).child("Format"))
                     .child(chip("fmt-png", "PNG", self.shot_format == "png", cx.listener(|this, _, _, cx| {
                         this.shot_format = "png".into();
                         this.save_settings();
@@ -277,7 +278,7 @@ impl CaptureApp {
                     .flex()
                     .gap_2()
                     .items_center()
-                    .child(div().min_w(px(96.0)).text_color(rgb(0x9aa0a6)).child("Resolution"))
+                    .child(div().min_w(px(96.0)).text_color(rgb(theme::TEXT_SECONDARY)).child("Resolution"))
                     .children(RES_PRESETS.iter().enumerate().map(|(i, p)| {
                         chip(&format!("res-{i}"), p.0, self.shot_res_ix == i, cx.listener(move |this, _, _, cx| {
                             this.shot_res_ix = i;
@@ -292,7 +293,7 @@ impl CaptureApp {
                     .flex()
                     .gap_2()
                     .items_center()
-                    .child(div().min_w(px(96.0)).text_color(rgb(0x9aa0a6)).child("JPEG quality"))
+                    .child(div().min_w(px(96.0)).text_color(rgb(theme::TEXT_SECONDARY)).child("JPEG quality"))
                     .children([60u32, 80, 95].into_iter().map(|q| {
                         chip(&format!("q-{q}"), &q.to_string(), self.jpeg_quality == q, cx.listener(move |this, _, _, cx| {
                             this.jpeg_quality = q;
@@ -314,7 +315,7 @@ impl CaptureApp {
                 .flex()
                 .gap_2()
                 .items_center()
-                .child(div().min_w(px(70.0)).text_color(rgb(0x9aa0a6)).child("App"));
+                .child(div().min_w(px(70.0)).text_color(rgb(theme::TEXT_SECONDARY)).child("App"));
             match (&self.update_info, self.updating) {
                 (_, true) => {
                     // The DMG/exe is ~175 MB, so show a real progress bar (#48). `t == 0` means the
@@ -330,16 +331,16 @@ impl CaptureApp {
                                     .w(px(160.0))
                                     .h(px(6.0))
                                     .rounded_sm()
-                                    .bg(rgb(0x3a3a3a))
+                                    .bg(rgb(theme::ELEVATED))
                                     .child(
                                         div()
                                             .h(px(6.0))
                                             .w(px(160.0 * frac))
                                             .rounded_sm()
-                                            .bg(rgb(0x4a90d9)),
+                                            .bg(rgb(theme::ACCENT)),
                                     ),
                             )
-                            .child(div().text_color(rgb(0x8ab4f8)).child(format!(
+                            .child(div().text_color(rgb(theme::ACCENT_TEXT)).child(format!(
                                 "downloading update… {}%  ({:.0}/{:.0} MB)",
                                 (frac * 100.0) as i32,
                                 dmb,
@@ -348,7 +349,7 @@ impl CaptureApp {
                     } else {
                         row = row.child(
                             div()
-                                .text_color(rgb(0x8ab4f8))
+                                .text_color(rgb(theme::ACCENT_TEXT))
                                 .child(format!("downloading update… ({:.0} MB)", dmb)),
                         );
                     }
@@ -356,7 +357,7 @@ impl CaptureApp {
                 (Some(info), false) => {
                     let info2 = info.clone();
                     row = row
-                        .child(div().text_color(rgb(0xe0c063)).child(format!("v{} available (you have v{})", info.version, update::CURRENT)))
+                        .child(div().text_color(rgb(theme::WARNING)).child(format!("v{} available (you have v{})", info.version, update::CURRENT)))
                         .child(button(
                             "Update…",
                             cx.listener(move |this, _, _, cx| {
@@ -366,7 +367,7 @@ impl CaptureApp {
                         ));
                 }
                 (None, false) => {
-                    row = row.child(div().text_color(rgb(0x6a6a6a)).child(format!("v{} · up to date", update::CURRENT)));
+                    row = row.child(div().text_color(rgb(theme::TEXT_MUTED)).child(format!("v{} · up to date", update::CURRENT)));
                 }
             }
             row.into_any_element()
@@ -380,7 +381,7 @@ impl CaptureApp {
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(div().text_color(rgb(0x9aa0a6)).child("Transcription"))
+                .child(div().text_color(rgb(theme::TEXT_PRIMARY)).child("Transcription"))
                 .child(self.language_field(asr_lang_focused, cx))
                 .child(self.chunk_chips(cx))
                 .into_any_element()
@@ -390,11 +391,11 @@ impl CaptureApp {
             // Multimodal index endpoint (#52/#53): structured provider + host:port + key, and a
             // model dropdown. Indexing is OFF until set AND reachable (the dot reflects status).
             let (dot, label) = if self.index_status.available {
-                (0x34a853u32, "reachable")
+                (theme::SUCCESS, "reachable")
             } else if self.index_status.configured {
-                (0xea4335u32, "unreachable")
+                (theme::ERROR, "unreachable")
             } else {
-                (0x6a6a6au32, "not set")
+                (theme::TEXT_MUTED, "not set")
             };
             let is_base = self.index_is_base_url();
             let mut panel = div()
@@ -406,9 +407,9 @@ impl CaptureApp {
                         .flex()
                         .gap_2()
                         .items_center()
-                        .child(div().text_color(rgb(0x9aa0a6)).child("Index endpoint"))
+                        .child(div().text_color(rgb(theme::TEXT_PRIMARY)).child("Index endpoint"))
                         .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(rgb(dot)))
-                        .child(div().text_color(rgb(0x9aa0a6)).child(label)),
+                        .child(div().text_color(rgb(theme::TEXT_MUTED)).child(label)),
                 )
                 // Provider chips: selecting prefills the port + re-fetches models.
                 .child(
@@ -417,7 +418,7 @@ impl CaptureApp {
                         .gap_2()
                         .items_center()
                         .flex_wrap()
-                        .child(div().min_w(px(60.0)).text_color(rgb(0x9aa0a6)).child("provider"))
+                        .child(div().min_w(px(60.0)).text_color(rgb(theme::TEXT_SECONDARY)).child("provider"))
                         .children(INDEX_PROVIDERS.iter().map(|(id, plabel, _, _, _)| {
                             let pid = id.to_string();
                             chip(
@@ -435,7 +436,7 @@ impl CaptureApp {
                         .gap_2()
                         .items_center()
                         .child(
-                            div().min_w(px(60.0)).text_color(rgb(0x9aa0a6))
+                            div().min_w(px(60.0)).text_color(rgb(theme::TEXT_SECONDARY))
                                 .child(if is_base { "base URL" } else { "host" }),
                         )
                         .child(
@@ -449,9 +450,9 @@ impl CaptureApp {
                                 .py_1()
                                 .rounded_md()
                                 .border_1()
-                                .border_color(if index_host_focused { rgb(0x3d6a87) } else { rgb(0x2a2a2a) })
-                                .bg(rgb(0x1e1e1e))
-                                .text_color(if self.index_host.is_empty() { rgb(0x666b6f) } else { rgb(0xe0e0e0) })
+                                .border_color(if index_host_focused { rgb(theme::ACCENT_BORDER) } else { rgb(theme::BORDER) })
+                                .bg(rgb(theme::PANEL))
+                                .text_color(if self.index_host.is_empty() { rgb(theme::TEXT_MUTED) } else { rgb(theme::TEXT_PRIMARY) })
                                 .child(if self.index_host.is_empty() {
                                     if is_base { "http://1.2.3.4:8000/v1  (Enter to check)".to_string() }
                                     else { "192.168.31.217  (Enter to check)".to_string() }
@@ -474,7 +475,7 @@ impl CaptureApp {
                         .flex()
                         .gap_2()
                         .items_center()
-                        .child(div().min_w(px(60.0)).text_color(rgb(0x9aa0a6)).child("port"))
+                        .child(div().min_w(px(60.0)).text_color(rgb(theme::TEXT_SECONDARY)).child("port"))
                         .child(
                             div()
                                 .id("index-port-input")
@@ -486,9 +487,9 @@ impl CaptureApp {
                                 .py_1()
                                 .rounded_md()
                                 .border_1()
-                                .border_color(if index_port_focused { rgb(0x3d6a87) } else { rgb(0x2a2a2a) })
-                                .bg(rgb(0x1e1e1e))
-                                .text_color(if self.index_port.is_empty() { rgb(0x666b6f) } else { rgb(0xe0e0e0) })
+                                .border_color(if index_port_focused { rgb(theme::ACCENT_BORDER) } else { rgb(theme::BORDER) })
+                                .bg(rgb(theme::PANEL))
+                                .text_color(if self.index_port.is_empty() { rgb(theme::TEXT_MUTED) } else { rgb(theme::TEXT_PRIMARY) })
                                 .child(if self.index_port.is_empty() {
                                     "1234".to_string()
                                 } else if index_port_focused {
@@ -510,7 +511,7 @@ impl CaptureApp {
                         .flex()
                         .gap_2()
                         .items_center()
-                        .child(div().min_w(px(60.0)).text_color(rgb(0x9aa0a6)).child("API key"))
+                        .child(div().min_w(px(60.0)).text_color(rgb(theme::TEXT_SECONDARY)).child("API key"))
                         .child(
                             div()
                                 .id("index-key-input")
@@ -522,9 +523,9 @@ impl CaptureApp {
                                 .py_1()
                                 .rounded_md()
                                 .border_1()
-                                .border_color(if index_key_focused { rgb(0x3d6a87) } else { rgb(0x2a2a2a) })
-                                .bg(rgb(0x1e1e1e))
-                                .text_color(if self.index_key.is_empty() { rgb(0x666b6f) } else { rgb(0xe0e0e0) })
+                                .border_color(if index_key_focused { rgb(theme::ACCENT_BORDER) } else { rgb(theme::BORDER) })
+                                .bg(rgb(theme::PANEL))
+                                .text_color(if self.index_key.is_empty() { rgb(theme::TEXT_MUTED) } else { rgb(theme::TEXT_PRIMARY) })
                                 .child(if self.index_key.is_empty() {
                                     "sk-…  (Enter to check)".to_string()
                                 } else if index_key_focused {
@@ -549,7 +550,7 @@ impl CaptureApp {
                         .flex()
                         .gap_2()
                         .items_center()
-                        .child(div().min_w(px(44.0)).text_color(rgb(0x9aa0a6)).child("frames"))
+                        .child(div().min_w(px(44.0)).text_color(rgb(theme::TEXT_SECONDARY)).child("frames"))
                         .children([1.0f64, 0.5, 0.25, 0.1, 0.05].into_iter().map(|r| {
                             let label = if r >= 1.0 {
                                 "all".to_string()
@@ -574,7 +575,7 @@ impl CaptureApp {
                         .flex()
                         .gap_2()
                         .items_center()
-                        .child(div().min_w(px(44.0)).text_color(rgb(0x9aa0a6)).child("about"))
+                        .child(div().min_w(px(44.0)).text_color(rgb(theme::TEXT_SECONDARY)).child("about"))
                         .children(
                             [("auto", "Auto"), ("meeting", "Meeting"), ("lecture", "Lecture"), ("general", "General")]
                                 .into_iter()
@@ -600,7 +601,7 @@ impl CaptureApp {
                 .flex()
                 .gap_2()
                 .items_center()
-                .child(div().text_color(rgb(0x9aa0a6)).child("Skill →"))
+                .child(div().text_color(rgb(theme::TEXT_PRIMARY)).child("Skill →"))
                 .children(skill::AGENTS.iter().enumerate().map(|(ix, a)| {
                     let label = match self.skill_status.get(ix) {
                         Some(skill::SkillStatus::UpToDate) => format!("{} ✓", a.label),
@@ -623,7 +624,7 @@ impl CaptureApp {
             let mut panel = div().flex().flex_col().gap_1();
             if show {
                 panel = panel
-                    .child(div().text_color(rgb(0x9aa0a6)).child("Permissions"))
+                    .child(div().text_color(rgb(theme::TEXT_PRIMARY)).child("Permissions"))
                     .child(self.perm_row(
                         "Screen Recording",
                         &sr,
@@ -683,7 +684,7 @@ impl CaptureApp {
                 .flex()
                 .gap_2()
                 .items_center()
-                .child(div().min_w(px(70.0)).text_color(rgb(0x9aa0a6)).child("Language"))
+                .child(div().min_w(px(70.0)).text_color(rgb(theme::TEXT_SECONDARY)).child("Language"))
                 .child(
                     div()
                         .id("asr-lang-input")
@@ -695,10 +696,10 @@ impl CaptureApp {
                         .py_1()
                         .rounded_md()
                         .border_1()
-                        .border_color(if focused { rgb(0x3d6a87) } else { rgb(0x2a2a2a) })
-                        .bg(rgb(0x1e1e1e))
+                        .border_color(if focused { rgb(theme::ACCENT_BORDER) } else { rgb(theme::BORDER) })
+                        .bg(rgb(theme::PANEL))
                         .cursor_pointer()
-                        .text_color(if dim { rgb(0x666b6f) } else { rgb(0xe0e0e0) })
+                        .text_color(if dim { rgb(theme::TEXT_MUTED) } else { rgb(theme::TEXT_PRIMARY) })
                         .child(field_text)
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.lang_dropdown_open = !this.lang_dropdown_open;
@@ -720,8 +721,8 @@ impl CaptureApp {
                 .w(px(220.0))
                 .rounded_md()
                 .border_1()
-                .border_color(rgb(0x3a3a3a))
-                .bg(rgb(0x16181c));
+                .border_color(rgb(theme::BORDER))
+                .bg(rgb(theme::ELEVATED));
             let matches = LANGUAGES.iter().filter(|(c, n)| {
                 filter.is_empty() || c.contains(&filter) || n.to_lowercase().contains(&filter)
             });
@@ -744,19 +745,19 @@ impl CaptureApp {
                         .px_2()
                         .py_1()
                         .cursor_pointer()
-                        .hover(|s| s.bg(rgb(0x23262b)))
-                        .when(is_active, |s| s.bg(rgb(0x1d2733)))
-                        .text_color(rgb(0xc8ccd0))
-                        .child(div().min_w(px(28.0)).text_color(rgb(0x8ab4f8)).child(if code.is_empty() { "—" } else { *code }))
+                        .hover(|s| s.bg(rgb(theme::BORDER)))
+                        .when(is_active, |s| s.bg(rgb(theme::ACCENT_SUBTLE)))
+                        .text_color(rgb(theme::TEXT_SECONDARY))
+                        .child(div().min_w(px(28.0)).text_color(rgb(theme::ACCENT_TEXT)).child(if code.is_empty() { "—" } else { *code }))
                         .child(div().child(*name))
                         .on_click(cx.listener(move |this, _, _, cx| this.apply_language_code(code_s.clone(), cx))),
                 );
             }
             if !any {
-                list = list.child(div().px_2().py_1().text_color(rgb(0x6a6a6a)).child("no match"));
+                list = list.child(div().px_2().py_1().text_color(rgb(theme::TEXT_MUTED)).child("no match"));
             } else if total > 12 {
                 list = list.child(
-                    div().px_2().py_1().text_xs().text_color(rgb(0x6a6a6a)).child(format!("+{} more — keep typing", total - 12)),
+                    div().px_2().py_1().text_xs().text_color(rgb(theme::TEXT_MUTED)).child(format!("+{} more — keep typing", total - 12)),
                 );
             }
             col = col.child(list);
@@ -772,7 +773,7 @@ impl CaptureApp {
             .flex()
             .gap_2()
             .items_center()
-            .child(div().min_w(px(70.0)).text_color(rgb(0x9aa0a6)).child("Chunk"))
+            .child(div().min_w(px(70.0)).text_color(rgb(theme::TEXT_SECONDARY)).child("Chunk"))
             .children([8.0f64, 15.0, 30.0, 60.0].into_iter().map(|s| {
                 chip(
                     &format!("chunk-{s}"),
@@ -797,9 +798,9 @@ impl CaptureApp {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let (label, color, granted) = match status {
-            "granted" => (format!("{title}: ✓ granted"), 0x66d9a0u32, true),
-            "undetermined" => (format!("{title}: not requested"), 0x9aa0a6u32, false),
-            _ => (format!("{title}: ✗ not granted — needed for {why}"), 0xffcc66u32, false),
+            "granted" => (format!("{title}: ✓ granted"), theme::SUCCESS, true),
+            "undetermined" => (format!("{title}: not requested"), theme::TEXT_MUTED, false),
+            _ => (format!("{title}: ✗ not granted — needed for {why}"), theme::WARNING, false),
         };
         let mut row = div()
             .flex()
@@ -814,7 +815,7 @@ impl CaptureApp {
                     .py_1()
                     .rounded_md()
                     .cursor_pointer()
-                    .bg(rgb(0x2d4f67))
+                    .bg(rgb(theme::ACCENT))
                     .child("Grant")
                     .on_click(cx.listener(move |this, _, _, cx| this.request_permission(kind, cx))),
             );
@@ -826,7 +827,7 @@ impl CaptureApp {
                 .py_1()
                 .rounded_md()
                 .cursor_pointer()
-                .bg(rgb(0x2a2a2a))
+                .bg(rgb(theme::CHIP_IDLE))
                 .child("Settings")
                 .on_click(cx.listener(move |this, _, _, cx| this.open_privacy_settings(pane, cx))),
         )

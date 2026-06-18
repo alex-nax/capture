@@ -7,6 +7,7 @@ use gpui::{div, prelude::*, px, rgb, rgba, Context, SharedString};
 use crate::app::CaptureApp;
 use crate::components::{button, icon};
 use crate::state::{short_id, CAPTURE_PRESETS, ConfirmKind};
+use crate::theme;
 
 impl CaptureApp {
     /// Build the overlay children in render order: the confirmation modal (if a destructive
@@ -42,7 +43,7 @@ impl CaptureApp {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .bg(rgba(0x000000cc))
+                    .bg(rgba(theme::BACKDROP))
                     .occlude()
                     .child(
                         div()
@@ -52,9 +53,9 @@ impl CaptureApp {
                             .w(px(340.0))
                             .p_4()
                             .rounded_lg()
-                            .bg(rgb(0x1c1c1c))
+                            .bg(rgb(theme::PANEL))
                             .child(div().text_lg().child(title))
-                            .child(div().text_color(rgb(0x9aa0a6)).child(body))
+                            .child(div().text_color(rgb(theme::TEXT_SECONDARY)).child(body))
                             .child(
                                 div()
                                     .flex()
@@ -77,8 +78,8 @@ impl CaptureApp {
                                             .py_1()
                                             .rounded_md()
                                             .cursor_pointer()
-                                            .bg(rgb(0x7a2d2d))
-                                            .child(icon("trash", 14.0, 0xe6c0c0))
+                                            .bg(rgb(theme::ERROR_SUBTLE))
+                                            .child(icon("trash", 14.0, theme::ERROR))
                                             .child(label)
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 this.confirm = None;
@@ -109,11 +110,11 @@ impl CaptureApp {
                 .overflow_y_scroll() // cap to the viewport (minus the overlay padding) + scroll
                 .p_4()
                 .rounded_lg()
-                .bg(rgb(0x1c1c1c))
+                .bg(rgb(theme::PANEL))
                 .child(div().text_lg().child("Start capture"))
                 .child(
                     div()
-                        .text_color(rgb(0x9aa0a6))
+                        .text_color(rgb(theme::TEXT_SECONDARY))
                         .child("Pick a preset — it sets the mic/screenshots and how the index reads the screen."),
                 );
             for (id, label, hint) in CAPTURE_PRESETS {
@@ -128,10 +129,10 @@ impl CaptureApp {
                         .py_2()
                         .rounded_md()
                         .cursor_pointer()
-                        .bg(rgb(0x2a2a2a))
-                        .hover(|s| s.bg(rgb(0x2d4f67)))
-                        .child(div().text_color(rgb(0xf2f2f2)).child(*label))
-                        .child(div().text_sm().text_color(rgb(0xaab0b8)).child(*hint))
+                        .bg(rgb(theme::ELEVATED))
+                        .hover(|s| s.bg(rgb(theme::ACCENT_SUBTLE)))
+                        .child(div().text_color(rgb(theme::TEXT_PRIMARY)).child(*label))
+                        .child(div().text_sm().text_color(rgb(theme::TEXT_MUTED)).child(*hint))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.start_with_preset(&pid, cx);
                         })),
@@ -156,7 +157,7 @@ impl CaptureApp {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .bg(rgba(0x000000cc))
+                    .bg(rgba(theme::BACKDROP))
                     .occlude()
                     .child(card)
                     .into_any_element(),

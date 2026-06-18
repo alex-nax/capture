@@ -12,6 +12,7 @@ mod hotkey;
 mod screens;
 mod skill;
 mod state;
+mod theme;
 mod tray;
 mod update;
 

@@ -10,6 +10,7 @@ use gpui::{div, img, prelude::*, px, relative, rgb, App, ClickEvent, Context, Mo
 use crate::app::CaptureApp;
 use crate::components::{chip, icon};
 use crate::state::{fmt_dur, short_id, truncate, ConfirmKind};
+use crate::theme;
 
 impl CaptureApp {
     /// The full playback screen: the screenshot at the playhead (or live latest),
@@ -47,7 +48,7 @@ impl CaptureApp {
         };
 
         let mut root = div().flex().flex_col().gap_2().flex_shrink_0();
-        root = root.child(div().text_color(rgb(0x9aa0a6)).child(format!(
+        root = root.child(div().text_color(rgb(theme::TEXT_SECONDARY)).child(format!(
             "{} · {}",
             short_id(&pb.sid),
             if finished { "saved capture" } else { "● live" }
@@ -59,20 +60,20 @@ impl CaptureApp {
                     .w_full()
                     .h(px(360.0))
                     .rounded_md()
-                    .bg(rgb(0x0e1216))
+                    .bg(rgb(theme::BG))
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(div().text_color(rgb(0x6a6a6a)).child(if finished {
+                    .child(div().text_color(rgb(theme::TEXT_MUTED)).child(if finished {
                         "no screenshots"
                     } else {
                         "waiting for first frame…"
                     })),
             ),
         };
-        let mut subbox = div().flex().flex_col().gap_1().p_2().rounded_md().bg(rgb(0x0e1216));
+        let mut subbox = div().flex().flex_col().gap_1().p_2().rounded_md().bg(rgb(theme::BG));
         if subs.is_empty() {
-            subbox = subbox.child(div().text_color(rgb(0x6a6a6a)).child("…"));
+            subbox = subbox.child(div().text_color(rgb(theme::TEXT_MUTED)).child("…"));
         } else {
             for (txt, is_mic) in subs {
                 subbox = subbox.child(if is_mic {
@@ -80,10 +81,10 @@ impl CaptureApp {
                         .flex()
                         .gap_1()
                         .items_center()
-                        .child(icon("mic", 12.0, 0x88c0a0))
-                        .child(div().text_color(rgb(0x88c0a0)).child(txt))
+                        .child(icon("mic", 12.0, theme::SUCCESS))
+                        .child(div().text_color(rgb(theme::SUCCESS)).child(txt))
                 } else {
-                    div().child(div().text_color(rgb(0xe6e6e6)).child(txt))
+                    div().child(div().text_color(rgb(theme::TEXT_PRIMARY)).child(txt))
                 });
             }
         }
@@ -98,7 +99,7 @@ impl CaptureApp {
                 .w_full()
                 .h(px(10.0))
                 .rounded_full()
-                .bg(rgb(0x2a2a2a))
+                .bg(rgb(theme::ELEVATED))
                 .cursor_pointer()
                 .child(
                     div()
@@ -108,7 +109,7 @@ impl CaptureApp {
                         .h(px(10.0))
                         .w(relative(frac))
                         .rounded_full()
-                        .bg(rgb(0x2d7f67)),
+                        .bg(rgb(theme::ACCENT)),
                 )
                 .on_mouse_down(
                     MouseButton::Left,
@@ -127,10 +128,10 @@ impl CaptureApp {
                 .child(self.pb_ctrl("pb-play", if playing { "pause" } else { "play" }, cx.listener(|this, _, _, cx| this.pb_toggle_play(cx))))
                 .child(self.pb_ctrl("pb-ff", "fast-forward", cx.listener(|this, _, _, cx| this.pb_step(5.0, cx))))
                 .child(self.pb_ctrl("pb-end", "skip-forward", cx.listener(|this, _, _, cx| this.pb_step(f64::INFINITY, cx))))
-                .child(div().text_color(rgb(0x9aa0a6)).child(format!("{} / {}", fmt_dur(pb.pos - pb.t0), fmt_dur(dur))));
+                .child(div().text_color(rgb(theme::TEXT_SECONDARY)).child(format!("{} / {}", fmt_dur(pb.pos - pb.t0), fmt_dur(dur))));
             root = root.child(div().flex().flex_col().gap_2().child(track).child(controls));
         } else if finished && !pb.loaded {
-            root = root.child(div().text_color(rgb(0x6a6a6a)).child("loading…"));
+            root = root.child(div().text_color(rgb(theme::TEXT_MUTED)).child("loading…"));
         }
 
         // Live mic switcher (#46): on a running capture, change the input device (or turn
@@ -143,7 +144,7 @@ impl CaptureApp {
                 .gap_2()
                 .items_center()
                 .flex_wrap()
-                .child(div().min_w(px(40.0)).text_color(rgb(0x9aa0a6)).child("Mic"));
+                .child(div().min_w(px(40.0)).text_color(rgb(theme::TEXT_SECONDARY)).child("Mic"));
             let s_off = sid.clone();
             row = row.child(chip(
                 "live-mic-off",
@@ -163,7 +164,7 @@ impl CaptureApp {
                 ));
             }
             if self.mics.is_empty() {
-                row = row.child(div().text_color(rgb(0x6a6a6a)).child("(Refresh windows to load devices)"));
+                row = row.child(div().text_color(rgb(theme::TEXT_MUTED)).child("(Refresh windows to load devices)"));
             }
             root = root.child(row);
             // Live transcription-language toggle: the same searchable dropdown as Settings,
@@ -191,8 +192,8 @@ impl CaptureApp {
                         .flex()
                         .items_center()
                         .gap_1()
-                        .child(icon("image", 13.0, if has_shots { 0x88c0a0 } else { 0x5a5a5a }))
-                        .child(div().text_xs().text_color(rgb(if has_shots { 0x9aa0a6 } else { 0x5a5a5a })).child(
+                        .child(icon("image", 13.0, if has_shots { theme::SUCCESS } else { theme::TEXT_DISABLED }))
+                        .child(div().text_xs().text_color(rgb(if has_shots { theme::TEXT_SECONDARY } else { theme::TEXT_DISABLED })).child(
                             if has_shots { "screenshots" } else { "screenshots pruned" },
                         )),
                 )
@@ -201,8 +202,8 @@ impl CaptureApp {
                         .flex()
                         .items_center()
                         .gap_1()
-                        .child(icon(if has_audio { "volume" } else { "volume-x" }, 13.0, if has_audio { 0x88c0a0 } else { 0x5a5a5a }))
-                        .child(div().text_xs().text_color(rgb(if has_audio { 0x9aa0a6 } else { 0x5a5a5a })).child(
+                        .child(icon(if has_audio { "volume" } else { "volume-x" }, 13.0, if has_audio { theme::SUCCESS } else { theme::TEXT_DISABLED }))
+                        .child(div().text_xs().text_color(rgb(if has_audio { theme::TEXT_SECONDARY } else { theme::TEXT_DISABLED })).child(
                             if has_audio { "audio" } else { "audio removed" },
                         )),
                 );
@@ -216,8 +217,8 @@ impl CaptureApp {
                         .gap_1()
                         .px_2()
                         .py_1()
-                        .child(icon("refresh", 13.0, 0x66d9a0))
-                        .child(div().text_xs().text_color(rgb(0x66d9a0)).child(format!(
+                        .child(icon("refresh", 13.0, theme::SUCCESS))
+                        .child(div().text_xs().text_color(rgb(theme::SUCCESS)).child(format!(
                             "re-transcribing {:.0}%",
                             (frac * 100.0).clamp(0.0, 100.0)
                         ))),
@@ -225,21 +226,21 @@ impl CaptureApp {
             } else if can_retr {
                 let s = sid.clone();
                 actions = actions.child(self.mng_btn(
-                    "mng-retr", "refresh", "Re-transcribe", 0xcfd3d6, 0x2a2a2a,
+                    "mng-retr", "refresh", "Re-transcribe", theme::TEXT_SECONDARY, theme::CHIP_IDLE,
                     cx.listener(move |this, _, _, cx| this.retranscribe(s.clone(), cx)),
                 ));
             } else {
-                actions = actions.child(self.mng_btn("mng-retr", "refresh", "Re-transcribe", 0x5a5a5a, 0x222222, |_, _, _| {}));
+                actions = actions.child(self.mng_btn("mng-retr", "refresh", "Re-transcribe", theme::TEXT_DISABLED, theme::ELEVATED, |_, _, _| {}));
             }
             if has_shots {
                 let s = sid.clone();
                 actions = actions.child(self.mng_btn(
-                    "mng-halve", "scissors", "Halve frames", 0xcfd3d6, 0x2a2a2a,
+                    "mng-halve", "scissors", "Halve frames", theme::TEXT_SECONDARY, theme::CHIP_IDLE,
                     cx.listener(move |this, _, _, cx| this.prune(s.clone(), vec!["screenshots_halve"], cx)),
                 ));
                 let s = sid.clone();
                 actions = actions.child(self.mng_btn(
-                    "mng-delshots", "image", "Delete frames", 0xe6c0c0, 0x3a2a2a,
+                    "mng-delshots", "image", "Delete frames", theme::ERROR, theme::ERROR_SUBTLE,
                     cx.listener(move |this, _, _, cx| {
                         this.confirm = Some(ConfirmKind::Prune(
                             s.clone(),
@@ -253,7 +254,7 @@ impl CaptureApp {
             if has_audio {
                 let s = sid.clone();
                 actions = actions.child(self.mng_btn(
-                    "mng-delaudio", "volume-x", "Remove audio", 0xe6c0c0, 0x3a2a2a,
+                    "mng-delaudio", "volume-x", "Remove audio", theme::ERROR, theme::ERROR_SUBTLE,
                     cx.listener(move |this, _, _, cx| {
                         this.confirm = Some(ConfirmKind::Prune(
                             s.clone(),
@@ -277,8 +278,8 @@ impl CaptureApp {
                         .gap_1()
                         .px_2()
                         .py_1()
-                        .child(icon("list-tree", 13.0, 0x8ab4f8))
-                        .child(div().text_xs().text_color(rgb(0x8ab4f8)).child(format!(
+                        .child(icon("list-tree", 13.0, theme::ACCENT_TEXT))
+                        .child(div().text_xs().text_color(rgb(theme::ACCENT_TEXT)).child(format!(
                             "indexing {} {:.0}%",
                             phase,
                             (frac * 100.0).clamp(0.0, 100.0)
@@ -287,13 +288,13 @@ impl CaptureApp {
             } else if can_index && self.index_status.available {
                 let s = sid.clone();
                 actions = actions.child(self.mng_btn(
-                    "mng-index", "list-tree", "Build index", 0xcfd3d6, 0x2a2a2a,
+                    "mng-index", "list-tree", "Build index", theme::TEXT_SECONDARY, theme::CHIP_IDLE,
                     cx.listener(move |this, _, _, cx| this.index_session(s.clone(), cx)),
                 ));
             } else {
                 // Disabled: dim it; the Settings → Index endpoint dot says why.
                 actions = actions.child(self.mng_btn(
-                    "mng-index", "list-tree", "Build index", 0x5a5a5a, 0x222222, |_, _, _| {},
+                    "mng-index", "list-tree", "Build index", theme::TEXT_DISABLED, theme::ELEVATED, |_, _, _| {},
                 ));
             }
             let mut manage = div()
@@ -301,7 +302,7 @@ impl CaptureApp {
                 .flex_col()
                 .gap_2()
                 .pt_2()
-                .child(div().text_color(rgb(0x9aa0a6)).child("Manage"))
+                .child(div().text_color(rgb(theme::TEXT_PRIMARY)).child("Manage"))
                 .child(status)
                 // Change the language on the fly (a running capture's next chunk uses it);
                 // then Re-transcribe to fix the part already done with the wrong language.
@@ -317,18 +318,18 @@ impl CaptureApp {
                         .gap_1()
                         .p_2()
                         .rounded_md()
-                        .bg(rgb(0x16181c))
+                        .bg(rgb(theme::PANEL))
                         .border_1()
-                        .border_color(rgb(0x2a2a2a))
+                        .border_color(rgb(theme::BORDER))
                         .child(
                             div()
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .child(icon("list-tree", 13.0, 0x8ab4f8))
-                                .child(div().text_xs().text_color(rgb(0x8ab4f8)).child(format!("Index summary · {nodes} nodes"))),
+                                .child(icon("list-tree", 13.0, theme::ACCENT_TEXT))
+                                .child(div().text_xs().text_color(rgb(theme::ACCENT_TEXT)).child(format!("Index summary · {nodes} nodes"))),
                         )
-                        .child(div().text_sm().text_color(rgb(0xc8ccd0)).child(summary)),
+                        .child(div().text_sm().text_color(rgb(theme::TEXT_SECONDARY)).child(summary)),
                 );
             }
             root = root.child(manage);
@@ -377,8 +378,8 @@ impl CaptureApp {
             .h(px(28.0))
             .rounded_md()
             .cursor_pointer()
-            .bg(rgb(0x2a2a2a))
-            .child(icon(name, 14.0, 0xcfd3d6))
+            .bg(rgb(theme::CHIP_IDLE))
+            .child(icon(name, 14.0, theme::TEXT_SECONDARY))
             .on_click(on_click)
     }
 

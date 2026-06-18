@@ -28,6 +28,7 @@ use crate::skill;
 use crate::update;
 
 use crate::components::icon;
+use crate::theme;
 use crate::state::{load_settings, short_id, ConfirmKind, IndexCfg, LiveState, PlaybackState};
 
 /// macOS Screen Recording prompt — triggered from THIS GUI process, which is a real
@@ -759,7 +760,7 @@ impl CaptureApp {
                     .w(px(7.0))
                     .h(thumb_h)
                     .rounded_full()
-                    .bg(if dragging { rgb(0x6a6a6a) } else { rgb(0x4a4a4a) })
+                    .bg(if dragging { rgb(theme::BORDER_STRONG) } else { rgb(theme::BORDER) })
                     .cursor_pointer()
                     .on_mouse_down(
                         MouseButton::Left,
@@ -833,7 +834,7 @@ impl Render for CaptureApp {
         div()
             .relative()
             .size_full()
-            .bg(rgb(0x141414))
+            .bg(rgb(theme::BG))
             .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, window, cx| {
                 this.on_scrollbar_drag(ev, window, cx);
                 if this.pb_dragging {
@@ -863,7 +864,7 @@ impl Render for CaptureApp {
                     .p_4()
                     .size_full()
                     .overflow_y_scroll() // single page scroll; the scrollbar overlay drives it
-                    .text_color(rgb(0xe0e0e0))
+                    .text_color(rgb(theme::TEXT_PRIMARY))
                     .text_sm()
                     .child(
                         div()
@@ -883,11 +884,11 @@ impl Render for CaptureApp {
                                     .py_1()
                                     .rounded_md()
                                     .cursor_pointer()
-                                    .bg(rgb(0x2d4f67))
+                                    .bg(rgb(theme::ACCENT))
                                     .child(icon(
                                         if in_sub { "chevron-left" } else { "settings" },
                                         14.0,
-                                        0xe0e0e0,
+                                        theme::ON_ACCENT,
                                     ))
                                     .child(if in_sub { "Back" } else { "Settings" })
                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -898,9 +899,9 @@ impl Render for CaptureApp {
                                     }))
                             }),
                     )
-            .child(div().text_color(rgb(0x9aa0a6)).child(header))
-            .child(div().text_color(rgb(0x6a8a9a)).child(hotkey_hint))
-            .child(div().text_color(rgb(0xffcc66)).child(self.message.clone()))
+            .child(div().text_color(rgb(theme::TEXT_MUTED)).child(header))
+            .child(div().text_color(rgb(theme::ACCENT_TEXT)).child(hotkey_hint))
+            .child(div().text_color(rgb(theme::WARNING)).child(self.message.clone()))
             // Active screen's children (dashboard OR settings; playback below). Only one
             // of the three is non-empty, so the order of these blocks is immaterial.
             .children(settings_children)
