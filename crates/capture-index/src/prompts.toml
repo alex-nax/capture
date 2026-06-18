@@ -1,0 +1,120 @@
+# AUTO-PORTED verbatim from src/capture_mcp/core/indexer.py (lines 36-248).
+# Eval-tuned strings: edit with care; the verbatim guard test in prompts.rs protects them.
+# Prompts/combine_focus are single-line joined strings (no leading/trailing newline);
+# prompts.rs .trim()s the parsed multi-line-literal values so they equal the Python exactly.
+
+default_preset = "auto"
+code_types = ["coding", "terminal"]
+classify_prompt = '''
+Classify what this screenshot PRIMARILY shows: set `content_type` to the single best fit and `app` to the application/site in focus. Classify by the CONTENT on screen, NOT the window around it — a screen recording or a YouTube/Twitch video OF an IDE or code is `coding`, OF a slide-based tutorial/explainer is `lecture`, OF a video call is `meeting`, OF a document/spreadsheet is `document`. Use `video` ONLY when the media itself is the subject (a film, vlog, music or gameplay footage) with nothing to read or extract. (meeting = a video call/conference; lecture = anything that teaches — a tutorial/explainer/screencast, even inside a video player; coding = an IDE/code editor, even inside a video player; terminal = a console; video = entertainment media with no code/slides/meeting/document to extract; browsing = a web page that is NOT a call; document = docs/notes/PDF; design = Figma/Photoshop.)
+'''
+
+[[content]]
+key = "general"
+label = "General"
+prompt = '''
+Describe this screenshot. Put a 1-2 sentence factual description in `summary`; the app/site in `app`; and any salient on-screen text/names you can read verbatim in `on_screen_text`.
+'''
+combine_focus = '''
+what happened, in order, and the salient topics, entities, and on-screen text
+'''
+fields = [["app", "str"], ["on_screen_text", "strs"]]
+
+[[content]]
+key = "meeting"
+label = "Meeting / call"
+prompt = '''
+This is a video meeting (Google Meet / Zoom / Teams), often with a SHARED SCREEN (doc, slide, task board). Read the participant NAMES verbatim from the tile name-labels into `participants`. Set `active_speaker` to the name of the person whose tile is highlighted/outlined/enlarged or shows a speaking indicator (empty string if no cue is visible — do NOT guess). Put the shared screen/slide/board text verbatim in `shared_content`. Capture the WORK CONTENT: `task_assignments` = any '<owner>: <task>' assignments visible on a board/doc or shown in this frame; `data_points` = concrete data (ticket refs, dates/deadlines, project/initiative names, statuses, metrics); `decisions` = any decisions or action items evident. Leave a field empty if nothing supports it. `summary` = a 1-2 sentence description naming who is speaking. Do not invent names, owners, or tasks.
+'''
+combine_focus = '''
+WHO said or did WHAT (attribute to the named speakers), task assignments (owner→task), decisions, action items, ticket refs/dates, and topics, in order
+'''
+fields = [["participants", "strs"], ["active_speaker", "str"], ["shared_content", "str"], ["task_assignments", "strs"], ["data_points", "strs"], ["decisions", "strs"]]
+
+[[content]]
+key = "lecture"
+label = "Lecture / tutorial"
+prompt = '''
+This is an educational video / screencast / tutorial / explainer (often inside a video player). `summary` = 1-2 sentences on what is being taught. `topic` = the slide title or current topic. `key_points` = key terms, definitions, or takeaways (verbatim where shown). `code` = any source code on screen transcribed verbatim (else ""). `formulas` = any equations/formulas shown verbatim (else []).
+'''
+combine_focus = '''
+the concepts taught and how the material progresses, with key terms, code, formulas, and definitions
+'''
+fields = [["topic", "str"], ["key_points", "strs"], ["code", "str"], ["formulas", "strs"]]
+
+[[content]]
+key = "coding"
+label = "Coding / IDE"
+prompt = '''
+This is a code editor / IDE (possibly shown inside a video player). `summary` = 1-2 sentences on the task. `language` = the programming language. `file` = the open file name (read from the tab/title bar). `code` = the visible source code transcribed VERBATIM — preserve identifiers, signatures, and structure exactly; do not paraphrase or invent; leave "" if illegible. `symbols` = key function/class/identifier names or errors (verbatim).
+'''
+combine_focus = '''
+the coding task, the files and the actual code involved, and the changes or problems
+'''
+fields = [["language", "str"], ["file", "str"], ["code", "str"], ["symbols", "strs"]]
+
+[[content]]
+key = "terminal"
+label = "Terminal"
+prompt = '''
+This is a terminal / console. `summary` = 1-2 sentences on the task. `commands` = the commands run and any salient output/errors (verbatim).
+'''
+combine_focus = '''
+the commands run and their outcomes
+'''
+fields = [["commands", "strs"]]
+
+[[content]]
+key = "browsing"
+label = "Web browsing"
+prompt = '''
+This is a web browser (not a video call). `summary` = 1-2 sentences on the page/content. `site` = the site or page title (and URL if visible). `headings` = visible headings (verbatim).
+'''
+combine_focus = '''
+the pages/sites visited and what was read or done
+'''
+fields = [["site", "str"], ["headings", "strs"]]
+
+[[content]]
+key = "video"
+label = "Video / media"
+prompt = '''
+This is a video / media player (e.g. YouTube). `summary` = 1-2 sentences on what's on screen. `title` = the video title (verbatim). `channel` = the channel/uploader if shown.
+'''
+combine_focus = '''
+what the video showed, in order, and its topics
+'''
+fields = [["title", "str"], ["channel", "str"]]
+
+[[content]]
+key = "gameplay"
+label = "Game"
+prompt = '''
+This is a video game frame. `summary` = 1-2 sentences on what's happening. `game` = the game name if identifiable. `scene` = the scene/level/mode and any salient HUD text.
+'''
+combine_focus = '''
+the gameplay progression, objectives, and events
+'''
+fields = [["game", "str"], ["scene", "str"]]
+
+[[content]]
+key = "document"
+label = "Document"
+prompt = '''
+This is a document / text editor (Docs, Word, PDF, Notion). `summary` = 1-2 sentences on the content. `title` = the document title. `section` = the visible heading/section (verbatim).
+'''
+combine_focus = '''
+the document's content and any edits
+'''
+fields = [["title", "str"], ["section", "str"]]
+
+[[content]]
+key = "design"
+label = "Design tool"
+prompt = '''
+This is a design / creative tool (Figma, Sketch, Photoshop). `summary` = 1-2 sentences on what is being designed. `tool` = the app. `elements` = salient layers/elements/labels visible.
+'''
+combine_focus = '''
+the design work and its elements
+'''
+fields = [["tool", "str"], ["elements", "strs"]]

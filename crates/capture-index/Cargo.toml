@@ -8,6 +8,8 @@ description = "v3 multimodal index: vision client + build_index (classify→extr
 capture-core = { path = "../capture-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Parse the embedded prompts.toml (per-content-type index prompts/schemas live there as data).
+toml = "0.8"
 # OpenAI-compatible vision client (blocking; the daemon calls it via spawn_blocking).
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 # Replaces sips for per-frame downscale/encode (#49 resolution-adaptive max_px).
