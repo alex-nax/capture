@@ -1,5 +1,356 @@
 # Progress Log
 
+## Session 66 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **cross-platform in-app auto-update**
+(Phase 5 updater) + push, ahead of cutting a release.
+- **`gui/src/update.rs` is now cross-platform** (was macOS `.dmg`-only). `UpdateInfo.dmg_url`→`asset_url`;
+  `check()` selects the OS asset via `#[cfg]` `asset_matches` (`.dmg` macOS / `CaptureSetup*.exe`
+  Windows). `download_and_install` → `install_macos` (existing bash/hdiutil) + **`install_windows`**:
+  download the `.exe` to `%TEMP%`, write a detached **PowerShell** updater (`UPDATER_PS1`), spawn it
+  windowless (`CREATE_NO_WINDOW|CREATE_NEW_PROCESS_GROUP`); the app exits; the updater stops
+  Capture/capture-gui/captured, runs `CaptureSetup…exe /VERYSILENT …` (Inno in-place upgrade by AppId),
+  relaunches `Capture.exe`. `app.rs` reads only `info.version`, so the rename was safe. GUI builds clean.
+- **Pushed `windows-support` to origin** (the earlier no-push boundary lifted by "yes, push"). It's a
+  clean fast-forward over `origin/v2` (12 ahead, 0 behind) → the merge into v2 is conflict-free.
+- **Versioning (owner):** do NOT bump now / no throwaway version. The single real release is the
+  updater's test target: reinstall the current 0.2.5 (with the updater) → cut ONE release (bump→0.2.6,
+  both `.dmg`+`.exe` assets) → the installed 0.2.5 updates to 0.2.6 (Windows here; macOS on the owner's
+  Mac).
+- Specs: windows-release.md §6 (auto-update done) + Files; features.json #34.
+- **Next:** merge windows-support→v2 (PR needs `gh auth login`, else a local FF); rebuild the 0.2.5
+  RELEASE installer (with the updater) + reinstall; then the release (bump + Windows artifacts + packs as
+  assets + macOS DMG) + verify the updater both ways.
+
+---
+
+## Session 65 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **ASR runtimes: pack tooling + lean
+build + GUI picker** (the rest of #58 except AMD + pack hosting).
+- **`packaging/build_runtime_packs.ps1`** — builds each local runtime's pack (`pip install --target` of
+  its registry `pip` list, for the daemon's Python tag) → `dist/runtime-<id>-<pytag>.zip`. Verified:
+  `faster-cpu` → `runtime-faster-cpu-cp312-win_amd64.zip` **(86 MB zip / 286 MB unpacked)**.
+- **`build_windows.ps1` now freezes LEAN** — drops `--collect-all faster_whisper/ctranslate2`, adds
+  `--exclude-module` for them + the `asr.runtimes` hidden-import (keeps huggingface_hub for downloads).
+  So the installer has **no ASR engine by default**; the user installs a pack.
+- **GUI runtime picker** (`gui/src/daemon.rs` + `app.rs`): Settings → "Voice recognition runtime" lists
+  the runtimes with a **GPU hint** (`nvidia` detected → recommend CUDA), an **Install** button (POST
+  install + SSE `asr_runtime_install` progress bar) for local runtimes, **Use** for installed/remote,
+  and the requires-note per runtime; the Whisper-model picker sits below (runtime-aware). Added
+  `daemon.rs` `AsrRuntimes`/`AsrRuntime`/`AsrGpu` + `asr_runtimes`/`asr_runtime_install`/
+  `asr_set_runtime`; `LiveState.runtime_install`; poll + SSE wiring; `install_runtime`/`set_runtime`.
+- **`runtimes.pack_url()` defaults** to `https://github.com/alex-nax/capture/releases/download/v<ver>/
+  runtime-<id>-<pytag>.zip`, so a GUI Install works out of the box once the release hosts the packs.
+- **Verified:** GUI `cargo build` clean + **renders (RENDERER_OK)** with the picker; `pack_url` resolves;
+  smoke 67/67. Specs synced (asr-runtimes.md, windows-release.md §2/CUDA note, daemon.md routes,
+  features.json #58).
+- **Remaining for #58:** host the packs as **release assets** (release flow) + a lean release
+  build/install verify; **AMD/Intel** runtimes (whisper.cpp/ONNX) — deferred per owner.
+
+---
+
+## Session 64 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **ASR runtimes: daemon routes +
+no-silent-fallback** (#58 engine/daemon slice).
+- **Routes (`core/asr/runtimes.py` + `daemon/server.py`):** `GET /v1/asr/runtimes`
+  (registry + installed/active + a `gpu:{nvidia}` hint via `nvidia-smi`), `POST /v1/asr/runtimes/install
+  {id, source?}` (background download/extract a pack → set active; SSE `asr_runtime_install`→done/error;
+  `source` = URL / local zip / local dir), `POST /v1/asr/runtime {id}` (set active), `GET
+  /v1/asr/backend` (`{runtime, engine, device, available, error}`). Added `runtimes.install()` (URL/zip/
+  dir), `set_active()`, `status_payload()`, `backend_report()`, `pack_url()` (`CAPTURE_ASR_PACK_BASE`/
+  `_URL_*`), `active_device()`, `last_error()`. `DaemonClient` got the 4 matching methods.
+- **No silent fallback (`whisper_local.FasterWhisper`):** device now comes from the active runtime
+  (`runtimes.active_device()`) → env → (legacy) auto; a `WhisperModel` load failure **raises** and is
+  recorded in `runtimes.last_error()` (surfaced by `/v1/asr/backend`) instead of the old quiet CUDA→CPU
+  switch.
+- **Verified on the box:** `install("faster-cpu", source=<local 286MB pack>)` → `is_installed` True →
+  `set_active` → `backend_report` = `{runtime:faster-cpu, device:cpu, available:true, error:null}`;
+  `GET /v1/asr/runtimes` (active=None, gpu.nvidia=true) + `GET /v1/asr/backend` dispatch live over HTTP;
+  config + the test pack dir restored after. smoke **67/67**, contracts **4/4**.
+- Specs synced: daemon.md (4 routes), asr-runtimes.md (routes + no-fallback → done; Tests), features.json
+  #58. **Remaining for #58:** pack build/hosting tooling (`build_runtime_packs.ps1` → release assets),
+  lean-by-default `build_windows.ps1`, the GUI runtime picker, then AMD runtimes.
+
+---
+
+## Session 63 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **ASR runtimes redesign** (owner
+directives): no runtime by default, user picks a runtime for their hardware → installs a **pack** →
+picks a compatible model → downloads; **no silent fallback**; **frozen daemon + packs** (not a venv);
+NVIDIA+CPU+remote now, **AMD deferred** ("option 3 track").
+- **Keystone SPIKE — validated.** The risk in "frozen daemon + packs": can a PyInstaller-frozen daemon
+  import an external binary engine (ctranslate2 `.pyd` + DLLs) from `sys.path`? **Yes.** A **lean** freeze
+  (faster-whisper/ctranslate2 excluded) → `--asr-selftest` fails `ModuleNotFoundError: ctranslate2`
+  (rc=1, no runtime). Pointed at an external CPU pack (`pip install --target faster-whisper`, 286 MB) via
+  `CAPTURE_ASR_RUNTIME_DIR`, the same frozen `captured.exe --asr-selftest` → **`faster-whisper OK
+  (ctranslate2=4.8.0, cuda_devices=1)`** (rc=0). The frozen daemon loaded the external C-extension + its
+  DLLs from sys.path. So the owner's packs approach is viable.
+- **Landed (keystone mechanism):** `core/asr/runtimes.py` — runtime `REGISTRY` (faster-cpu / faster-cuda
+  / remote; AMD slots deferred) + `activate()` (prepends the active pack dir to `sys.path`, adds its DLL
+  dirs via `os.add_dll_directory`; `CAPTURE_ASR_RUNTIME_DIR` override; idempotent) + `base_dir()`/
+  `runtime_dir()`/`active_runtime()`/`is_installed()`. `packaging/captured_main.py` calls
+  `runtimes.activate()` before the daemon starts + in a runtime-aware `--asr-selftest`.
+- **Spec:** new `docs/specs/asr-runtimes.md` (the validated design — registry, pack format + hosting,
+  pick→install→model→download flow, no-silent-fallback, daemon routes, GUI). README row; features.json
+  **#58**; supersedes the "bundle faster-whisper" approach from Session 62 (manager runtime-awareness
+  from #62 stays — it reports whatever runtime a pack provides).
+- **Remaining [planned]:** daemon routes `GET /v1/asr/runtimes` + `POST .../install` (download/extract a
+  hosted pack) + `GET /v1/asr/backend`; `packaging/build_runtime_packs.ps1` (build + publish packs as
+  release assets per Python tag); lean-by-default `build_windows.ps1`; the GUI runtime picker; wire
+  `FasterWhisper` device from the runtime + drop `_auto_device`/CUDA→CPU silent fallback. Then AMD
+  (whisper.cpp/ONNX) as new registry entries + packs.
+- **Note:** the Session-62 RELEASE installer (bundled faster-whisper, no-console fix verified —
+  subsystem=2) exists for testing the console fix; it embodies the OLD ASR approach and will be rebuilt
+  lean once the runtime routes + GUI land.
+
+---
+
+## Session 62 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **fixed 2 issues from a real
+Windows install** of the Phase-4 installer.
+- **Issue 1 — a console window; closing it killed the app.** `Capture.exe` (agent) and
+  `capture-gui.exe` are Rust binaries → console-subsystem by default → Windows gives them a console
+  that the whole tree shares; closing it kills everything. **Fix:** both `gui/src/main.rs` and
+  `agent/windows/src/main.rs` now carry `#![cfg_attr(not(debug_assertions), windows_subsystem =
+  "windows")]` — **release** builds are GUI/windows-subsystem apps with **no console** (debug keeps it
+  for dev). So the shipped installer must use **release** binaries (the Phase-4 test build shipped DEBUG
+  → consoles). The daemon was already spawned `CREATE_NO_WINDOW`.
+- **Issue 2 — "Whisper runtime unavailable in this daemon."** `manager.runtime_available()` only checked
+  for `mlx_whisper` (excluded from the Windows freeze) → reported False even though faster-whisper is
+  bundled; and the catalog was mlx-only. **Fix (runtime-aware ASR manager):** `runtime_available()` is
+  True for mlx **or** faster-whisper; `catalog()`/`default_repo()`/validation pick the
+  `Systran/faster-whisper-*` set on the faster build vs `mlx-community/*` on Apple Silicon;
+  `is_downloaded` recognizes the CT2 `model.bin`; a stale cross-platform `whisper_model` config is
+  ignored in favour of the default. Also **`FasterWhisper.__init__` now reads the GUI-persisted
+  `whisper_model` config** (it previously read only env→default, so a model picked in the GUI never
+  reached it), skipping mlx-only repos. Verified on the box: `runtime_available=True`,
+  `backend_available=True`, catalog = the 5 Systran faster-whisper repos, default
+  `Systran/faster-whisper-base`.
+- **Verified:** smoke **67/67** (one flaky `WinError 10054` socket-reset in an SSE test on the first
+  run; clean on retry — unrelated to ASR), contracts **4/4**, ASR modules import.
+- **Building a RELEASE installer** (release cargo gui+agent+helper for the no-console fix + a re-freeze
+  for the ASR fix) to hand back a corrected `CaptureSetup-0.2.5-x64.exe`. Specs synced: asr.md
+  (runtime-aware manager), gui.md + agent-windows.md (windows-subsystem / no console), features.json #34.
+
+---
+
+## Session 61 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **merged `origin/v2`** (the macOS
+box's latest index/preset work) into the Windows branch.
+- **Pulled 7 commits from `origin/v2`** (`cb74c42..99ed5d8`): content-aware index classifier +
+  verbatim-code extractors + per-capture AGENTS.md + provider/model config UI (#52/#53), #51
+  OCR-reliability flags, #54 start-capture presets, #55 live/online incremental indexing, a scrollable
+  preset picker + live language toggle, and reconstruction-guidance refinements. New engine files
+  `core/live_index.py` + `core/presets.py`; daemon routes `/v1/index/providers`, `/v1/index/models`,
+  `preset` on `/v1/sessions`.
+- **3-way merge** from base `7023ca1` (we were 6 ahead with Phases 0–4, v2 was 7 ahead). The `ort`
+  strategy **auto-merged with NO textual conflicts** — the 5 shared files (`features.json`, GUI
+  `app.rs`/`daemon.rs`, `docs/specs/daemon.md`/`gui.md`) had disjoint edit regions; Python was a clean
+  union (v2 and the Windows work touched disjoint `.py` files).
+- **Verified the merge** (not just "git didn't conflict"): `features.json` valid — **57 features, ids
+  1–57 contiguous, no duplicates**, both my #34/#36 Windows content and v2's #51–57 present; **smoke
+  67/67**; **contracts 4/4** (v2's regenerated goldens hold against the merged models); GUI **`cargo
+  build` clean**; both specs carry both sides' additions; **no leftover conflict markers**.
+- **Numbering/session check (the reconciliation worry): clean.** `origin/v2` never touched
+  `claude-progress.md` (its log still tops at Session 54), so my Windows Sessions 55–60 merged with **no
+  collision** and the log is a single 1–61 sequence. NOTE: the macOS box's index features #51–57 have
+  **no progress-log entries on this branch** — that work is captured in `features.json` + the v2 commit
+  messages, not the session log. (If the macOS box later writes/pushes its own Sessions 55+, those will
+  need renumbering then — not an issue in the current tree.)
+- Merge commit `895a9d1`; nothing pushed (all local). **Next:** resume Phase 5 (cross-platform
+  auto-update + release/CI) on the reconciled branch, now that update.rs is alongside v2's latest.
+
+---
+
+## Session 60 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **Phase 4**: **Windows installer**
+(#34). Produced + verified a real `CaptureSetup-x64.exe`.
+- **`packaging/build_windows.ps1`** (parallel of `build_macos_dmg.sh`): cargo-builds GUI + agent +
+  native audio helper (into the shared `gui/target`, SAC-safe), **PyInstaller-freezes** the daemon
+  (`--collect-all faster_whisper ctranslate2 huggingface_hub`, exclude mlx/torch; **CUDA libs NOT
+  bundled** → CPU faster-whisper out of box), stages the install tree, optional `signtool` signing
+  (`CAPTURE_WIN_SIGN_*`), and compiles Inno Setup. Knobs: `CAPTURE_WIN_DEBUG` (reuse debug bins),
+  `CAPTURE_SKIP_FREEZE`, `CAPTURE_SKIP_CARGO`, `CAPTURE_ISCC`.
+- **`packaging/capture.iss`** (Inno Setup): per-user install to `%LOCALAPPDATA%\Programs\Capture` (no
+  UAC), Start-Menu/desktop shortcuts, **registers the interactive logon task** (via
+  `register_logon_task.ps1`) as a checkbox task, uninstall unregisters it + removes the tree.
+- **Tooling installed on this box** (Phase 4 prereqs): PyInstaller 6.21 into the venv; **Inno Setup**
+  via `winget` (ISCC at `%LOCALAPPDATA%\Programs\Inno Setup 6`).
+- **Two PowerShell gotchas fixed:** non-ASCII (`…`/`—`) in `.ps1` string literals break the PS 5.1
+  parser (it reads BOM-less files as cp1252) → stripped to ASCII; and `$ErrorActionPreference='Stop'`
+  turns a native tool's **stderr** (PyInstaller INFO logs) into a terminating error → switched to
+  `Continue` + explicit `$LASTEXITCODE` checks (cmdlets use `-ErrorAction Stop`).
+- **Verified end-to-end:** `CaptureSetup-0.2.5-x64.exe` (74 MB; freeze + Inno compile 67 s). Silent
+  install (`/VERYSILENT /DIR=… /TASKS=""`) laid out the full tree; the **PyInstaller-frozen daemon runs
+  on Windows** and serves `/v1/health` (`version=0.2.5, platform=win32` — **SAC does not block it**);
+  the uninstaller cleaned up. Built from DEBUG binaries (`CAPTURE_WIN_DEBUG=1`) for speed — a release
+  build is the same script with the flag off.
+- Specs synced: windows-release.md (status → partially-implemented; Files/§2/§3 done; §Tests Phase 4),
+  features.json #34. `dist/` + `packaging/build/` are gitignored (no installer/freeze committed).
+- **Next:** Phase 5 — cross-platform in-app **auto-update** (generalize `gui/src/update.rs` for the
+  `.exe` asset + a PowerShell updater) + **release/CI** (bump_version across the Windows build, one
+  GitHub release carrying both `.dmg` and `.exe`, GH Actions matrix). Then a release build + a manual
+  tray pass to flip #34/#36 `passes:true`.
+
+---
+
+## Session 59 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **Phase 3**: native **tray agent**
+(#36) + daemon **logon task**. Built + verified.
+- **New crate `agent/windows/`** (Rust) → **`Capture.exe`**: a system-tray app (`tray-icon` + `muda`)
+  driven by a **minimal Win32 message loop** (`GetMessageW` + a 2 s `WM_TIMER` poll; menu clicks via
+  `muda::MenuEvent`). Owns: persistent tray (generated gray/red dot icons), the **daemon lifecycle**
+  (thin `/v1` `Daemon` client over `ureq`: health-check → adopt, else spawn `captured.exe` with
+  `CREATE_NO_WINDOW`, debounced; auto-respawn unless user-stopped; graceful `/v1/admin/shutdown` on Quit
+  iff idle), and launches **`capture-gui.exe`** with `CAPTURE_AGENT=1`. Menu: header state / Open Window
+  / Stop All Captures / Start-Stop Daemon / Quit. Sibling of macOS `CaptureBar`, no shared code.
+- **`packaging/register_logon_task.ps1`**: register/unregister `Capture.exe` as an **interactive logon
+  task** (`-AtLogOn`, `LogonType Interactive`, no time limit) — the Windows daemon-lifecycle entry
+  (logon task, never a Service). Fixed a PowerShell gotcha (a local `$action` clobbered the `$Action`
+  param — vars are case-insensitive).
+- **SAC-safe build**: deps pinned to the GUI's versions (tray-icon 0.24.1 / muda 0.19.2 / ureq 2 /
+  windows 0.61) and built into the shared `gui/target` so cleared build scripts aren't re-run. Agent
+  compiled first try (`Capture.exe`, 5.4 MB).
+- **Verified (interactive session):** with a pre-started daemon, `Capture.exe` stays **resident**,
+  **adopts** the daemon (no double-spawn), and launches exactly **one** `capture-gui.exe`
+  (`agent_alive=true, gui_count=1, daemon_running=true`). `register_logon_task.ps1` register → query
+  (state=Ready, Interactive) → unregister round-trips clean (no admin). Tray icon/menu visuals remain a
+  manual check (no harness, same as macOS).
+- Specs synced: agent-windows.md (→ implemented-dev: Files/Autostart/Tests/limitations),
+  windows-release.md (Files/§4/§Tests), features.json #36.
+- **Next:** Phase 4 (build_windows.ps1 + Inno Setup installer that bundles GUI+agent+daemon+native
+  helper+skill, calls register_logon_task.ps1, signtool hook) → then Phase 5 (auto-update + release/CI).
+  Agent TODOs: Open-Window focus of an existing window; a branded `.ico`.
+
+---
+
+## Session 58 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **Phase 2**: make the GPUI app
+**usable on Windows** (runtime macOS-isms → cross-platform). All `#[cfg]`-gated; macOS unchanged.
+- **gui/src/app.rs**: `pick_media_file` (osascript → **PowerShell `OpenFileDialog`** on Windows, no new
+  crate — `powershell.exe` is signed so SAC doesn't block it; `zenity` on Linux); `open_folder`
+  (`open` → `explorer` / `xdg-open`); `request_microphone` (CaptureBar one-shot → open
+  `ms-settings:privacy-microphone` + message; Windows has no per-app mic prompt to trigger);
+  `open_privacy_settings` (`x-apple.systempreferences:` → `ms-settings:` per pane); launch-field help
+  text per-OS (`open` / `cmd /c start` / `xdg-open`).
+- **gui/src/main.rs**: renderer creation no longer `unwrap()`s — on failure it logs (with a Windows
+  interactive-desktop hint) and `cx.quit()`s cleanly instead of panicking
+  (`DXGI_ERROR_NOT_CURRENTLY_AVAILABLE` from a non-interactive shell).
+- **No new dependencies** (deliberate: avoids fresh Cargo build-script probes that Smart App Control
+  blocks). Approach = Command spawns of already-signed OS tools.
+- **Verified**: `cargo build` clean (6.4s, gui crate only); GUI re-renders (`RENDERER_OK`, no panic) in
+  the interactive session via `run_interactive.ps1`. The file dialog itself is a manual visual check
+  (no GPUI/dialog test harness) — the PowerShell WinForms invocation is standard.
+- Specs synced: gui.md (cross-platform integrations note), windows-release.md (§Tests Phase 2 + the
+  GUI-compile invariant marked DONE for Phase 0+2).
+- **Next**: Phase 3 (Rust tray agent #36 + logon task) or Phase 4 (Inno Setup installer + signtool),
+  then Phase 5 (auto-update + release/CI). Remaining GUI polish: `.ico` tray glyph (native agent owns
+  the persistent tray).
+
+---
+
+## Session 57 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **Phase 1**: native **per-process**
+audio loopback helper (#34/#21 refinement). Built + verified end-to-end on real audio.
+- **New crate `helper/audiocap_win_rs/`** (Rust, `windows-rs` 0.61) → `audiocap_win.exe`: WASAPI
+  Process Loopback via `ActivateAudioInterfaceAsync` + `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`
+  with `INCLUDE_TARGET_PROCESS_TREE` (so Chromium's audio-render child is captured). Implements the
+  `IActivateAudioInterfaceCompletionHandler` COM callback, builds the VT_BLOB `PROPVARIANT` by explicit
+  layout, captures event-driven at 16 kHz mono s16le, and writes PCM to stdout + `READY ... target=pid:N`
+  to stderr — the frozen helper contract. `--pid N [--rate 16000] [--no-tree]`.
+- **Wired into `Win32AudioSource.command()`**: prefers the native helper for `source in (auto,app)` when
+  a target pid is known (`[exe, --pid, N, --rate, R]`), else the Python **system**-loopback fallback.
+  Added `_native_app_helper()` resolver (`CAPTURE_AUDIOCAP_WIN` → beside the frozen daemon → cargo
+  output). **Fixed a latent bug**: the Python fallback used `parents[3]` (→ `src/helper`, which never
+  exists) — corrected to `parents[4]` (repo root); there was no Windows guard like the macOS
+  `test_helper_path`.
+- **Verified (interactive session, real audio):** standalone — captured a looping-WAV process →
+  `audio.s16le`-equivalent rms ~2113, correct READY. Integrated — `capture daemon start` +
+  `capture start --pid <player> --no-screenshots` wrote a **non-silent `audio.s16le`** (136 KB, rms
+  ~1526) through the full daemon→CaptureSession→AudioCapture→native-helper path. `command()` resolution
+  unit-checked; smoke **67/67**.
+- **Toolchain finding (Smart App Control):** Cargo's freshly-compiled **build-script** probe exes were
+  **blocked** by Smart App Control/WDAC (`os error 4551`), though the final unsigned helper/GUI exes
+  *run*. Workaround: build into the GUI's already-cleared `target/` (`CARGO_TARGET_DIR`) so cleared
+  build scripts aren't re-run; matched the helper to `windows` **0.61** (gpui's version) to reuse them.
+  This makes SAC a real signing concern for the installer (documented in windows-release.md §5).
+- **Also:** gpui 0.2.2 uses a **DirectX** renderer on Windows (corrects an earlier blade/Vulkan guess).
+- Specs synced: helper-contract.md (native helper as a conforming impl + argv), platform-abstraction.md
+  (mapping/files/config/open-item), windows-release.md (files/build-step/§5 SAC/§Tests), features.json #34.
+- **Next:** Phase 2 (GUI runtime macOS-isms → usable on Windows) or Phase 3 (tray agent) / Phase 4
+  (installer). Native helper still needs: signed packaging beside the daemon, a multi-app isolation A/B,
+  and GUI source labeling (system-mix vs per-process).
+
+---
+
+## Session 56 — 2026-06-17
+**Agent**: builder (**Windows box**, branch **windows-support**) — **Phase 0** of the Windows port:
+core-portability fixes + make the GUI build/run on Windows. Verified on this box.
+- **Python core-portability (3 fixes)**: `cli/__init__.py` `daemon start` now branches
+  `start_new_session` (POSIX) vs `creationflags=CREATE_NEW_PROCESS_GROUP|CREATE_NO_WINDOW` (Windows);
+  `vision_client._encode_image` chains `sips` → **Pillow** (`_downscale_sips`/`_downscale_pillow`, lazy
+  PIL) → raw-PNG; `import_media.import_file` raises a clear `NotImplementedError` on non-macOS (no more
+  confusing lazy-`platform.macos` ImportError). Corrected the earlier audit: import_media's macOS import
+  was already lazy (no daemon-import crash) and vision already had a raw-PNG fallback.
+- **GUI compile/run (Rust)**: `gui/src/daemon.rs` `spawn_detached` is now `#[cfg]`-branched (unix
+  `process_group(0)` vs Windows `creation_flags(0x0800_0200)`) — this was the one **hard compile error**
+  on Windows; `bundled_daemon`/`skill_source` paths are per-OS for the planned Windows layout
+  (`captured\captured.exe`, `skill\` beside `capture-gui.exe`). The CG screen-perm FFI was already
+  `#[cfg(target_os="macos")]`-gated.
+- **Verified on Windows (this box, Python 3.12 venv + Rust 1.95 MSVC)**: smoke **67/67**; live
+  `capture daemon start → status(running, platform=win32) → stop`; `cargo build` of the GUI clean
+  (~2m20s, gpui 0.2.2 + DirectX); the GUI **renders** (window + DirectX renderer, `RENDERER_OK`) when
+  launched in the interactive desktop via `scripts/run_interactive.ps1`. From a NON-interactive shell
+  the GUI renderer fails with `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE (0x887A0022)` — the documented WinSta0
+  requirement (the daemon needs no GPU). `gui/src/main.rs:59` `unwrap()`s renderer creation → make it
+  graceful before shipping (noted in windows-release.md).
+- **Finding**: gpui 0.2.2 uses a **DirectX** renderer on Windows (so #34's "DX11 backend" is right;
+  blade-graphics is just a compiled dep). Specs synced (windows-release.md §1 → done + §Tests/open-items,
+  platform-abstraction.md, asr.md, daemon.md).
+- **Next (Phase 1/2)**: per-process audio native helper (#21/#34); GUI runtime macOS-isms (file picker
+  → rfd, open folder/URL → explorer/start, privacy deep-link → ms-settings, mic-grant) for functional
+  parity; then packaging (Phase 4) + auto-update/release (Phase 5).
+
+---
+
+## Session 55 — 2026-06-17
+**Agent**: builder (**Windows box**, new branch **windows-support**) — full-cycle Windows support:
+audit + planning + **specs-first** (no code yet, per request).
+- **Branch**: cut `windows-support` from `main`. Reconciled state: this box's `main` already carries the
+  V2 + Windows groundwork (12 unpushed commits from `162222a V2 … multi-OS groundwork`); `origin/v2` has
+  nothing `main` lacks; the macOS box's 0.2.x sessions (40–54) are committed only on **that** machine and
+  are NOT here.
+- **Audit**: ran a 9-investigator parallel workflow over every subsystem (backends, GUI, tray agent,
+  packaging, auto-update, release/CI, ASR, roadmap, core portability). Verdict: engine layer ~done +
+  live-verified (GDI+/EnumWindows/WASAPI loopback + faster-whisper CUDA captured an 8-video playlist
+  end-to-end); the gap is the **last mile** — installer, signing/SmartScreen, daemon lifecycle, native
+  tray agent (#36), GUI macOS-isms (won't compile on Windows: `process_group`, CG FFI), and a
+  Windows auto-update path.
+- **Decisions locked (owner)**: Inno Setup + winget; **logon task, never a Service**; **Rust** tray
+  agent (windows-rs + tray-icon); **don't bundle CUDA** but provide CPU-int8 / remote openai-compat /
+  Riva / minimal alternatives for non-NVIDIA boxes; **unsigned v1** with a `signtool` hook
+  (`CAPTURE_WIN_SIGN_*`) — SmartScreen fires once on the downloaded installer's first run, never on
+  captures or post-install launches.
+- **Specs written**: NEW `docs/specs/windows-release.md` (packaging/freeze, Inno Setup installer +
+  winget, daemon logon-task lifecycle, interactive-desktop preflight, signing/SmartScreen, cross-platform
+  auto-update, release/CI) and `docs/specs/agent-windows.md` (Rust tray agent, #36). Updated `asr.md`
+  (non-NVIDIA alternatives + planned platform-aware catalog / CUDA preflight / `/v1/asr/backend`),
+  `platform-abstraction.md` (per-process native helper plan, mic enumeration, core-portability leaks,
+  pointers), `windows.md` (disambiguation: it's the macOS GUI-window module), `docs/specs/README.md`
+  (two new rows + clarified the `windows.md` row), and `features.json` (#34/#36 → spec pointers +
+  decisions + auto-update/non-NVIDIA/core-portability acceptance criteria). `features.json` validates
+  (55 features).
+- **Corrected two audit overstatements against the real code**: `import_media` imports the macOS helper
+  **lazily inside the function** (macOS-only feature, does NOT crash daemon import on Windows);
+  `vision_client._encode_image` **falls back to the raw PNG** when `sips` is absent (indexing works on
+  Windows, just with fatter payloads). Confirmed real prereqs: `cli/__init__.py:53`
+  `start_new_session=True` (POSIX-only) and `Win32AudioSource.command(source="app")` → `None` without
+  pyaudiowpatch (system-loopback only).
+- **Next (Phase 0, when greenlit)**: fix the three core-portability leaks + `#[cfg]`-gate the GUI
+  macOS-isms so it compiles, then verify the daemon + a real capture on this box. No release/version
+  bump (specs-first; nothing shipped).
+
+---
+
 ## Session 54 — 2026-06-17
 **Agent**: builder (macOS box, branch **v2**) — skill optimization + 0.2.2 deploy + local commit.
 - **Skill (skill-creator):** rewrote `skills/capture/SKILL.md` Step 1 to the **app-first distribution**

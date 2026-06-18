@@ -28,9 +28,13 @@ on a Windows/NVIDIA box, which also enables the Whisper-vs-Nemotron benchmark (f
   (GDI `BitBlt`/`PrintWindow` → GDI+ scale + encode; sets per-monitor **DPI awareness** at import so
   captures aren't cropped on a scaled display), `Win32AudioSource` (WASAPI system loopback),
   `WindowsPlatform`.
-- `helper/audiocap_win.py` — Windows audio helper (analogue of `audiocap.swift`): WASAPI **loopback**
-  of the default output → 16 kHz mono s16le on stdout, with **auto-reconnect** on a stream error or
-  default-output-device change. Launched by `Win32AudioSource` (with `CREATE_NO_WINDOW`).
+- `helper/audiocap_win.py` — Windows audio helper (analogue of `audiocap.swift`): WASAPI **system
+  loopback** of the default output → 16 kHz mono s16le on stdout, with **auto-reconnect** on a stream
+  error or default-output-device change. Launched by `Win32AudioSource` (with `CREATE_NO_WINDOW`). The
+  **fallback** when no target pid is known or the native helper is absent.
+- `helper/audiocap_win_rs/` — Rust (`windows-rs`) **per-process** WASAPI loopback helper →
+  `audiocap_win.exe` (the #34 native helper). `Win32AudioSource` launches it with `--pid` when a target
+  pid is known, isolating that app's whole process tree (parity with macOS ScreenCaptureKit per-app).
 - `init.ps1` — Windows bootstrap (venv + editable install + smoke), parallel to `init.sh`.
 - `scripts/run_interactive.ps1` — run a command in the interactive desktop session (`WinSta0`) via a
   transient Interactive-logon scheduled task; `-NoWait` leaves it running (fire-and-forget).
@@ -88,7 +92,7 @@ for an unsupported platform. The MCP tools and the session output layout are unc
 |---|---|---|
 | Screenshots | `screencapture -l` + `sips` (`MacScreenGrabber`) | GDI `BitBlt`/`PrintWindow` → GDI+ scale+encode (`Win32ScreenGrabber`) — png/jpg/jpeg/tiff/gif/bmp + JPEG quality, zero extra deps |
 | Window discovery | Quartz `CGWindowList` (`MacWindowFinder`→`windows.py`) | `EnumWindows` + `QueryFullProcessImageNameW` (`Win32WindowFinder`) |
-| Per-app / system audio | ScreenCaptureKit `audiocap` helper (per-app) | WASAPI **system loopback** via `helper/audiocap_win.py` (captures the full output mix incl. the target app; auto-reconnects on device change). True per-**process** loopback is a future refinement. |
+| Per-app / system audio | ScreenCaptureKit `audiocap` helper (per-app) | **Per-process** WASAPI loopback via the native `audiocap_win.exe` (`helper/audiocap_win_rs/`, Process Loopback API + process-tree) when a target pid is known; else **system loopback** via `helper/audiocap_win.py` (full output mix, auto-reconnect on device change). |
 | Mic fallback | ffmpeg `avfoundation :default` | ffmpeg `dshow` with `CAPTURE_DSHOW_AUDIO` device (only if ffmpeg present) |
 | ASR | local Whisper (mlx/faster) | local Whisper (faster-whisper CUDA) **and** NVIDIA Nemotron via Riva |
 
@@ -131,6 +135,8 @@ final image directly (no temp file; the macOS `sips` path still uses a `.tmp.png
 ## Configuration
 - `CAPTURE_PLATFORM=auto|macos|windows` — force a backend (default `auto` = by `sys.platform`).
 - `CAPTURE_DSHOW_AUDIO` — Windows dshow microphone device name for the ffmpeg mic fallback.
+- `CAPTURE_AUDIOCAP_WIN` — explicit path to the native per-process helper (`audiocap_win.exe`);
+  otherwise resolved beside the frozen daemon (packaged) or from the cargo build output (dev).
 - Existing: `CAPTURE_WHISPER_MODEL`, `CAPTURE_RIVA_*`.
 - Packaging: `pyobjc-framework-Quartz` and `mlx-whisper` are gated by
   `sys_platform == "darwin"` in `pyproject.toml`, so the base package installs on Windows.
@@ -151,12 +157,36 @@ final image directly (no temp file; the macOS `sips` path still uses a `.tmp.png
   windows and the screen DC is the blank service desktop. **Escape hatch:**
   `scripts/run_interactive.ps1` runs a command in the logged-on user's interactive session via a
   transient Interactive-logon scheduled task. This was used to verify real-window capture
-  end-to-end (see Tests).
+  end-to-end (see Tests). The **GPUI app's DirectX renderer** has the same requirement: launched from
+  a non-interactive session it fails with `DXGI_ERROR_NOT_CURRENTLY_AVAILABLE (0x887A0022)`; in the
+  interactive desktop it creates its window + renderer fine (verified 2026-06-17). The daemon itself
+  needs no GPU.
 - `PrintWindow` may return black for some GPU/DWM-composited windows; `PW_RENDERFULLCONTENT` is
   used and it falls back to `BitBlt` from the window DC. A capture-by-screen-region alternative is
   not implemented.
-- Windows mic capture requires a configured dshow device (no `:default` exists for dshow).
+- Windows mic capture requires a configured dshow device (no `:default` exists for dshow), and
+  **mic device enumeration returns `[]`** on Windows (`AudioSource.list_input_devices` default impl —
+  there is no `--list-mics` analog for the Windows helper yet), so the GUI mic selector (#37) has no
+  devices to offer on Windows. Planned: WASAPI device enumeration.
+- **Per-process audio — native helper landed (dev, 2026-06-17).** `audiocap_win.exe`
+  (`helper/audiocap_win_rs/`, `windows-rs`: `ActivateAudioInterfaceAsync` +
+  `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK` with `INCLUDE_TARGET_PROCESS_TREE`) captures one app's
+  whole process tree at 16 kHz mono s16le. `Win32AudioSource.command` prefers it when a target pid is
+  known, falling back to `audiocap_win.py` (system mix). **Verified:** rms ~2113 capturing a playing
+  process; an integrated daemon capture wrote a non-silent `audio.s16le` (rms ~1526). Also fixed the
+  `audiocap_win.py` path resolution (`parents[3]` → `src/helper`, which never existed → `parents[4]`,
+  the repo root). Remaining: ship the (signed) exe in the M4 installer (windows-release.md); multi-app
+  isolation A/B; mic enumeration.
+- **Shared-core portability leaks (Windows) — fixed 2026-06-17.** Three spots in the
+  "platform-neutral" core assumed POSIX/macOS; all now handled: `cli/__init__.py` `daemon start`
+  branches `start_new_session` (POSIX) vs `creationflags=CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`
+  (Windows); `vision_client._encode_image` chains `sips` → Pillow → raw PNG; `import_media.import_file`
+  raises a clear `NotImplementedError` on non-macOS (file-import stays macOS-only until a Windows
+  ffmpeg path). Verified: smoke 67/67 + a live daemon start/stop on Windows. See
+  [windows-release.md](windows-release.md) §Behavior §1.
 - CI across both OSes is not set up (feature #19).
+- **Full-cycle Windows product** (installer, signing, daemon logon-task lifecycle, in-app auto-update):
+  see [windows-release.md](windows-release.md); the native Windows tray agent: [agent-windows.md](agent-windows.md).
 
 ## Tests
 - `tests/smoke.py` is cross-platform and passes **20/20 on Windows** through the abstraction

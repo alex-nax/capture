@@ -53,6 +53,7 @@ struct LiveState {
     import_progress: Option<(String, f32)>, // active import: (phase, fraction), one at a time
     import_result: Option<Result<String, String>>, // Ok(session_id) / Err(msg), drained by poll
     index_progress: HashMap<String, (String, f32)>, // session id -> (phase, fraction)
+    runtime_install: HashMap<String, f32>, // ASR runtime id -> install fraction (0..1)
     index_done: Vec<(String, Option<String>)>, // (session id, error?) — Some=failed; drained by poll
 }
 
@@ -110,6 +111,7 @@ pub struct CaptureApp {
     hotkey_id: u32,
     skill_status: Vec<skill::SkillStatus>, // per skill::AGENTS, cached
     asr: daemon::AsrModels,                // Whisper model catalog, polled
+    runtimes: daemon::AsrRuntimes,         // ASR runtime registry (install/select), polled
     perms: daemon::Permissions,            // macOS TCC status, polled
     cmd_input: String,                     // "launch a command/URL" field buffer
     cmd_focus: FocusHandle,                // focus for the command field
@@ -124,6 +126,7 @@ pub struct CaptureApp {
     capture_screenshots: bool,             // off => audio-only capture (no screenshots)
     update_info: Option<update::UpdateInfo>, // a newer GitHub release than this build (#48), if any
     updating: bool,                        // an update download/install is in flight
+    update_progress: Option<(u64, u64)>,   // (downloaded, total) bytes while the update DMG/exe streams (#48); None = idle
     asr_language: String,                  // transcription language filter buffer (#45; searchable dropdown)
     asr_language_focus: FocusHandle,       // focus for the language field
     lang_dropdown_open: bool,              // the searchable language dropdown is expanded
@@ -217,17 +220,43 @@ fn settings_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".capture").join("gui-settings.json"))
 }
 
-/// Native macOS file picker (osascript) for the "Import…" action: returns the chosen
-/// media file's POSIX path, or None if the user cancelled (or the dialog failed). The
-/// UTI filter shows audio + video files. Blocking — call it off the UI thread.
+/// File picker for the "Import…" action: returns the chosen media file's path, or None if
+/// the user cancelled / the dialog failed. macOS uses `osascript`; Windows a PowerShell
+/// `OpenFileDialog` (no extra crate — `powershell.exe` is signed, so Smart App Control
+/// doesn't block it); other platforms try `zenity`. Blocking — call it off the UI thread.
 fn pick_media_file() -> Option<String> {
-    let script = r#"POSIX path of (choose file with prompt "Import audio or video as a session" of type {"public.audio","public.movie","public.mpeg-4","com.apple.quicktime-movie"})"#;
-    let out = std::process::Command::new("osascript").arg("-e").arg(script).output().ok()?;
-    if !out.status.success() {
-        return None; // user cancelled (AppleScript error -128) or osascript unavailable
+    #[cfg(target_os = "macos")]
+    {
+        let script = r#"POSIX path of (choose file with prompt "Import audio or video as a session" of type {"public.audio","public.movie","public.mpeg-4","com.apple.quicktime-movie"})"#;
+        let out = std::process::Command::new("osascript").arg("-e").arg(script).output().ok()?;
+        if !out.status.success() {
+            return None; // user cancelled (AppleScript error -128) or osascript unavailable
+        }
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if path.is_empty() { None } else { Some(path) }
     }
-    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if path.is_empty() { None } else { Some(path) }
+    #[cfg(target_os = "windows")]
+    {
+        let script = r#"Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Title = 'Import audio or video as a session'; $f.Filter = 'Media|*.mp4;*.mov;*.m4a;*.mp3;*.wav;*.mkv;*.webm;*.aac;*.flac|All files|*.*'; if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($f.FileName) }"#;
+        let out = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-STA", "-Command", script])
+            .output()
+            .ok()?;
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if path.is_empty() { None } else { Some(path) }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let out = std::process::Command::new("zenity")
+            .args(["--file-selection", "--title=Import audio or video as a session"])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if path.is_empty() { None } else { Some(path) }
+    }
 }
 
 /// The persisted index-endpoint config (#52): `(provider, host, port, key)`. Migrated from the
@@ -452,6 +481,7 @@ impl CaptureApp {
             hotkey_id: 0,
             skill_status: Vec::new(),
             asr: daemon::AsrModels::default(),
+            runtimes: daemon::AsrRuntimes::default(),
             perms: daemon::Permissions::default(),
             cmd_input: String::new(),
             cmd_focus: cx.focus_handle(),
@@ -466,6 +496,7 @@ impl CaptureApp {
             capture_screenshots,
             update_info: None,
             updating: false,
+            update_progress: None,
             asr_language: String::new(),
             asr_language_focus: cx.focus_handle(),
             lang_dropdown_open: false,
@@ -604,6 +635,7 @@ impl CaptureApp {
                 self.windows = d.windows().unwrap_or_default();
             }
             self.asr = d.asr_models().unwrap_or_default();
+            self.runtimes = d.asr_runtimes().unwrap_or_default();
             self.perms = d.permissions().unwrap_or_default();
         }
     }
@@ -638,6 +670,22 @@ impl CaptureApp {
                         Some("asr_download_done") | Some("asr_download_error") => {
                             if let Some(repo) = ev.get("repo").and_then(|v| v.as_str()) {
                                 st.asr_progress.remove(repo);
+                            }
+                            continue;
+                        }
+                        // ASR runtime-pack installs are daemon-wide (no session_id).
+                        Some("asr_runtime_install") => {
+                            if let (Some(id), Some(frac)) = (
+                                ev.get("id").and_then(|v| v.as_str()),
+                                ev.get("fraction").and_then(|v| v.as_f64()),
+                            ) {
+                                st.runtime_install.insert(id.to_string(), frac as f32);
+                            }
+                            continue;
+                        }
+                        Some("asr_runtime_install_done") | Some("asr_runtime_install_error") => {
+                            if let Some(id) = ev.get("id").and_then(|v| v.as_str()) {
+                                st.runtime_install.remove(id);
                             }
                             continue;
                         }
@@ -1148,20 +1196,46 @@ impl CaptureApp {
     /// Download + install a confirmed update; the detached updater quits + relaunches the app.
     fn start_update(&mut self, info: update::UpdateInfo, cx: &mut Context<Self>) {
         self.updating = true;
-        self.message = format!("downloading update v{}… the app will restart", info.version).into();
+        self.update_progress = Some((0, 0));
+        self.message = format!("downloading update v{}…", info.version).into();
         cx.notify();
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        use std::sync::Arc;
+        // The download is blocking, so it runs on the background executor while it bumps these shared
+        // atomics; a 150ms ticker mirrors them into `update_progress` and breaks on the done flag.
+        let dl = Arc::new(AtomicU64::new(0));
+        let tot = Arc::new(AtomicU64::new(0));
+        let done = Arc::new(AtomicBool::new(false));
+        let (dl2, tot2, done2) = (dl.clone(), tot.clone(), done.clone());
         cx.spawn(async move |this, cx| {
-            let r = cx
-                .background_executor()
-                .spawn(async move { update::download_and_install(&info) })
-                .await;
+            let task = cx.background_executor().spawn(async move {
+                let res = update::download_and_install(&info, move |d, t| {
+                    dl2.store(d, Ordering::Relaxed);
+                    tot2.store(t, Ordering::Relaxed);
+                });
+                done2.store(true, Ordering::Relaxed);
+                res
+            });
+            loop {
+                Timer::after(Duration::from_millis(150)).await;
+                let (d, t) = (dl.load(Ordering::Relaxed), tot.load(Ordering::Relaxed));
+                let _ = this.update(cx, |v, cx| {
+                    v.update_progress = Some((d, t));
+                    cx.notify();
+                });
+                if done.load(Ordering::Relaxed) {
+                    break;
+                }
+            }
+            let r = task.await;
             let _ = this.update(cx, |v, cx| {
+                v.update_progress = None;
                 if let Err(e) = r {
                     v.updating = false;
                     v.message = format!("update failed: {e}").into();
-                    cx.notify();
                 }
                 // On success the updater script quits this app shortly; nothing more to do.
+                cx.notify();
             });
         })
         .detach();
@@ -1225,6 +1299,59 @@ impl CaptureApp {
                 v.message = match r {
                     Ok(()) => format!("active model: {short}").into(),
                     Err(e) => format!("set model failed: {e}").into(),
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Install an ASR runtime pack on the daemon (download/extract in the background; progress streams
+    /// over SSE into `live.runtime_install`; the daemon makes it active when done).
+    fn install_runtime(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(d) = self.daemon.clone() else {
+            self.message = "no daemon".into();
+            cx.notify();
+            return;
+        };
+        self.live.lock().unwrap().runtime_install.insert(id.clone(), 0.0);
+        self.message = format!("installing {id} runtime…").into();
+        cx.notify();
+        let live = self.live.clone();
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn({
+                    let id = id.clone();
+                    async move { d.asr_runtime_install(&id) }
+                })
+                .await;
+            let _ = this.update(cx, |v, cx| {
+                if let Err(e) = r {
+                    live.lock().unwrap().runtime_install.remove(&id);
+                    v.message = format!("runtime install failed: {e}").into();
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Select an installed ASR runtime (new captures transcribe with it).
+    fn set_runtime(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(d) = self.daemon.clone() else { return };
+        cx.spawn(async move |this, cx| {
+            let r = cx
+                .background_executor()
+                .spawn({
+                    let id = id.clone();
+                    async move { d.asr_set_runtime(&id) }
+                })
+                .await;
+            let _ = this.update(cx, |v, cx| {
+                v.message = match r {
+                    Ok(()) => format!("active runtime: {id}").into(),
+                    Err(e) => format!("set runtime failed: {e}").into(),
                 };
                 cx.notify();
             });
@@ -1938,14 +2065,20 @@ impl CaptureApp {
 
     // -- per-capture actions ----------------------------------------------------
 
-    /// Reveal a capture's output folder in Finder (macOS `open`).
+    /// Reveal a capture's output folder in the OS file manager (macOS `open` / Windows
+    /// `explorer` / else `xdg-open`).
     fn open_folder(&mut self, dir: String, cx: &mut Context<Self>) {
         if dir.is_empty() {
             self.message = "no folder for this capture".into();
             cx.notify();
             return;
         }
+        #[cfg(target_os = "macos")]
         let ok = std::process::Command::new("open").arg(&dir).spawn().is_ok();
+        #[cfg(target_os = "windows")]
+        let ok = std::process::Command::new("explorer").arg(&dir).spawn().is_ok();
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let ok = std::process::Command::new("xdg-open").arg(&dir).spawn().is_ok();
         self.message = if ok {
             format!("opened {dir}").into()
         } else {
@@ -2121,33 +2254,68 @@ impl CaptureApp {
     /// and the shared Team ID carries the grant to the daemon. (The daemon itself
     /// can't prompt — it aborts headless.)
     fn request_microphone(&mut self, cx: &mut Context<Self>) {
-        let spawned = std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(|d| d.join("CaptureBar")))
-            .map(|agent| {
-                std::process::Command::new(agent)
-                    .arg("--request-mic")
-                    .spawn()
-                    .is_ok()
-            })
-            .unwrap_or(false);
-        self.message = if spawned {
-            "approve the Microphone prompt…".into()
-        } else {
-            "could not start the mic request".into()
-        };
+        #[cfg(target_os = "macos")]
+        {
+            let spawned = std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(|d| d.join("CaptureBar")))
+                .map(|agent| {
+                    std::process::Command::new(agent)
+                        .arg("--request-mic")
+                        .spawn()
+                        .is_ok()
+                })
+                .unwrap_or(false);
+            self.message = if spawned {
+                "approve the Microphone prompt…".into()
+            } else {
+                "could not start the mic request".into()
+            };
+        }
+        #[cfg(target_os = "windows")]
+        {
+            // Windows has no per-app mic prompt to trigger programmatically; point the
+            // user at Settings → Privacy → Microphone.
+            let _ = std::process::Command::new("cmd")
+                .args(["/c", "start", "", "ms-settings:privacy-microphone"])
+                .spawn();
+            self.message = "allow microphone access in Settings → Privacy → Microphone".into();
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            self.message = "grant microphone access in your OS privacy settings".into();
+        }
         cx.notify();
     }
 
-    /// Open System Settings → Privacy & Security → `pane` (grant OR revoke happens
-    /// there — apps can't toggle a TCC right themselves).
+    /// Open the OS privacy settings for `pane` (grant OR revoke happens there — apps can't
+    /// toggle the right themselves). macOS deep-links the Security pane; Windows opens the
+    /// matching `ms-settings:` page.
     fn open_privacy_settings(&mut self, pane: &'static str, cx: &mut Context<Self>) {
-        let _ = std::process::Command::new("open")
-            .arg(format!(
-                "x-apple.systempreferences:com.apple.preference.security?{pane}"
-            ))
-            .spawn();
-        self.message = "opened System Settings — toggle Capture to grant or revoke".into();
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("open")
+                .arg(format!(
+                    "x-apple.systempreferences:com.apple.preference.security?{pane}"
+                ))
+                .spawn();
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let uri = if pane.to_lowercase().contains("microphone") {
+                "ms-settings:privacy-microphone"
+            } else {
+                "ms-settings:privacy"
+            };
+            let _ = std::process::Command::new("cmd")
+                .args(["/c", "start", "", uri])
+                .spawn();
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            let _ = pane;
+        }
+        self.message = "opened Settings — adjust the permission there".into();
         cx.notify();
     }
 
@@ -2554,6 +2722,86 @@ impl Render for CaptureApp {
         } else {
             "Whisper models  (runtime unavailable in this daemon — capture still works)".to_string()
         };
+        // Voice-recognition runtime picker (#58): no engine is bundled by default — the user installs
+        // a runtime pack matching their hardware, then picks a model (below). Install progress comes
+        // from the SSE-fed `runtime_install` map; a GPU hint suggests the right one.
+        let rt_install = self.live.lock().unwrap().runtime_install.clone();
+        let rt_rows: Vec<_> = self
+            .runtimes
+            .runtimes
+            .iter()
+            .map(|rt| {
+                let id = rt.id.clone();
+                let prog = rt_install.get(&id).copied();
+                let (status, color) = if rt.active {
+                    ("● active".to_string(), 0x66d9a0)
+                } else if let Some(f) = prog {
+                    (format!("↓ {:.0}%", (f * 100.0).clamp(0.0, 100.0)), 0x66d9a0)
+                } else if rt.installed {
+                    ("✓ installed".to_string(), 0x9aa0a6)
+                } else {
+                    (String::new(), 0x9aa0a6)
+                };
+                let busy = prog.is_some();
+                let mut header = div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(div().flex_1().child(rt.label.clone()))
+                    .child(div().text_color(rgb(color)).child(status));
+                // remote: "Use" (no install); local not-installed: "Install"; installed & inactive: "Use".
+                if rt.kind == "remote" && !rt.active {
+                    let i = id.clone();
+                    header = header.child(
+                        div().id(SharedString::from(format!("rt-use-{id}"))).px_2().py_1().rounded_md()
+                            .cursor_pointer().bg(rgb(0x2d4f67)).child("Use")
+                            .on_click(cx.listener(move |this, _, _, cx| this.set_runtime(i.clone(), cx))),
+                    );
+                } else if rt.kind != "remote" && !rt.installed && !busy {
+                    let i = id.clone();
+                    header = header.child(
+                        div().id(SharedString::from(format!("rt-inst-{id}"))).px_2().py_1().rounded_md()
+                            .cursor_pointer().bg(rgb(0x2d4f67)).child("Install")
+                            .on_click(cx.listener(move |this, _, _, cx| this.install_runtime(i.clone(), cx))),
+                    );
+                } else if rt.installed && !rt.active {
+                    let i = id.clone();
+                    header = header.child(
+                        div().id(SharedString::from(format!("rt-use-{id}"))).px_2().py_1().rounded_md()
+                            .cursor_pointer().bg(rgb(0x2d4f67)).child("Use")
+                            .on_click(cx.listener(move |this, _, _, cx| this.set_runtime(i.clone(), cx))),
+                    );
+                }
+                let mut row = div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(header)
+                    .child(div().text_color(rgb(0x6b7075)).child(rt.requires.clone()));
+                if busy {
+                    let frac = prog.unwrap_or(0.0).clamp(0.0, 1.0);
+                    row = row.child(
+                        div().w_full().h(px(4.0)).rounded_full().bg(rgb(0x2a2a2a)).child(
+                            div().h(px(4.0)).w(relative(frac)).rounded_full().bg(rgb(0x66d9a0)),
+                        ),
+                    );
+                }
+                row
+            })
+            .collect();
+        let rt_hint = if self.runtimes.gpu.nvidia {
+            "Voice recognition runtime  (NVIDIA GPU detected — the CUDA runtime is recommended)"
+        } else {
+            "Voice recognition runtime  (no NVIDIA GPU detected — use CPU or a remote endpoint)"
+        };
+        let runtime_panel = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(div().text_color(rgb(0x9aa0a6)).child(rt_hint.to_string()))
+            .children(rt_rows);
+
         let mut asr_panel = div()
             .flex()
             .flex_col()
@@ -2805,7 +3053,12 @@ impl Render for CaptureApp {
                                 rgb(0xe0e0e0)
                             })
                             .child(if self.cmd_input.is_empty() {
-                                "command or URL — e.g. open https://…  (Enter to launch)".to_string()
+                                #[cfg(target_os = "macos")]
+                                { "command or URL — e.g. open https://…  (Enter to launch)".to_string() }
+                                #[cfg(target_os = "windows")]
+                                { "command or URL — e.g. cmd /c start https://…  (Enter to launch)".to_string() }
+                                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+                                { "command or URL — e.g. xdg-open https://…  (Enter to launch)".to_string() }
                             } else {
                                 format!("{}▏", self.cmd_input)
                             })
@@ -2850,7 +3103,41 @@ impl Render for CaptureApp {
                     .child(div().min_w(px(70.0)).text_color(rgb(0x9aa0a6)).child("App"));
                 match (&self.update_info, self.updating) {
                     (_, true) => {
-                        row = row.child(div().text_color(rgb(0x8ab4f8)).child("downloading update… the app will restart"));
+                        // The DMG/exe is ~175 MB, so show a real progress bar (#48). `t == 0` means the
+                        // server didn't send Content-Length yet → indeterminate (just downloaded MB).
+                        let (d, t) = self.update_progress.unwrap_or((0, 0));
+                        let dmb = d as f64 / 1_048_576.0;
+                        if t > 0 {
+                            let frac = (d as f32 / t as f32).clamp(0.0, 1.0);
+                            let tmb = t as f64 / 1_048_576.0;
+                            row = row
+                                .child(
+                                    div()
+                                        .w(px(160.0))
+                                        .h(px(6.0))
+                                        .rounded_sm()
+                                        .bg(rgb(0x3a3a3a))
+                                        .child(
+                                            div()
+                                                .h(px(6.0))
+                                                .w(px(160.0 * frac))
+                                                .rounded_sm()
+                                                .bg(rgb(0x4a90d9)),
+                                        ),
+                                )
+                                .child(div().text_color(rgb(0x8ab4f8)).child(format!(
+                                    "downloading update… {}%  ({:.0}/{:.0} MB)",
+                                    (frac * 100.0) as i32,
+                                    dmb,
+                                    tmb,
+                                )));
+                        } else {
+                            row = row.child(
+                                div()
+                                    .text_color(rgb(0x8ab4f8))
+                                    .child(format!("downloading update… ({:.0} MB)", dmb)),
+                            );
+                        }
                     }
                     (Some(info), false) => {
                         let info2 = info.clone();
@@ -3164,6 +3451,7 @@ impl Render for CaptureApp {
                             .children(session_rows),
                     )
             }))
+            .children(sett.then(|| runtime_panel))
             .children(sett.then(|| asr_panel))
             .children(playback.then(|| self.render_playback(window, cx))),
             )

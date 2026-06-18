@@ -281,6 +281,48 @@ class CaptureDaemon(ThreadingHTTPServer):
         threading.Thread(target=run, name=f"asr-dl-{repo}", daemon=True).start()
         return {"repo": repo, "started": True}
 
+    def start_runtime_install(self, rid: str, source: "str | None" = None) -> dict:
+        """Install an ASR runtime pack in the background, then make it active. Progress fans to SSE
+        as ``asr_runtime_install`` → ``asr_runtime_install_done`` / ``asr_runtime_install_error``.
+        ``source`` (optional) overrides the pack URL with a local zip/dir or an explicit URL."""
+        from ..core.asr import runtimes as _rt
+
+        key = f"rt:{rid}"
+        with self._asr_lock:
+            if key in self._asr_downloading:
+                return {"id": rid, "started": False, "reason": "already installing"}
+            self._asr_downloading.add(key)
+
+        def run() -> None:
+            last = -1.0
+
+            def on_progress(done: int, total: int, fname: str) -> None:
+                nonlocal last
+                frac = done / total if total else 0.0
+                if frac - last < 0.01 and frac < 1.0:
+                    return
+                last = frac
+                self.sse_broadcast(
+                    {"type": "asr_runtime_install", "id": rid, "downloaded": done,
+                     "total": total, "fraction": round(frac, 4)}
+                )
+
+            try:
+                _rt.install(rid, source=source, on_progress=on_progress)
+                _rt.set_active(rid)
+                self.sse_broadcast({"type": "asr_runtime_install_done", "id": rid})
+            except Exception as e:
+                log.warning("ASR runtime install failed (%s): %s", rid, e)
+                self.sse_broadcast(
+                    {"type": "asr_runtime_install_error", "id": rid, "error": f"{type(e).__name__}: {e}"}
+                )
+            finally:
+                with self._asr_lock:
+                    self._asr_downloading.discard(key)
+
+        threading.Thread(target=run, name=f"rt-install-{rid}", daemon=True).start()
+        return {"id": rid, "started": True}
+
     def start_retranscribe(self, session_id: str, session_dir: str, asr_backend: str,
                            model: str | None, language: str | None = None,
                            chunk_seconds: float | None = None) -> dict:
@@ -581,7 +623,26 @@ class _Handler(BaseHTTPRequestHandler):
         raise _ApiError(404, "not found")
 
     def _route_asr(self, method: str, rest: list[str], q: dict) -> tuple[int, dict]:
-        """ASR model manager: list / download / select the active Whisper model."""
+        """ASR runtime + model manager: pick/install a runtime, then list/download/select a model."""
+        from ..core.asr import runtimes as _rt
+
+        # --- runtime selection (no engine bundled by default; user installs one) ---
+        if method == "GET" and rest == ["asr", "runtimes"]:
+            return 200, _rt.status_payload()
+        if method == "POST" and rest == ["asr", "runtimes", "install"]:
+            body = self._read_json()
+            rid = body.get("id")
+            if _rt.get(rid) is None:
+                raise _ApiError(400, f"unknown runtime {rid!r}")
+            return 202, self.server.start_runtime_install(rid, body.get("source"))
+        if method == "POST" and rest == ["asr", "runtime"]:
+            try:
+                return 200, {"active": _rt.set_active(self._read_json().get("id"))}
+            except ValueError as e:
+                raise _ApiError(400, str(e))
+        if method == "GET" and rest == ["asr", "backend"]:
+            return 200, _rt.backend_report()
+        # --- model manager ---
         if method == "GET" and rest == ["asr", "models"]:
             with self.server._asr_lock:
                 downloading = set(self.server._asr_downloading)

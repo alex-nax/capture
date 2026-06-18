@@ -240,6 +240,26 @@ Factory:
 - **faster-whisper now supports CUDA** (device/compute auto-detected + env-overridable, with a Windows
   cuBLAS/cuDNN DLL-path fix and a CPU fallback). Used as benchmark "Backend A" in
   [`../asr-benchmark.md`](../asr-benchmark.md) vs local Nemotron (#23). Riva/Nemotron remains unverified.
+- **Windows / non-NVIDIA ASR.** The Windows release ([windows-release.md](windows-release.md))
+  **doesn't bundle CUDA** but always has a working ASR path without an NVIDIA GPU: `FasterWhisper`
+  falls back to **CPU `int8`** (above); `openai_compat` is a stdlib-only remote backend
+  (`CAPTURE_OPENAI_ASR_URL`); `nemotron`/Riva is a remote option; and the `minimal` extra is
+  screenshots-only. So a non-NVIDIA Windows box never hard-fails.
+- **Runtime-aware model manager (done 2026-06-17).** `manager.runtime_available()` now reports True for
+  **either** mlx-whisper **or** faster-whisper (it was mlx-only → on Windows the frozen daemon reported
+  "ASR runtime unavailable" despite bundling faster-whisper). The catalog is **platform-aware**:
+  `manager.catalog()` returns the `mlx-community/whisper-*` repos on Apple Silicon and
+  `Systran/faster-whisper-*` repos (tiny→large-v3) on the faster-whisper build; `default_repo()` and the
+  catalog validation follow suit, and `is_downloaded` recognizes the CT2 `model.bin` weight. A stale
+  cross-platform `whisper_model` config (e.g. an mlx repo synced onto Windows) is ignored in favour of
+  the default so the backend never gets a model it can't load. `FasterWhisper.__init__` now also reads
+  the GUI-persisted `whisper_model` config (it previously read only env→default, so a GUI model pick
+  didn't reach it), skipping mlx-only repos.
+- **[planned] CUDA fallback is silent.** A failed CUDA load logs a generic warning and drops to CPU
+  `int8` without saying which DLL/version failed, and nothing reports the chosen device to the GUI.
+  Planned: a **CUDA preflight** (verify `nvidia-cublas-cu12` + `nvidia-cudnn-cu12` are present, with a
+  clear install hint) and a `GET /v1/asr/backend` report (`{backend, device, compute_type,
+  fallback_reason}`) the GUI can show.
 
 ## Tests
 - `tests/smoke.py` is the project smoke harness; ASR coverage here should be verified through it where

@@ -1,3 +1,6 @@
+// Release builds on Windows are a GUI app (no console window; closing a stray console must not
+// kill the app). Debug keeps the console for dev diagnostics. No-op on non-Windows targets.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 //! capture-gui: native GPUI desktop client for the capture-mcp daemon.
 
 mod app;
@@ -49,14 +52,23 @@ fn main() {
 
     Application::new().with_assets(Assets).run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(760.0), px(680.0)), cx);
-        cx.open_window(
+        if let Err(e) = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
             |_, cx| cx.new(|cx| CaptureApp::new(cx)),
-        )
-        .unwrap();
+        ) {
+            eprintln!("capture-gui: could not open a window / create the renderer: {e:?}");
+            #[cfg(target_os = "windows")]
+            eprintln!(
+                "capture-gui: the GPU/DirectX renderer needs the interactive desktop (a logged-on \
+                 session). Launch it from your desktop or via the tray agent — not from a \
+                 service/SSH/non-interactive context."
+            );
+            cx.quit();
+            return;
+        }
         cx.activate(true);
         // Launched by the native menu-bar agent: this process is *just* the window.
         // GPUI doesn't quit on last-window-close, so exit explicitly when the window

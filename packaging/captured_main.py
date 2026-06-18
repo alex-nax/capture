@@ -8,21 +8,42 @@ import sys
 
 
 def _asr_selftest() -> int:
-    import numpy as np
+    # Activate the chosen runtime pack first (so an externally-installed engine is importable in
+    # the frozen daemon — the core of the runtime-pack architecture, docs/specs/asr-runtimes.md).
+    from capture_mcp.core.asr import runtimes
 
-    import mlx.core as mx
+    rid = runtimes.activate()
+    print(f"runtime activated: {rid}")
 
-    x = mx.ones((64, 64))
-    mx.eval(x @ x)  # forces Metal kernel compile/exec from the bundled mlx.metallib
-    print(f"mlx Metal OK (dtype={x.dtype})")
+    # macOS bundles mlx; verify the Metal path. Else verify the externally-installed faster-whisper
+    # pack loads its CTranslate2 C-extension in the frozen interpreter (the keystone check).
+    import importlib.util
 
-    import mlx_whisper
+    if importlib.util.find_spec("mlx_whisper") is not None:
+        import numpy as np
 
-    pcm = np.zeros(16000, dtype=np.float32)  # 1s @ 16k; exercises the model load path
-    result = mlx_whisper.transcribe(
-        pcm, path_or_hf_repo="mlx-community/whisper-tiny", word_timestamps=False
+        import mlx.core as mx
+
+        x = mx.ones((64, 64))
+        mx.eval(x @ x)  # forces Metal kernel compile/exec from the bundled mlx.metallib
+        print(f"mlx Metal OK (dtype={x.dtype})")
+        import mlx_whisper
+
+        pcm = np.zeros(16000, dtype=np.float32)
+        result = mlx_whisper.transcribe(
+            pcm, path_or_hf_repo="mlx-community/whisper-tiny", word_timestamps=False
+        )
+        print(f"mlx_whisper OK (segments={len(result.get('segments', []))})")
+        return 0
+
+    import ctranslate2  # the binary C-extension from the runtime pack
+
+    import faster_whisper
+
+    print(
+        f"faster-whisper OK (ctranslate2={ctranslate2.__version__}, "
+        f"cuda_devices={ctranslate2.get_cuda_device_count()})"
     )
-    print(f"mlx_whisper OK (segments={len(result.get('segments', []))})")
     return 0
 
 
@@ -37,6 +58,13 @@ if __name__ == "__main__":
 
     if "--asr-selftest" in sys.argv:
         raise SystemExit(_asr_selftest())
+
+    # Put the active ASR runtime pack on sys.path + DLL search path BEFORE anything imports an
+    # engine, so the frozen daemon can use an externally-installed runtime. No-op if none chosen.
+    from capture_mcp.core.asr import runtimes
+
+    runtimes.activate()
+
     from capture_mcp.daemon.server import main
 
     main()

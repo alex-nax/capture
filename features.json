@@ -510,11 +510,14 @@
       "id": 34,
       "category": "gui",
       "priority": "medium",
-      "description": "M4 — Windows release: GPUI app on the DX11 backend, Inno Setup installer (+ winget), logon-task daemon install, interactive-station preflight UX, and per-process audio via a NATIVE helper binary (windows-rs, ActivateAudioInterfaceAsync + PROCESS_LOOPBACK with INCLUDE_TARGET_PROCESS_TREE for Chromium-family apps) speaking the frozen 16kHz s16le PCM stdout contract — closes the per-process half of #21. Ship with honest SmartScreen messaging (Trusted Signing unavailable to individuals; OV cert does not clear cold-start).",
+      "description": "M4 — Windows release: GPUI app on the DX11 backend, Inno Setup installer (+ winget), logon-task daemon install, interactive-station preflight UX, and per-process audio via a NATIVE helper binary (windows-rs, ActivateAudioInterfaceAsync + PROCESS_LOOPBACK with INCLUDE_TARGET_PROCESS_TREE for Chromium-family apps) speaking the frozen 16kHz s16le PCM stdout contract — closes the per-process half of #21. Ship with honest SmartScreen messaging (Trusted Signing unavailable to individuals; OV cert does not clear cold-start). SPEC: docs/specs/windows-release.md. Decisions (2026-06-17, owner): Inno Setup + winget; logon task (not a Service); don't bundle CUDA (CPU int8 / remote openai-compat / Riva / screenshots-only minimal alternatives for non-NVIDIA boxes); unsigned v1 with a signtool hook (CAPTURE_WIN_SIGN_*); cross-platform in-app auto-update (generalize gui/src/update.rs + a PowerShell updater; both .dmg and .exe under one release tag). [2026-06-17] Per-process audio NATIVE helper landed + dev-verified: helper/audiocap_win_rs (Rust windows-rs; ActivateAudioInterfaceAsync + AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK + INCLUDE_TARGET_PROCESS_TREE) -> audiocap_win.exe, wired into Win32AudioSource (prefers it when a target pid is known; Python system-loopback fallback with the parents[3]->[4] path bug fixed). Verified: standalone capture rms ~2113 + integrated daemon audio.s16le rms ~1526; smoke 67/67. [2026-06-17] INSTALLER LANDED + dev-verified: packaging/build_windows.ps1 (PyInstaller freeze of the daemon — faster-whisper CPU, no CUDA libs — + Inno Setup packaging/capture.iss) -> CaptureSetup-0.2.5-x64.exe (74MB). Silent install lays out the full tree (agent+GUI+frozen daemon+native helper+skill+logon-task script); the frozen daemon serves /v1/health (platform=win32, SAC does not block it); uninstall clean. [2026-06-17 install feedback] Fixed 2 issues from a real Windows install: (1) a console window whose close killed the app — gui + agent main.rs now carry #![cfg_attr(not(debug_assertions), windows_subsystem=windows)] so RELEASE builds are GUI apps with no console (installer must ship release binaries); (2) 'Whisper runtime unavailable in this daemon' — manager.runtime_available()/catalog() are now runtime-aware (faster-whisper Systran/* catalog on Windows, not mlx-only) and FasterWhisper reads the GUI-persisted whisper_model config. Verified backend_available=True + Systran/faster-whisper-* catalog on the box. [2026-06-17] AUTO-UPDATE cross-platform: gui/src/update.rs now picks the OS asset (.dmg/macOS, CaptureSetup*.exe/Windows) and installs it — install_windows downloads the .exe, runs a detached PowerShell updater (stop Capture/capture-gui/captured -> installer /VERYSILENT in-place upgrade -> relaunch). GUI builds clean. Verifying needs a newer release to update to (done in the release flow, no throwaway version). Remaining for passes:true: cut a release (bump once) with both .dmg + .exe assets, verify the update both ways, + Authenticode signing + multi-app audio isolation A/B + GUI source labeling.",
       "acceptance_criteria": [
         "CaptureSetup-x64.exe installs and first capture works without a terminal",
         "Per-process loopback isolates a Chromium app's audio while other apps play sound",
-        "GUI labels system-mix vs per-process source correctly"
+        "GUI labels system-mix vs per-process source correctly",
+        "Core-portability prereqs fixed so the daemon runs on Windows (cli start uses creationflags, not start_new_session; vision indexing downscales via Pillow; capture_import degrades cleanly)",
+        "Non-NVIDIA Windows ASR works (CPU int8 or a configured remote endpoint) with no hard failure when CUDA is absent",
+        "In-app auto-update on Windows downloads the installer, runs it silently, and relaunches; the same release tag carries both the macOS .dmg and the Windows .exe"
       ],
       "passes": false,
       "dependencies": [
@@ -543,7 +546,7 @@
       "id": 36,
       "category": "gui",
       "priority": "medium",
-      "description": "Windows menu-bar/tray agent — the native sibling of the macOS CaptureBar (docs/specs/agent.md). A thin always-resident system-tray app (Win32 NOTIFYICON or WinUI/C#) that owns the persistent tray icon, the daemon lifecycle (spawn the bundled captured; stop it on Quit), and launches the GPUI window (capture-gui with CAPTURE_AGENT=1) on demand. Same role + same /v1 contract as the macOS agent; no shared code (native per-OS, owner's decision). Part of the M4 Windows release.",
+      "description": "Windows menu-bar/tray agent — the native sibling of the macOS CaptureBar (docs/specs/agent.md). A thin always-resident system-tray app in RUST (windows-rs + tray-icon/muda, owner's decision 2026-06-17) that owns the persistent tray icon, the daemon lifecycle (spawn the bundled captured with CREATE_NO_WINDOW; stop it on Quit if idle), and launches the GPUI window (capture-gui with CAPTURE_AGENT=1) on demand. Same role + same /v1 contract as the macOS agent; no shared code (native per-OS). Part of the M4 Windows release. SPEC: docs/specs/agent-windows.md. [2026-06-17] LANDED + dev-verified: agent/windows (Rust; tray-icon + muda + a minimal Win32 message loop) -> Capture.exe — stays resident, adopts/spawns the daemon (CREATE_NO_WINDOW), launches capture-gui.exe (CAPTURE_AGENT=1); + packaging/register_logon_task.ps1 (interactive logon task, verified register/unregister, no admin). Verified: agent_alive + gui_count=1 + daemon adopted. Remaining for passes:true: packaged install + manual tray-icon/menu pass + survives-window-close (M4); Open-Window focus of an existing window is a TODO.",
       "acceptance_criteria": [
         "Launching the packaged Windows app shows a persistent system-tray icon that reflects daemon/capture state and survives closing the window",
         "The tray spawns the bundled daemon on launch and stops it on Quit (so the install isn't pinned)",
@@ -879,11 +882,18 @@
     },
     {
       "id": 58,
-      "category": "v3",
+      "category": "asr",
       "priority": "high",
+      "description": "User-chosen ASR runtimes via installable runtime packs (owner directives 2026-06-17). NO engine bundled by default; the user picks a runtime matching their hardware (faster-cpu / faster-cuda NVIDIA / remote OpenAI-compat+Riva; AMD/Intel via whisper.cpp-Vulkan or ONNX-DirectML DEFERRED as registry slots — 'option 3 track'), the app downloads a prebuilt ABI-matched pack into %LOCALAPPDATA%/Capture/runtimes/<id>, core/asr/runtimes.activate() prepends it to sys.path + adds its DLL dirs so the FROZEN daemon imports the engine, then the user picks a compatible model and downloads it. NO silent fallback: device is explicit per runtime; load failures surface (audio_status / GET /v1/asr/backend), never a quiet CPU degrade. KEYSTONE VALIDATED 2026-06-17: a lean frozen daemon (faster-whisper excluded) imported an external CPU pack (ctranslate2 4.8 + faster-whisper 1.2.1, 286MB) via sys.path -> 'faster-whisper OK'. Decisions: frozen daemon + packs (not an embeddable venv); NVIDIA+CPU+remote now, AMD deferred. SPEC: docs/specs/asr-runtimes.md. [2026-06-17] LANDED: core/asr/runtimes.py (registry + activate/install/set_active/status_payload/backend_report); daemon routes GET /v1/asr/runtimes, POST /v1/asr/runtimes/install (background+SSE), POST /v1/asr/runtime, GET /v1/asr/backend (+ DaemonClient methods); NO-silent-fallback wired (FasterWhisper device from the runtime, raises on load failure -> GET /v1/asr/backend). Verified: install(local pack)->set_active->backend reports faster-cpu/cpu; routes live over HTTP; smoke 67/67, contracts 4/4. [2026-06-17 b] ALSO LANDED: packaging/build_runtime_packs.ps1 (builds dist/runtime-<id>-<pytag>.zip — faster-cpu = 86MB zip verified); build_windows.ps1 now freezes LEAN (no engine bundled); GUI runtime picker (Settings -> Voice recognition: list runtimes + GPU hint -> Install w/ SSE progress -> Use -> runtime-aware model picker; daemon.rs AsrRuntimes + 3 methods); pack_url() defaults to the GitHub release assets for the version. GUI builds + renders (RENDERER_OK). Remaining for passes:true: HOST the packs as release assets (release flow) + a release build/install verify; AMD runtimes (whisper.cpp/ONNX).",
+      "acceptance_criteria": [
+        "A fresh install has no ASR runtime; the GUI shows 'choose a runtime' and capture still records screenshots+logs (audio_status reflects 'no runtime', not silent).",
+        "Selecting a runtime downloads+installs its pack; the frozen daemon then imports the engine (runtime_available true) and the model picker shows that runtime's compatible models to download.",
+        "A chosen GPU runtime that can't load (e.g. no NVIDIA GPU / missing CUDA) surfaces a clear error and does NOT silently fall back to CPU."
+      ],
       "passes": false,
-      "dependencies": [],
-      "description": "v3 SPIKE A — ScreenCaptureKit from Rust. A throwaway binary that captures one app's audio (16k mono s16le) + a window screenshot via objc2/`screencapturekit`/`cidre`, to de-risk the biggest unknown (bindings maturity, entitlements, the SCStreamError -3805 reconnect) BEFORE scheduling the platform crate. Decides whether the macOS capture port is hand-FFI or turnkey."
+      "dependencies": [
+        34
+      ]
     },
     {
       "id": 59,
@@ -891,7 +901,7 @@
       "priority": "high",
       "passes": false,
       "dependencies": [],
-      "description": "v3 SPIKE B — whisper-rs vs mlx-whisper benchmark. Transcribe a fixed clip with whisper-rs (whisper.cpp Metal + CoreML) vs the current mlx path using docs/asr-benchmark.md; measure latency/accuracy. Decides whether an MLX backend is ever worth the FFI/sidecar work, or whisper-rs is the macOS default outright."
+      "description": "v3 SPIKE A — ScreenCaptureKit from Rust. A throwaway binary that captures one app's audio (16k mono s16le) + a window screenshot via objc2/`screencapturekit`/`cidre`, to de-risk the biggest unknown (bindings maturity, entitlements, the SCStreamError -3805 reconnect) BEFORE scheduling the platform crate. Decides whether the macOS capture port is hand-FFI or turnkey."
     },
     {
       "id": 60,
@@ -899,17 +909,15 @@
       "priority": "high",
       "passes": false,
       "dependencies": [],
-      "description": "v3 workspace skeleton + capture-core contract types. Stand up the cargo workspace; define the /v1 + on-disk CONTRACT TYPES in capture-core (serde) as the source of truth (replacing the pydantic v1_schema golden) and regenerate the GUI's types from them. Keeps the contract firewall stable for the incremental port."
+      "description": "v3 SPIKE B — whisper-rs vs mlx-whisper benchmark. Transcribe a fixed clip with whisper-rs (whisper.cpp Metal + CoreML) vs the current mlx path using docs/asr-benchmark.md; measure latency/accuracy. Decides whether an MLX backend is ever worth the FFI/sidecar work, or whisper-rs is the macOS default outright."
     },
     {
       "id": 61,
       "category": "v3",
       "priority": "high",
       "passes": false,
-      "dependencies": [
-        60
-      ],
-      "description": "v3 capture-index port (reqwest+serde+image). Port vision_client + build_index + live_index (merge-tree) + AGENTS.md + the #49/#51/#56/#57 logic to Rust; `image` replaces sips for downscale/encode. Pure logic + HTTP — validate against the 7 existing eval corpora as regression fixtures (no capture/permissions needed). First high-value, low-risk port; proves the toolchain."
+      "dependencies": [],
+      "description": "v3 workspace skeleton + capture-core contract types. Stand up the cargo workspace; define the /v1 + on-disk CONTRACT TYPES in capture-core (serde) as the source of truth (replacing the pydantic v1_schema golden) and regenerate the GUI's types from them. Keeps the contract firewall stable for the incremental port."
     },
     {
       "id": 62,
@@ -917,10 +925,9 @@
       "priority": "high",
       "passes": false,
       "dependencies": [
-        60,
         61
       ],
-      "description": "v3 capture-daemon (/v1 axum + SSE) + capture-mcp (rmcp/JSON-RPC stdio). Serve the byte-identical /v1 + the 12-tool MCP surface from Rust; flip the GUI's daemon client to the Rust daemon. Validate against the contract + the GUI end-to-end."
+      "description": "v3 capture-index port (reqwest+serde+image). Port vision_client + build_index + live_index (merge-tree) + AGENTS.md + the #49/#51/#56/#57 logic to Rust; `image` replaces sips for downscale/encode. Pure logic + HTTP — validate against the 7 existing eval corpora as regression fixtures (no capture/permissions needed). First high-value, low-risk port; proves the toolchain."
     },
     {
       "id": 63,
@@ -928,10 +935,10 @@
       "priority": "high",
       "passes": false,
       "dependencies": [
-        59,
-        60
+        61,
+        62
       ],
-      "description": "v3 capture-asr — pluggable AsrBackend trait + manager (mirrors asr/base+manager). whisper-rs default (Metal/CoreML on Mac, CUDA on Win), the OpenAI-compat/Nemotron HTTP backends, MLX optional-later behind the trait. Port the chunking + silence-gate + language/chunk settings. Benchmark-gated (spike B) before deleting the Python ASR."
+      "description": "v3 capture-daemon (/v1 axum + SSE) + capture-mcp (rmcp/JSON-RPC stdio). Serve the byte-identical /v1 + the 12-tool MCP surface from Rust; flip the GUI's daemon client to the Rust daemon. Validate against the contract + the GUI end-to-end."
     },
     {
       "id": 64,
@@ -939,33 +946,44 @@
       "priority": "high",
       "passes": false,
       "dependencies": [
-        58,
-        60
+        60,
+        61
       ],
-      "description": "v3 capture-platform macOS — ScreenCaptureKit (app audio + screenshots) + AVFoundation mic via objc2, behind the WindowFinder/ScreenGrabber/AudioSource traits. Replaces audiocap.swift (capture moves in-process via FFI; the helper binary disappears). Gated on spike A."
+      "description": "v3 capture-asr — pluggable AsrBackend trait + manager (mirrors asr/base+manager). whisper-rs default (Metal/CoreML on Mac, CUDA on Win), the OpenAI-compat/Nemotron HTTP backends, MLX optional-later behind the trait. Port the chunking + silence-gate + language/chunk settings. Benchmark-gated (spike B) before deleting the Python ASR."
     },
     {
       "id": 65,
       "category": "v3",
-      "priority": "medium",
+      "priority": "high",
       "passes": false,
       "dependencies": [
-        60,
-        64
+        59,
+        61
       ],
-      "description": "v3 capture-platform Windows (windows-rs: Graphics.Capture + WASAPI loopback) + UNIFIED single-binary bundling. Replaces audiocap_win.py + the Win32 grabber. A single signed .exe + installer (cargo-dist/WiX) — no Python, no DLL zoo (the core motivation)."
+      "description": "v3 capture-platform macOS — ScreenCaptureKit (app audio + screenshots) + AVFoundation mic via objc2, behind the WindowFinder/ScreenGrabber/AudioSource traits. Replaces audiocap.swift (capture moves in-process via FFI; the helper binary disappears). Gated on spike A."
     },
     {
       "id": 66,
       "category": "v3",
-      "priority": "low",
+      "priority": "medium",
       "passes": false,
       "dependencies": [
         61,
+        65
+      ],
+      "description": "v3 capture-platform Windows (windows-rs: Graphics.Capture + WASAPI loopback) + UNIFIED single-binary bundling. Replaces audiocap_win.py + the Win32 grabber. A single signed .exe + installer (cargo-dist/WiX) — no Python, no DLL zoo (the core motivation)."
+    },
+    {
+      "id": 67,
+      "category": "v3",
+      "priority": "low",
+      "passes": false,
+      "dependencies": [
         62,
         63,
         64,
-        65
+        65,
+        66
       ],
       "description": "v3 cutover — retire the Python package + the Swift/Python helpers, drop PyInstaller; finalize cargo-dist packaging for mac+win. selenium→chromiumoxide (or keep optional) for the browser-capture flow. v3 becomes the default branch."
     }

@@ -1,13 +1,14 @@
-"""Whisper model manager — list / download / select the active mlx model.
+"""Whisper model manager — list / download / select the active model.
 
-Backs the daemon's ``/v1/asr/*`` routes and the GUI's model picker. Models are
-the ``mlx-community/whisper-*`` HuggingFace repos; weights live in the shared HF
-cache (``~/.cache/huggingface``) and download on demand (never bundled). The
-active model is persisted via :mod:`capture_mcp.core.config` so a model chosen in
-the GUI applies to new captures started anywhere.
+Backs the daemon's ``/v1/asr/*`` routes and the GUI's model picker. The catalog is
+**runtime-aware** (:func:`catalog`): ``mlx-community/whisper-*`` repos on Apple Silicon
+(mlx-whisper), ``Systran/faster-whisper-*`` repos on Windows/Linux (faster-whisper / CTranslate2).
+Weights live in the shared HF cache (``~/.cache/huggingface`` / ``%USERPROFILE%\\.cache``) and
+download on demand (never bundled). The active model is persisted via
+:mod:`capture_mcp.core.config` so a model chosen in the GUI applies to new captures everywhere.
 
-mlx itself is an optional dep (Apple Silicon); :func:`runtime_available` lets a
-caller report "ASR runtime missing" instead of failing — e.g. a lean daemon build.
+Both runtimes are optional deps; :func:`runtime_available` reports "ASR runtime missing" (instead
+of failing) when neither is importable — e.g. a lean / screenshots-only build.
 """
 
 from __future__ import annotations
@@ -20,12 +21,15 @@ from .. import config as _config
 
 log = logging.getLogger(__name__)
 
-#: Curated catalog — the mlx-community Whisper repos we offer in the GUI, ordered
-#: by download size. Repo IDs and sizes are VERIFIED against HuggingFace (the
-#: naming is inconsistent: `whisper-tiny` but `whisper-base-mlx`, etc. — and
-#: `whisper-base`/`whisper-small`/`whisper-large-v3` do NOT exist). Weights live in
-#: the shared HF cache (downloaded on demand, NOT bundled in the app).
-CATALOG: list[dict] = [
+#: Curated catalogs — the repos offered in the GUI, ordered by download size. Weights live in the
+#: shared HF cache (downloaded on demand, NOT bundled). There are two, one per local runtime:
+#:  * `mlx-community/whisper-*` — Apple-Silicon mlx-whisper (macOS). Naming is inconsistent
+#:    (`whisper-tiny` but `whisper-base-mlx`; `whisper-base`/`whisper-small`/`whisper-large-v3`
+#:    do NOT exist) — IDs VERIFIED against HuggingFace.
+#:  * `Systran/faster-whisper-*` — CTranslate2 (faster-whisper) for Windows/Linux, CPU or CUDA.
+#: `catalog()` picks the one matching the runtime this daemon actually bundles, so the GUI only
+#: ever offers models the daemon can load.
+_MLX_CATALOG: list[dict] = [
     {"repo": "mlx-community/whisper-tiny", "name": "Whisper Tiny", "size_label": "~74 MB"},
     {"repo": "mlx-community/whisper-base-mlx", "name": "Whisper Base", "size_label": "~144 MB"},
     {
@@ -41,14 +45,52 @@ CATALOG: list[dict] = [
         "size_label": "~1.6 GB",
     },
 ]
+_FASTER_CATALOG: list[dict] = [
+    {"repo": "Systran/faster-whisper-tiny", "name": "Whisper Tiny (faster-whisper)", "size_label": "~75 MB"},
+    {"repo": "Systran/faster-whisper-base", "name": "Whisper Base (faster-whisper)", "size_label": "~145 MB"},
+    {"repo": "Systran/faster-whisper-small", "name": "Whisper Small (faster-whisper)", "size_label": "~484 MB"},
+    {"repo": "Systran/faster-whisper-medium", "name": "Whisper Medium (faster-whisper)", "size_label": "~1.5 GB"},
+    {"repo": "Systran/faster-whisper-large-v3", "name": "Whisper Large v3 (faster-whisper)", "size_label": "~3.1 GB"},
+]
 
-#: Matches whisper_local._MLX_DEFAULT — the model used when nothing is configured.
-DEFAULT_REPO = "mlx-community/whisper-large-v3-turbo"
+_MLX_DEFAULT_REPO = "mlx-community/whisper-large-v3-turbo"
+_FASTER_DEFAULT_REPO = "Systran/faster-whisper-base"  # small + CPU-friendly default on Windows
 
 _CONFIG_KEY = "whisper_model"
 _LANG_KEY = "whisper_language"
 _CHUNK_KEY = "audio_chunk_seconds"
-_KNOWN_REPOS = {m["repo"] for m in CATALOG}
+
+
+def _mlx_available() -> bool:
+    import importlib.util
+
+    return importlib.util.find_spec("mlx_whisper") is not None
+
+
+def _faster_available() -> bool:
+    import importlib.util
+
+    return importlib.util.find_spec("faster_whisper") is not None
+
+
+def _use_faster() -> bool:
+    """Use the faster-whisper catalog when mlx is absent but faster-whisper is present (the
+    Windows/CUDA build). On Apple Silicon (mlx present) keep the mlx catalog."""
+    return _faster_available() and not _mlx_available()
+
+
+def catalog() -> list[dict]:
+    """The model catalog for the runtime this daemon actually bundles."""
+    return _FASTER_CATALOG if _use_faster() else _MLX_CATALOG
+
+
+def default_repo() -> str:
+    """The default active model for the bundled runtime."""
+    return _FASTER_DEFAULT_REPO if _use_faster() else _MLX_DEFAULT_REPO
+
+
+def _known_repos() -> set[str]:
+    return {m["repo"] for m in catalog()}
 
 #: Default transcription chunk length. Whisper is trained on 30 s windows; shorter
 #: chunks (the old 8 s) make it hallucinate phantom phrases ("Thank you.") on pauses /
@@ -58,16 +100,16 @@ CHUNK_BOUNDS = (1.0, 120.0)
 
 
 def runtime_available() -> bool:
-    """True iff the mlx-whisper runtime can be imported here (Apple Silicon build)."""
-    import importlib.util
+    """True iff a local Whisper runtime can run here — mlx-whisper (Apple Silicon) OR
+    faster-whisper (CTranslate2; Windows/Linux, CPU or CUDA). False only on a lean build with
+    neither (so the GUI reports "ASR runtime missing" instead of offering models that can't load)."""
+    return _mlx_available() or _faster_available()
 
-    return importlib.util.find_spec("mlx_whisper") is not None
 
-
-#: mlx-community whisper repos store weights under one of these names — most ship
-#: ``weights.npz`` but the full ``whisper-large-v3-turbo`` ships ``weights.safetensors``.
-#: A repo is "downloaded" once config.json + ANY of these is cached.
-_WEIGHT_FILES = ("weights.npz", "weights.safetensors")
+#: A repo is "downloaded" once config.json + ANY weight file is cached. mlx-community repos ship
+#: ``weights.npz`` (most) or ``weights.safetensors`` (full large-v3-turbo); faster-whisper /
+#: CTranslate2 repos ship ``model.bin``.
+_WEIGHT_FILES = ("weights.npz", "weights.safetensors", "model.bin")
 
 
 def is_downloaded(repo: str) -> bool:
@@ -82,15 +124,21 @@ def is_downloaded(repo: str) -> bool:
 
 
 def active_model() -> str:
-    """The configured active model (config → default). Env still wins at load time."""
+    """The configured active model, validated against the bundled runtime's catalog (config →
+    default). A stale cross-platform value (e.g. an mlx repo synced onto a Windows box, which
+    CTranslate2 can't load) is ignored in favour of the default, so the backend never gets a
+    model it can't open. Env still wins at load time."""
     val = _config.get(_CONFIG_KEY)
-    return val if isinstance(val, str) and val.strip() else DEFAULT_REPO
+    if isinstance(val, str) and val.strip() in _known_repos():
+        return val.strip()
+    return default_repo()
 
 
 def set_active_model(repo: str) -> str:
-    """Persist ``repo`` as the active model. Raises ValueError if not in the catalog."""
-    if repo not in _KNOWN_REPOS:
-        raise ValueError(f"unknown model {repo!r}; choose from {sorted(_KNOWN_REPOS)}")
+    """Persist ``repo`` as the active model. Raises ValueError if not in the (runtime) catalog."""
+    known = _known_repos()
+    if repo not in known:
+        raise ValueError(f"unknown model {repo!r}; choose from {sorted(known)}")
     _config.set_(_CONFIG_KEY, repo)
     log.info("active whisper model set: %s", repo)
     return repo
@@ -163,7 +211,7 @@ def catalog_status(downloading: object = ()) -> dict:
                 "active": m["repo"] == active,
                 "downloading": m["repo"] in dl,
             }
-            for m in CATALOG
+            for m in catalog()
         ],
     }
 
@@ -211,8 +259,8 @@ def download(repo: str, on_progress=None) -> str:
     reported total — backend-agnostic, since hf_hub's accelerated (xet/hf_transfer)
     download paths bypass the Python ``tqdm`` progress hook.
     """
-    if repo not in _KNOWN_REPOS:
-        raise ValueError(f"unknown model {repo!r}; choose from {sorted(_KNOWN_REPOS)}")
+    if repo not in _known_repos():
+        raise ValueError(f"unknown model {repo!r}; choose from {sorted(_known_repos())}")
     from huggingface_hub import constants, snapshot_download
 
     # Force the plain HTTP backend. The xet backend streams content-addressed
@@ -251,8 +299,8 @@ def delete(repo: str) -> dict:
     model is allowed — its status simply reverts to "active · needs download" until
     it is re-fetched, which the catalog reports on the next poll.
     """
-    if repo not in _KNOWN_REPOS:
-        raise ValueError(f"unknown model {repo!r}; choose from {sorted(_KNOWN_REPOS)}")
+    if repo not in _known_repos():
+        raise ValueError(f"unknown model {repo!r}; choose from {sorted(_known_repos())}")
     import shutil
 
     freed = _repo_cache_bytes(repo)
