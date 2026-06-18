@@ -114,7 +114,8 @@ impl CaptureApp {
                 .rounded(px(theme::RADIUS_MD))
                 .border_1()
                 .border_color(rgb(theme::BORDER))
-                .bg(rgb(theme::ELEVATED));
+                .bg(rgb(theme::ELEVATED))
+                .occlude(); // clicks on the menu select; they must not fall through to the dismiss backdrop
             // A "server default" row (blank model) plus each fetched model.
             let default_active = self.index_model.is_empty();
             list = list.child(

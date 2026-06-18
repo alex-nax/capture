@@ -4,7 +4,9 @@
 //! Markup/styling only — every listener, focus handle, and the section gating below
 //! is preserved verbatim from the prior single-column implementation (#68/#71).
 
-use gpui::{deferred, div, prelude::*, px, relative, rgb, rgba, Context, SharedString, Window};
+use gpui::{
+    deferred, div, prelude::*, px, relative, rgb, rgba, Context, MouseButton, SharedString, Window,
+};
 
 use crate::app::CaptureApp;
 use crate::components::{
@@ -25,11 +27,36 @@ impl CaptureApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<gpui::AnyElement> {
-        let body = div()
+        let dropdown_open = self.model_dropdown_open || self.lang_dropdown_open;
+        let nav = self.settings_nav(cx);
+        let content = self.settings_content(window, cx);
+        let mut body = div()
             .flex()
             .size_full() // fill the window; the nav is fixed-width, the content pane scrolls
-            .child(self.settings_nav(cx))
-            .child(self.settings_content(window, cx));
+            .relative()
+            .child(nav)
+            .child(content);
+        if dropdown_open {
+            // Click-anywhere-outside backdrop that dismisses an open dropdown popover. It occludes
+            // the panes (an outside click only closes — it doesn't also hit the control beneath),
+            // and sits BELOW the deferred menu, so clicks on the menu still select.
+            body = body.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .occlude()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.model_dropdown_open = false;
+                            this.lang_dropdown_open = false;
+                            cx.notify();
+                        }),
+                    ),
+            );
+        }
         vec![body.into_any_element()]
     }
 
@@ -1100,7 +1127,8 @@ impl CaptureApp {
                 .rounded(px(theme::RADIUS_MD))
                 .border_1()
                 .border_color(rgb(theme::BORDER))
-                .bg(rgb(theme::ELEVATED));
+                .bg(rgb(theme::ELEVATED))
+                .occlude(); // clicks on the menu select; they must not fall through to the dismiss backdrop
             let matches = LANGUAGES.iter().filter(|(c, n)| {
                 filter.is_empty() || c.contains(&filter) || n.to_lowercase().contains(&filter)
             });
