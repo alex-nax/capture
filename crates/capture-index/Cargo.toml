@@ -1,0 +1,15 @@
+[package]
+name = "capture-index"
+version = "0.1.0"
+edition = "2021"
+description = "v3 multimodal index: vision client + build_index (classify→extract) + live merge-tree + AGENTS.md."
+
+[dependencies]
+capture-core = { path = "../capture-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# OpenAI-compatible vision client (blocking; the daemon calls it via spawn_blocking).
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+# Replaces sips for per-frame downscale/encode (#49 resolution-adaptive max_px).
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+base64 = "0.22"

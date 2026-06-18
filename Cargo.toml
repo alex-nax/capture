@@ -4,4 +4,4 @@
 # contract types). One shared ./target for the whole workspace.
 [workspace]
 resolver = "2"
-members = ["gui", "crates/capture-core"]
+members = ["gui", "crates/capture-core", "crates/capture-index"]
