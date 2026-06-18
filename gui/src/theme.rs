@@ -12,6 +12,11 @@ pub(crate) const BORDER: u32 = 0x3a3a3d; // 1px dividers, default control outlin
 pub(crate) const BORDER_STRONG: u32 = 0x4a4a4e; // Input borders, hovered/focused outlines.
 pub(crate) const NAV_BG: u32 = 0x1c1c1e; // Settings left-nav pane background.
 pub(crate) const CHIP_IDLE: u32 = 0x2a2a2c; // Idle chip/control fill (sits on BG).
+pub(crate) const CHIP_DISABLED: u32 = 0x1f1f22; // Disabled chip fill (§4 chip matrix).
+
+// ── Overlays (rgba) — use via rgba(theme::TOKEN) ─────────────────────────────
+pub(crate) const GHOST_HOVER: u32 = 0xffffff0d; // Ghost-button / menu-item hover: white @ ~5%.
+pub(crate) const TRANSPARENT: u32 = 0x00000000; // Fully transparent (e.g. unselected list-row left bar — keeps layout stable).
 
 // ── Accent — indigo ─────────────────────────────────────────────────────────
 pub(crate) const ACCENT: u32 = 0x6366f1; // Primary fill, active selection bar, focus, progress.

@@ -6,7 +6,7 @@
 use gpui::{div, prelude::*, px, relative, rgb, Context, SharedString, Window};
 
 use crate::app::CaptureApp;
-use crate::components::{button, chip};
+use crate::components::{button, chip, ButtonVariant};
 use crate::skill;
 use crate::state::{ConfirmKind, IndexField, INDEX_PROVIDERS, LANGUAGES, RES_PRESETS};
 use crate::theme;
@@ -360,6 +360,7 @@ impl CaptureApp {
                         .child(div().text_color(rgb(theme::WARNING)).child(format!("v{} available (you have v{})", info.version, update::CURRENT)))
                         .child(button(
                             "Update…",
+                            ButtonVariant::Primary,
                             cx.listener(move |this, _, _, cx| {
                                 this.confirm = Some(ConfirmKind::Update(info2.clone()));
                                 cx.notify();
@@ -466,7 +467,7 @@ impl CaptureApp {
                                     cx.notify();
                                 })),
                         )
-                        .child(button("Check", cx.listener(|this, _, _, cx| this.probe_index_status(cx)))),
+                        .child(button("Check", ButtonVariant::Secondary, cx.listener(|this, _, _, cx| this.probe_index_status(cx)))),
                 );
             // Port (host:port providers only — custom hides it).
             if !is_base {
@@ -608,7 +609,7 @@ impl CaptureApp {
                         Some(skill::SkillStatus::UpdateAvailable) => format!("{} ↑ update", a.label),
                         _ => format!("{} — install", a.label),
                     };
-                    button(&label, cx.listener(move |this, _, _, cx| this.install_skill(ix, cx)))
+                    button(&label, ButtonVariant::Secondary, cx.listener(move |this, _, _, cx| this.install_skill(ix, cx)))
                 }))
                 .into_any_element()
         });
@@ -645,6 +646,7 @@ impl CaptureApp {
                     ))
                     .child(button(
                         "Restart daemon",
+                        ButtonVariant::Secondary,
                         cx.listener(|this, _, _, cx| this.restart_daemon(cx)),
                     ));
             }

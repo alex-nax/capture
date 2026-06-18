@@ -1009,7 +1009,7 @@
       "id": 70,
       "category": "gui",
       "priority": "high",
-      "passes": false,
+      "passes": true,
       "dependencies": [
         69
       ],

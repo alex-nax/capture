@@ -5,7 +5,7 @@
 use gpui::{div, prelude::*, px, rgb, rgba, Context, SharedString};
 
 use crate::app::CaptureApp;
-use crate::components::{button, icon};
+use crate::components::{button, icon, ButtonVariant};
 use crate::state::{short_id, CAPTURE_PRESETS, ConfirmKind};
 use crate::theme;
 
@@ -63,6 +63,7 @@ impl CaptureApp {
                                     .justify_end()
                                     .child(button(
                                         "Cancel",
+                                        ButtonVariant::Ghost,
                                         cx.listener(|this, _, _, cx| {
                                             this.confirm = None;
                                             cx.notify();
@@ -141,6 +142,7 @@ impl CaptureApp {
             card = card.child(
                 div().flex().justify_end().child(button(
                     "Cancel",
+                    ButtonVariant::Ghost,
                     cx.listener(|this, _, _, cx| {
                         this.show_preset_picker = false;
                         cx.notify();

@@ -5,7 +5,7 @@
 use gpui::{div, prelude::*, px, rgb, Context, SharedString, Window};
 
 use crate::app::CaptureApp;
-use crate::components::{button, chip, icon};
+use crate::components::{button, chip, icon, ButtonVariant};
 use crate::daemon::WindowInfo;
 use crate::state::{short_id, truncate, ConfirmKind};
 use crate::theme;
@@ -185,10 +185,12 @@ impl CaptureApp {
                 .gap_2()
                 .child(button(
                     "Refresh windows",
+                    ButtonVariant::Secondary,
                     cx.listener(|this, _, _, cx| this.refresh_windows(cx)),
                 ))
                 .child(button(
                     "Start capture",
+                    ButtonVariant::Primary,
                     cx.listener(|this, _, _, cx| this.open_preset_picker(cx)),
                 ))
                 .into_any_element(),
@@ -281,6 +283,7 @@ impl CaptureApp {
                 )
                 .child(button(
                     "Launch & Capture",
+                    ButtonVariant::Primary,
                     cx.listener(|this, _, _, cx| this.launch_command(cx)),
                 ))
                 .into_any_element()
@@ -297,6 +300,7 @@ impl CaptureApp {
                 .child(div().text_color(rgb(theme::TEXT_SECONDARY)).child("Import:"))
                 .child(button(
                     "Import audio/video…",
+                    ButtonVariant::Secondary,
                     cx.listener(|this, _, _, cx| this.import_file(cx)),
                 ));
             if let Some((phase, frac)) = importing {
