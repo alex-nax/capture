@@ -1029,7 +1029,7 @@
       "id": 72,
       "category": "gui",
       "priority": "high",
-      "passes": false,
+      "passes": true,
       "dependencies": [
         70,
         71

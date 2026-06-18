@@ -23,6 +23,7 @@ pub(crate) const ACCENT: u32 = 0x6366f1; // Primary fill, active selection bar, 
 pub(crate) const ACCENT_HOVER: u32 = 0x7c7ef5; // Hover on primary / selected.
 pub(crate) const ACCENT_ACTIVE: u32 = 0x5457e0; // Pressed.
 pub(crate) const ACCENT_SUBTLE: u32 = 0x262747; // Selected chip fill, "on" toggle bg, selected row bg.
+pub(crate) const ACTIVE_ROW: u32 = 0x1f2033; // Active model-row tint (Voice section, §5).
 pub(crate) const ACCENT_BORDER: u32 = 0x3d3f6e; // Border on selected chips & focus rings.
 pub(crate) const ACCENT_TEXT: u32 = 0xa5a8f7; // Links, hotkey hints, accent text on dark.
 pub(crate) const ACCENT_TEXT_STRONG: u32 = 0xb9bbf9; // Text inside a selected (ACCENT_SUBTLE) surface.
