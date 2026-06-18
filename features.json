@@ -1104,6 +1104,22 @@
       ],
       "passes": false,
       "dependencies": []
+    },
+    {
+      "id": 79,
+      "category": "asr",
+      "priority": "medium",
+      "description": "Honest ASR model load/warm progress (deferred to the v3 ASR work; requested 2026-06-18 after the 'switching…' placeholder was rejected for a real percentage). INVESTIGATION FOUND: set_active_model is a fast CONFIG WRITE (manager.set_active_model just persists the repo — instant for every size), so a model SWITCH has no work to measure. The actually-slow part is the LAZY first load: mlx_whisper.transcribe (whisper_local.py) downloads (if needed) + loads weights + compiles the graph on FIRST USE, i.e. at the first transcription after a capture starts — so a cold/large model makes the first transcript appear seconds late with zero feedback, and there is no honest 'switch %' to show (we removed the interim 'switching…' text). PLAN: in the v3 AsrBackend (#64) — unified per #77 — make activation (and/or capture-start) EAGERLY load + warm the model and emit a load lifecycle over the existing /v1/events SSE: `download {fraction}` (real % while fetching weights — already exists for explicit Download) -> `loading` -> `warming` (a tiny dummy transcribe to force graph compile) -> `ready` | `error`, plus a per-model load status in GET /v1/asr/models. GUI then shows a real % bar during download, then a LABELED loading…/warming… indicator until ready, then 'active'; the row flips to active only when the engine can actually transcribe, and capture-start no longer silently delays the first transcript. NO fabricated percentages: stages with no measurable fraction render as labeled stages, never a fixed/fake bar.",
+      "acceptance_criteria": [
+        "Activating (or first-using) a COLD large model surfaces real download % while fetching weights, then a clear loading/warming indicator; the model row reads 'active' only once the engine can actually transcribe with it.",
+        "Starting a capture with a cold model does NOT silently delay the first transcript with no feedback — the load/warm is visible.",
+        "No fabricated percentages anywhere: a stage with no measurable fraction (load/compile) renders as a labeled stage (loading…/warming…), not a fixed-position bar pretending to be progress."
+      ],
+      "passes": false,
+      "dependencies": [
+        64,
+        77
+      ]
     }
   ]
 }
