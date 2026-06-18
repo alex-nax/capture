@@ -7,3 +7,5 @@ description = "Contract types (serde) for the capture /v1 API + on-disk session 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Calendar arithmetic for the ISO `YYYY-MM-DDTHH:MM:SS.mmmZ` stamp parse/format (frames + index).
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
