@@ -1091,6 +1091,19 @@
         58,
         64
       ]
+    },
+    {
+      "id": 78,
+      "category": "mcp",
+      "priority": "high",
+      "description": "App-only MCP onboarding — the /capture skill makes app users do an unnecessary source build to get the `capture-mcp` command (surfaced 2026-06-18 by an MCP-client invocation on a fresh project; full report: docs/findings/mcp-onboarding-2026-06-18.md). Root cause is TWO gaps: (a) the app bundle ships NO MCP entry point — Contents/Resources/captured/{captured,audiocap} only ever start the daemon, there is no capture-mcp binary and the daemon HTTP /v1 is not MCP-over-HTTP — and (b) the skill (skills/capture/SKILL.md) documents the `.mcp.json` `command` as coming ONLY from path B (install.sh: git clone + venv + mlx + Swift build) with NO discovery of an existing capture-mcp, so on an app-only machine it defaults to the most expensive action and the user must reverse-engineer the bundle. FIX, two halves: APP — ship an MCP stdio entry in the bundle so app users get a `command` with no build: add a `captured mcp` (alias `stdio`) subcommand to the frozen daemon (capture_mcp.daemon.server:main + packaging/build/captured.spec) that runs the FastMCP stdio server (capture_mcp.server:main) daemon-first (bridge to a running daemon, else start one); the daemon binary already bundles click and the server module is already in the package. (Alt: freeze a second capture-mcp EXE next to captured in Resources/captured/.) Optionally have the app write/merge .mcp.json (it already installs this skill + detects Claude Code/Codex) or add a GUI 'Copy MCP command path'. SKILL — add a discovery step BEFORE any install that resolves the command in order [bundled `…/Capture.app/Contents/Resources/captured/captured mcp` -> `command -v capture-mcp` -> known venvs ~/capture/.venv/bin, ~/.capture-mcp/.venv/bin, and ~/.capture/config.env CAPTURE_REPO/.venv/bin] and VERIFIES it answers an MCP initialize+tools/list handshake before writing .mcp.json; demote install.sh to an explicit last resort (state up front it is a network clone+build, ask first); rewrite the misleading 'its capture-mcp command comes from B' sentence to document where the command lives per setup. configure_mcp.py — support a command+args form (to register `captured mcp`) + an --app/auto-detect mode that fills the bundled path. Keep GUI<->MCP parity intact.",
+      "acceptance_criteria": [
+        "On a Mac with ONLY Capture.app installed (no repo clone, no .mcp.json), the /capture skill registers a working `capture` MCP server WITHOUT a source build: it discovers a bundled/existing capture-mcp command and verifies it answers an MCP initialize + tools/list before writing .mcp.json.",
+        "The app bundle exposes an MCP stdio entry point (e.g. `captured mcp`) that runs the FastMCP server daemon-first (attaches to the running daemon if present); tools/list returns the capture tool set.",
+        "install.sh (git clone + venv + build) is only proposed AFTER discovery fails, with an explicit up-front 'this is a network clone + build' confirmation — it is no longer the skill's default opening move."
+      ],
+      "passes": false,
+      "dependencies": []
     }
   ]
 }
