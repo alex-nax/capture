@@ -1,0 +1,18 @@
+# Throwaway spike crate (SPIKE B / #60). Standalone — NOT part of any workspace.
+[workspace]
+
+[package]
+name = "whisper-bench"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "whisper-bench"
+path = "src/main.rs"
+
+[dependencies]
+# whisper.cpp Rust bindings. Metal feature enables GPU accel on Apple silicon.
+whisper-rs = { version = "0.16", features = ["metal"] }
+
+[profile.release]
+opt-level = 3

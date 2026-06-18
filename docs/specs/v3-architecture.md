@@ -103,20 +103,36 @@ is Python — so an MLX backend is reimplementation/sidecar work, deferred until
 6. **`capture-platform` windows** + the unified single-binary bundling.
 7. Retire the Python package + the Swift/Python helpers; drop PyInstaller.
 
-## First two tickets — DE-RISK SPIKES (do before committing to the full port)
-- **Spike A — ScreenCaptureKit from Rust**: a throwaway binary that captures one app's audio (s16le) + a
-  window screenshot via `screencapturekit`/`cidre`/`objc2`. Answers the biggest unknown (bindings maturity,
-  entitlements, the `-3805` reconnect behavior) before the platform crate is scheduled.
-- **Spike B — whisper-rs vs mlx-whisper bench**: transcribe a fixed clip with `whisper-rs` (Metal + CoreML)
-  vs the current mlx path; measure latency/accuracy. Decides whether MLX-as-a-backend is ever worth it.
+## De-risk spikes — DONE, both GREEN (`spikes/`)
+Both spikes were run as throwaway cargo binaries that compiled and *ran* on this Apple-silicon Mac. The two
+biggest unknowns are resolved positively — the Rust rewrite is feasible.
 
-## Open questions / risks
-- ScreenCaptureKit Rust-bindings maturity (Spike A) — may need hand `objc2` FFI; the highest schedule risk.
-- whisper.cpp/Metal perf vs MLX on Apple silicon (Spike B).
+- **Spike A — ScreenCaptureKit from Rust** (`spikes/sck-capture/`): **VIABLE, roughly turnkey.** The safe
+  **`screencapturekit` v7** crate mirrors `audiocap.swift` ~1:1 (`SCShareableContent`, the per-app
+  `SCContentFilter::with_including_applications`, `SCStreamConfiguration` audio, `SCScreenshotManager`,
+  `CMSampleBuffer::audio_buffer_list`) with **zero unsafe**. All three capabilities ran: listed 309 windows /
+  31 apps, produced a real PNG screenshot, and captured per-app audio → 16 kHz mono s16le. **No Swift
+  needed.** Two one-time packaging notes: pin `apple-metal = "=0.6.0"` (its 0.8.8 references macOS-26 SDK
+  symbols that fail on the 15.7 SDK), and a shipped binary must embed the Swift-runtime rpath
+  (`libswift_Concurrency.dylib`) at link time. **Risk: was HIGH → now LOW.**
+- **Spike B — whisper-rs vs mlx-whisper** (`spikes/whisper-bench/`): **ADOPT.** `whisper-rs 0.16`
+  (`features=["metal"]`) built clean (whisper.cpp compiles via cc/cmake, no system deps), Metal active on the
+  M3 Max, correct transcription of a real 60 s clip at **~73× realtime** (vs mlx-turbo ~33×; base.en is
+  smaller, so a parity bench would ship `ggml-large-v3-turbo`). One Rust crate covers macOS-Metal /
+  Windows-CUDA / Linux — kills the Python+mlx macOS-only constraint. Follow-ups: ship large-v3-turbo, warm
+  the context at daemon start, chunk audio ourselves (whisper.cpp has no built-in streaming), add a ggml
+  model fetch/cache.
+
+## Open questions / risks (post-spike)
+- ~~ScreenCaptureKit Rust-bindings maturity~~ — **resolved** (Spike A): `screencapturekit` v7 is turnkey.
+  Residual: the helper's non-SCK AVFoundation paths (`--mic`, file `--extract-audio/-frames`) need
+  `objc2-avfoundation` or a tiny shim; the `apple-metal` pin + Swift-rpath packaging notes above.
+- ~~whisper.cpp/Metal perf vs MLX~~ — **resolved** (Spike B): fast + correct; MLX is unnecessary (optional
+  later only if a specific model's Apple-silicon edge ever matters).
 - GPUI maturity for any new surfaces (known quantity — already shipping).
 - selenium → `chromiumoxide` parity for the YouTube-capture flow (peripheral; can ship without it).
-- Effort: ~8k LOC of logic port + the capture-FFI work — multi-week, but mostly mechanical behind the
-  stable contract.
+- Effort (revised, post-spike): the capture path is ~1–2 days (SCK) + ~0.5–1 day packaging; ASR ~1–2 days;
+  the bulk is the ~8k-LOC logic port behind the stable contract — multi-week but mechanical and low-risk.
 
 ## Preserved / reused
 The GPUI GUI, the `/v1` + on-disk contracts, the Whisper models, the MCP tool surface, the `capture-*`

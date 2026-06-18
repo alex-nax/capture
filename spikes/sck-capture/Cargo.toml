@@ -1,0 +1,13 @@
+[package]
+name = "sck-capture"
+version = "0.1.0"
+edition = "2021"
+
+# Empty workspace table so a parent cargo workspace doesn't absorb this spike.
+[workspace]
+
+[dependencies]
+# Higher-level safe binding tried first. macos_15_0 is cumulative: it pulls in
+# 13_0 (audio) and 14_0 (screenshots / SCScreenshotManager::capture_image).
+screencapturekit = { version = "7", features = ["macos_15_0"] }
+png = "0.17"

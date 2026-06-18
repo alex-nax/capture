@@ -899,17 +899,17 @@
       "id": 59,
       "category": "v3",
       "priority": "high",
-      "passes": false,
+      "passes": true,
       "dependencies": [],
-      "description": "v3 SPIKE A — ScreenCaptureKit from Rust. A throwaway binary that captures one app's audio (16k mono s16le) + a window screenshot via objc2/`screencapturekit`/`cidre`, to de-risk the biggest unknown (bindings maturity, entitlements, the SCStreamError -3805 reconnect) BEFORE scheduling the platform crate. Decides whether the macOS capture port is hand-FFI or turnkey."
+      "description": "v3 SPIKE A — ScreenCaptureKit from Rust: DONE, GREEN. The safe `screencapturekit` v7 crate mirrors audiocap.swift ~1:1 (zero unsafe); all 3 ran (listed 309 windows, real PNG screenshot, per-app audio→16k s16le). No Swift needed. Packaging: pin apple-metal=0.6.0 + embed Swift-runtime rpath. Risk HIGH→LOW. Code: spikes/sck-capture/."
     },
     {
       "id": 60,
       "category": "v3",
       "priority": "high",
-      "passes": false,
+      "passes": true,
       "dependencies": [],
-      "description": "v3 SPIKE B — whisper-rs vs mlx-whisper benchmark. Transcribe a fixed clip with whisper-rs (whisper.cpp Metal + CoreML) vs the current mlx path using docs/asr-benchmark.md; measure latency/accuracy. Decides whether an MLX backend is ever worth the FFI/sidecar work, or whisper-rs is the macOS default outright."
+      "description": "v3 SPIKE B — whisper-rs vs mlx: DONE, ADOPT. whisper-rs 0.16 (metal) built clean, Metal on M3 Max, correct transcription at ~73x realtime (vs mlx-turbo ~33x). One crate covers mac/win/linux. Follow-ups: ship large-v3-turbo, warm context at start, chunk audio ourselves, ggml model cache. Code: spikes/whisper-bench/."
     },
     {
       "id": 61,

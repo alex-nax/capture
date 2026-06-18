@@ -18,3 +18,7 @@ agent/build/
 # .claude/skills/capture-* skills)
 /capture-*/
 /_capture_raw/
+
+# v3 spike build artifacts
+spikes/*/target/
+spikes/whisper-bench/*.bin
