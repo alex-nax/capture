@@ -1019,7 +1019,7 @@
       "id": 71,
       "category": "gui",
       "priority": "high",
-      "passes": false,
+      "passes": true,
       "dependencies": [
         70
       ],

@@ -76,6 +76,7 @@ pub struct CaptureApp {
     pub(crate) preset_scroll: ScrollHandle,           // the preset-picker card scroll (caps to the viewport)
     pub(crate) sb_drag: Option<(Pixels, Pixels)>,     // scrollbar drag: (mouse-down y, offset at down)
     pub(crate) show_settings: bool,                   // Settings screen vs. the capture dashboard
+    pub(crate) settings_section: crate::state::SettingsSection, // active Settings left-nav section (#71)
     pub(crate) show_preset_picker: bool,              // the start-capture preset popup is open
     pub(crate) shot_format: String,                   // "png" | "jpeg" — applied to new captures
     pub(crate) shot_res_ix: usize,                    // index into RES_PRESETS (0 = native)
@@ -160,6 +161,7 @@ impl CaptureApp {
             preset_scroll: ScrollHandle::new(),
             sb_drag: None,
             show_settings: false,
+            settings_section: crate::state::SettingsSection::CaptureQuality,
             show_preset_picker: false,
             shot_format,
             shot_res_ix,
@@ -899,8 +901,11 @@ impl Render for CaptureApp {
                                     }))
                             }),
                     )
-            .child(div().text_color(rgb(theme::TEXT_MUTED)).child(header))
-            .child(div().text_color(rgb(theme::ACCENT_TEXT)).child(hotkey_hint))
+            .when(!sett, |d| {
+                // On Settings these live in the left-nav instead — don't double-render.
+                d.child(div().text_color(rgb(theme::TEXT_MUTED)).child(header))
+                    .child(div().text_color(rgb(theme::ACCENT_TEXT)).child(hotkey_hint))
+            })
             .child(div().text_color(rgb(theme::WARNING)).child(self.message.clone()))
             // Active screen's children (dashboard OR settings; playback below). Only one
             // of the three is non-empty, so the order of these blocks is immaterial.

@@ -43,6 +43,52 @@ pub(crate) enum IndexField {
     Key,
 }
 
+/// The Settings screen's left-nav sections (#71). Selecting one switches the content pane;
+/// each maps to one or two of the relocated panels. `settings_section` on `CaptureApp` drives it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SettingsSection {
+    CaptureQuality,
+    Transcription,
+    Voice,
+    IndexEndpoint,
+    Skills,
+    Permissions,
+    Updates,
+}
+impl SettingsSection {
+    pub(crate) const ALL: [SettingsSection; 7] = [
+        SettingsSection::CaptureQuality,
+        SettingsSection::Transcription,
+        SettingsSection::Voice,
+        SettingsSection::IndexEndpoint,
+        SettingsSection::Skills,
+        SettingsSection::Permissions,
+        SettingsSection::Updates,
+    ];
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            SettingsSection::CaptureQuality => "Capture quality",
+            SettingsSection::Transcription => "Transcription",
+            SettingsSection::Voice => "Voice recognition",
+            SettingsSection::IndexEndpoint => "Index endpoint",
+            SettingsSection::Skills => "Skills",
+            SettingsSection::Permissions => "Permissions",
+            SettingsSection::Updates => "App & updates",
+        }
+    }
+    pub(crate) fn icon(&self) -> &'static str {
+        match self {
+            SettingsSection::CaptureQuality => "image",
+            SettingsSection::Transcription => "mic",
+            SettingsSection::Voice => "waveform",
+            SettingsSection::IndexEndpoint => "list-tree",
+            SettingsSection::Skills => "clipboard",
+            SettingsSection::Permissions => "shield",
+            SettingsSection::Updates => "refresh",
+        }
+    }
+}
+
 /// The session "playback" screen state (loaded from the session's on-disk artifacts).
 #[derive(Default)]
 pub(crate) struct PlaybackState {

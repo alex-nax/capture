@@ -3,12 +3,12 @@
 //! Returns the ordered list of settings children; the shell in `app.rs` appends them via
 //! `.children(...)` exactly as before.
 
-use gpui::{div, prelude::*, px, relative, rgb, Context, SharedString, Window};
+use gpui::{div, prelude::*, px, relative, rgb, rgba, Context, SharedString, Window};
 
 use crate::app::CaptureApp;
-use crate::components::{button, chip, ButtonVariant};
+use crate::components::{button, chip, icon, status_pill, ButtonVariant};
 use crate::skill;
-use crate::state::{ConfirmKind, IndexField, INDEX_PROVIDERS, LANGUAGES, RES_PRESETS};
+use crate::state::{ConfirmKind, IndexField, SettingsSection, INDEX_PROVIDERS, LANGUAGES, RES_PRESETS};
 use crate::theme;
 use crate::update;
 
@@ -238,7 +238,6 @@ impl CaptureApp {
             .flex()
             .flex_col()
             .gap_1()
-            .child(div().text_color(rgb(theme::TEXT_PRIMARY)).child("Capture quality"))
             .child(
                 div()
                     .flex()
@@ -304,12 +303,17 @@ impl CaptureApp {
             );
         }
 
-        let mut out: Vec<gpui::AnyElement> = Vec::new();
+        // Left-nav drives which section's panel(s) render in the content pane (#71). The prep
+        // blocks above are cheap to build; only the active section's elements are pushed.
+        let section = self.settings_section;
+        let mut content: Vec<gpui::AnyElement> = Vec::new();
 
-        // Settings screen: capture quality (+ voice model / permissions / skill below).
-        out.push(quality_panel.into_any_element());
+        if section == SettingsSection::CaptureQuality {
+            content.push(quality_panel.into_any_element());
+        }
 
-        out.push({
+        if section == SettingsSection::Updates {
+            content.push({
             // App update (#48): offer a newer GitHub release; install only after confirm.
             let mut row = div()
                 .flex()
@@ -372,9 +376,11 @@ impl CaptureApp {
                 }
             }
             row.into_any_element()
-        });
+            });
+        }
 
-        out.push({
+        if section == SettingsSection::Transcription {
+            content.push({
             // Transcription settings (#45): language + chunk length. Pinning the language
             // stops Whisper hallucinating "Thank you." on short non-English chunks; a 30s
             // chunk is the reliable default.
@@ -382,13 +388,14 @@ impl CaptureApp {
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(div().text_color(rgb(theme::TEXT_PRIMARY)).child("Transcription"))
                 .child(self.language_field(asr_lang_focused, cx))
                 .child(self.chunk_chips(cx))
                 .into_any_element()
-        });
+            });
+        }
 
-        out.push({
+        if section == SettingsSection::IndexEndpoint {
+            content.push({
             // Multimodal index endpoint (#52/#53): structured provider + host:port + key, and a
             // model dropdown. Indexing is OFF until set AND reachable (the dot reflects status).
             let (dot, label) = if self.index_status.available {
@@ -595,9 +602,11 @@ impl CaptureApp {
                         ),
                 )
                 .into_any_element()
-        });
+            });
+        }
 
-        out.push({
+        if section == SettingsSection::Skills {
+            content.push({
             div()
                 .flex()
                 .gap_2()
@@ -612,9 +621,11 @@ impl CaptureApp {
                     button(&label, ButtonVariant::Secondary, cx.listener(move |this, _, _, cx| this.install_skill(ix, cx)))
                 }))
                 .into_any_element()
-        });
+            });
+        }
 
-        out.push({
+        if section == SettingsSection::Permissions {
+            content.push({
             // Permissions (macOS): Screen Recording + Microphone status, Grant
             // (prompt), Settings (grant/revoke), Restart daemon (apply a new Screen
             // Recording grant without quitting the app — the agent respawns it).
@@ -625,7 +636,6 @@ impl CaptureApp {
             let mut panel = div().flex().flex_col().gap_1();
             if show {
                 panel = panel
-                    .child(div().text_color(rgb(theme::TEXT_PRIMARY)).child("Permissions"))
                     .child(self.perm_row(
                         "Screen Recording",
                         &sr,
@@ -651,12 +661,104 @@ impl CaptureApp {
                     ));
             }
             panel.into_any_element()
-        });
+            });
+        }
 
-        out.push(runtime_panel.into_any_element());
-        out.push(asr_panel.into_any_element());
+        if section == SettingsSection::Voice {
+            content.push(runtime_panel.into_any_element());
+            content.push(asr_panel.into_any_element());
+        }
 
-        out
+        let content_pane = div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .pl(px(24.0))
+            .child(
+                div()
+                    .text_size(px(theme::TS_SECTION))
+                    .font_weight(gpui::FontWeight(theme::FW_SEMIBOLD as f32))
+                    .text_color(rgb(theme::TEXT_PRIMARY))
+                    .child(section.label()),
+            )
+            .children(content);
+
+        vec![div()
+            .flex()
+            .w_full()
+            .child(self.settings_nav(cx))
+            .child(content_pane)
+            .into_any_element()]
+    }
+
+    /// The Settings left-nav (#71): the "Capture" title + daemon status pill + hotkey hint,
+    /// then the clickable section list. Clicking a row sets `settings_section` (→ re-render).
+    pub(crate) fn settings_nav(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let (daemon_line, reachable) = match &self.health {
+            Some(h) if h.ok => (format!("daemon v{} · pid {}", h.version, h.pid), true),
+            _ => ("no daemon".to_string(), false),
+        };
+        let mut nav = div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .w(px(200.0))
+            .gap_1()
+            .pr(px(16.0))
+            .border_r_1()
+            .border_color(rgb(theme::BORDER))
+            .child(
+                div()
+                    .text_size(px(theme::TS_TITLE))
+                    .font_weight(gpui::FontWeight(theme::FW_SEMIBOLD as f32))
+                    .text_color(rgb(theme::TEXT_PRIMARY))
+                    .child("Capture"),
+            )
+            .child(
+                div()
+                    .text_size(px(theme::TS_SMALL))
+                    .text_color(rgb(theme::TEXT_MUTED))
+                    .child(daemon_line),
+            )
+            .child(if reachable {
+                status_pill("reachable", theme::SUCCESS, theme::SUCCESS_SUBTLE)
+            } else {
+                status_pill("offline", theme::ERROR, theme::ERROR_SUBTLE)
+            });
+        if self.hotkey_id != 0 {
+            nav = nav.child(
+                div()
+                    .text_size(px(theme::TS_SMALL))
+                    .text_color(rgb(theme::ACCENT_TEXT))
+                    .child(format!("{} toggles capture", crate::hotkey::LABEL)),
+            );
+        }
+        nav = nav.child(div().h(px(8.0))); // spacer before the section list
+        for s in SettingsSection::ALL {
+            let active = s == self.settings_section;
+            nav = nav.child(
+                div()
+                    .id(SharedString::from(s.label()))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py(px(6.0))
+                    .rounded(px(theme::RADIUS_SM))
+                    .cursor_pointer()
+                    .when(active, |d| d.bg(rgb(theme::ACCENT_SUBTLE)))
+                    .text_color(rgb(if active { theme::ACCENT_TEXT_STRONG } else { theme::TEXT_SECONDARY }))
+                    .when(!active, |d| d.hover(|st| st.bg(rgba(theme::GHOST_HOVER))))
+                    .child(icon(s.icon(), 15.0, if active { theme::ACCENT_TEXT_STRONG } else { theme::TEXT_MUTED }))
+                    .child(div().text_size(px(theme::TS_BODY)).child(s.label()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.settings_section = s;
+                        cx.notify();
+                    })),
+            );
+        }
+        nav
     }
 
     /// The transcription-language control (#45): an editable ISO-code field + the active
