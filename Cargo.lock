@@ -819,6 +819,7 @@ dependencies = [
  "base64",
  "capture-core",
  "image",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
