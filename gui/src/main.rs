@@ -5,9 +5,13 @@
 
 mod app;
 mod assets;
+mod components;
 mod daemon;
+mod domain;
 mod hotkey;
+mod screens;
 mod skill;
+mod state;
 mod tray;
 mod update;
 

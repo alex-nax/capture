@@ -991,7 +991,7 @@
       "id": 68,
       "category": "gui",
       "priority": "high",
-      "passes": false,
+      "passes": true,
       "dependencies": [],
       "description": "Decompose gui/src/app.rs (4116 lines) into modules by SCREEN/COMPONENT/DOMAIN: theme.rs, components/ (button/chip/list_row/dropdown/modal/progress/section/icon as free fns), screens/ (dashboard, settings/{shell+sections}, playback, preset_picker as impl CaptureApp blocks), domain/ (capture/indexing/asr/sessions action methods), state.rs. Make CaptureApp fields pub(crate). BEHAVIOR-PRESERVING — same screens/actions relocated, cargo build clean. Foundation for the redesign. Spec: gui-redesign.md."
     },
