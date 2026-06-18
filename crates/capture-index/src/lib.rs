@@ -13,5 +13,6 @@
 //! - `agents` — AGENTS.md generation (#57).
 
 pub mod build;
+pub mod live;
 pub mod prompts;
 pub mod vision;

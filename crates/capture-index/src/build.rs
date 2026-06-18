@@ -115,11 +115,15 @@ pub struct Params {
 }
 
 /// The assembled index — written to `index.json`. Keys match the Python `_assemble` EXACTLY.
+///
+/// `params` is a raw JSON value (not the [`Params`] struct) so the live/online indexer can record
+/// its own params shape (`sample_rate`/`max_leaves` null, plus `live: true`) through the SAME
+/// `assemble`/`write_index` path as a batch build. A batch build serializes its [`Params`] into it.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Index {
     pub index_version: u32,
     pub model: Option<String>,
-    pub params: Params,
+    pub params: Value,
     pub created_at: String,
     pub leaf_count: usize,
     pub node_count: usize,
@@ -131,7 +135,7 @@ pub struct Index {
 
 /// Longest-edge downscale to use for code/terminal extraction (default 2048; base is 1024).
 /// Mirrors `_code_max_px` (env `CAPTURE_INDEX_CODE_MAX_PX`, parse failure → 2048).
-fn code_max_px_env() -> u32 {
+pub(crate) fn code_max_px_env() -> u32 {
     match std::env::var("CAPTURE_INDEX_CODE_MAX_PX") {
         Ok(s) => s.trim().parse::<u32>().unwrap_or(2048),
         Err(_) => 2048,
@@ -321,7 +325,8 @@ pub fn build_index(
     }
 
     flag_code_reliability(&mut nodes); // #51: mark cross-frame-disagreeing code + surface dictated tokens
-    let index = assemble(&params, opts.model_label, &nodes, &root_node.id, n, total_nodes);
+    let params_value = serde_json::to_value(&params).unwrap_or_else(|_| json!({}));
+    let index = assemble(params_value, opts.model_label, &nodes, &root_node.id, n, total_nodes);
     write_index(d, &index);
     write_prompts_record(
         d,
@@ -556,7 +561,7 @@ fn report(
 
 /// Build a node — mirrors the Python `_node` (rounds `t_lo` to 3dp; `t_hi=None` for `+inf`).
 #[allow(clippy::too_many_arguments)]
-fn make_node(
+pub(crate) fn make_node(
     nid: &str,
     depth: u32,
     lo: usize,
@@ -687,7 +692,7 @@ fn data_file_key(data: Option<&Value>) -> String {
 /// transcript) and set `ocr_uncertain` where the OCR'd file name DISAGREES across frames — a
 /// file/asset seen only once amid several differently-named code leaves is the local model's
 /// confabulation signature. Returns the count flagged uncertain. Port of `_flag_code_reliability`.
-fn flag_code_reliability(nodes: &mut HashMap<String, Node>) -> usize {
+pub(crate) fn flag_code_reliability(nodes: &mut HashMap<String, Node>) -> usize {
     // The ids of the code leaves (leaf == no children, type in the reliability set).
     let code_leaf_ids: Vec<String> = nodes
         .values()
@@ -741,7 +746,7 @@ fn flag_code_reliability(nodes: &mut HashMap<String, Node>) -> usize {
 /// tuning skill ingests. Records the per-type content distribution, the (default or overridden)
 /// classify prompt, and any caller-supplied custom prompts/schemas. Port of `_write_prompts_record`.
 #[allow(clippy::too_many_arguments)]
-fn write_prompts_record(
+pub(crate) fn write_prompts_record(
     d: &Path,
     model_label: Option<&str>,
     preset: &str,
@@ -830,7 +835,7 @@ fn write_prompts_record(
 
 /// Write `<session>/AGENTS.md` — a trust-calibration + usage guide for any agent that later
 /// consumes this capture (#57). Content-aware via the leaf type mix. Port of `_write_agents_md`.
-fn write_agents_md(d: &Path, index: &Index, model_label: Option<&str>, nodes: &HashMap<String, Node>) {
+pub(crate) fn write_agents_md(d: &Path, index: &Index, model_label: Option<&str>, nodes: &HashMap<String, Node>) {
     // Leaves in id-sort order (so the flagged-frames list + mix order are deterministic).
     let ordered_ids = sorted_ids(nodes);
     let leaves: Vec<&Node> = ordered_ids
@@ -1020,9 +1025,10 @@ fn sorted_ids(nodes: &HashMap<String, Node>) -> Vec<String> {
     ids
 }
 
-/// Assemble the index dict from the node map. Port of `_assemble`.
-fn assemble(
-    params: &Params,
+/// Assemble the index dict from the node map. Port of `_assemble`. `params` is the already-built
+/// params JSON value (a batch [`Params`] serialized, or the live params shape).
+pub(crate) fn assemble(
+    params: Value,
     model_label: Option<&str>,
     nodes: &HashMap<String, Node>,
     root_id: &str,
@@ -1034,7 +1040,7 @@ fn assemble(
     Index {
         index_version: INDEX_VERSION,
         model: model_label.map(|s| s.to_string()),
-        params: params.clone(),
+        params,
         created_at: iso(Some(now())),
         leaf_count,
         node_count,
@@ -1120,14 +1126,15 @@ fn save_checkpoint(
             }
         }
     }
-    let idx = assemble(params, model_label, nodes, root_id, leaf_count, node_count);
+    let params_value = serde_json::to_value(params).unwrap_or_else(|_| json!({}));
+    let idx = assemble(params_value, model_label, nodes, root_id, leaf_count, node_count);
     if let Ok(s) = serde_json::to_string_pretty(&idx) {
         let _ = std::fs::write(&p, s);
     }
 }
 
 /// Write `index.json` + `index_summary.txt`. Port of `_write_index`.
-fn write_index(session_dir: &Path, index: &Index) {
+pub(crate) fn write_index(session_dir: &Path, index: &Index) {
     if let Ok(s) = serde_json::to_string_pretty(index) {
         let _ = std::fs::write(index_path(session_dir), s);
     }
