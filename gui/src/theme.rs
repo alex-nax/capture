@@ -11,6 +11,8 @@ pub(crate) const ELEVATED: u32 = 0x2d2d30; // Dropdowns, modal card, hovered row
 pub(crate) const BORDER: u32 = 0x3a3a3d; // 1px dividers, default control outlines.
 pub(crate) const BORDER_STRONG: u32 = 0x4a4a4e; // Input borders, hovered/focused outlines.
 pub(crate) const NAV_BG: u32 = 0x1c1c1e; // Settings left-nav pane background.
+pub(crate) const CARD_BORDER: u32 = 0x232326; // Card outline — darker than BORDER (structural, not a control).
+pub(crate) const HAIRLINE: u32 = 0x2a2a2d; // Nav edge / section divider hairline.
 pub(crate) const CHIP_IDLE: u32 = 0x2a2a2c; // Idle chip/control fill (sits on BG).
 pub(crate) const CHIP_DISABLED: u32 = 0x1f1f22; // Disabled chip fill (§4 chip matrix).
 

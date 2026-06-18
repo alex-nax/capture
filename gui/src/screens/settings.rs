@@ -1,13 +1,14 @@
-//! The Settings screen render branch + its field/row helper methods. Relocated verbatim
-//! from `app.rs` `render()` (#68). ONE file for now (per #68; per-section split is later).
-//! Returns the ordered list of settings children; the shell in `app.rs` appends them via
-//! `.children(...)` exactly as before.
+//! The Settings screen: a two-pane frame (left nav + content) matching the LOCKED
+//! design artboard (`design/unpacked/_template.html`, the SETTINGS block). The nav
+//! switches `settings_section`; the content pane renders that section's card(s).
+//! Markup/styling only — every listener, focus handle, and the section gating below
+//! is preserved verbatim from the prior single-column implementation (#68/#71).
 
 use gpui::{div, prelude::*, px, rgb, rgba, Context, SharedString, Window};
 
 use crate::app::CaptureApp;
 use crate::components::{
-    button, button_disabled, chip, eyebrow, icon, list_row, progress_bar, status_pill,
+    button, button_disabled, button_sm, card, chip, eyebrow, icon, progress_bar, status_pill,
     ButtonVariant,
 };
 use crate::skill;
@@ -16,278 +17,205 @@ use crate::theme;
 use crate::update;
 
 impl CaptureApp {
-    /// Build the Settings screen's children, in render order: capture quality, app update,
-    /// transcription, the index endpoint, skill installers, permissions, the voice-recognition
-    /// runtime panel, and the Whisper model panel. Mirrors the prior `sett.then(...)` chain.
+    /// Build the Settings screen: a single two-pane row (left nav · content), min-height
+    /// 580. The content pane shows the active section's card(s). Returns the screen's
+    /// children (the shell in `app.rs` appends them via `.children(...)`).
     pub(crate) fn render_settings(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<gpui::AnyElement> {
-        let index_host_focused = self.index_host_focus.is_focused(window);
-        let index_port_focused = self.index_port_focus.is_focused(window);
-        let index_key_focused = self.index_key_focus.is_focused(window);
-        let asr_lang_focused = self.asr_language_focus.is_focused(window);
+        let body = div()
+            .flex()
+            .size_full() // fill the window; the nav is fixed-width, the content pane scrolls
+            .child(self.settings_nav(cx))
+            .child(self.settings_content(window, cx));
+        vec![body.into_any_element()]
+    }
 
-        // ── Voice recognition (§5): a runtime selector drives the model list ──────────
-        // The user picks a runtime (CPU / Core ML / CUDA / remote), then manages the
-        // models the ACTIVE runtime reports. Install / download progress are SSE-fed.
-        let (asr_progress, rt_install) = {
-            let live = self.live.lock().unwrap();
-            (live.asr_progress.clone(), live.runtime_install.clone())
-        };
-        let nvidia = self.runtimes.gpu.nvidia;
-        // Runtime selector: one selectable list_row per runtime. The active runtime gets
-        // the accent treatment; the right side shows a status pill or an action button.
-        let rt_rows: Vec<gpui::AnyElement> = self
-            .runtimes
-            .runtimes
-            .iter()
-            .map(|rt| {
-                let id = rt.id.clone();
-                let prog = rt_install.get(&id).copied();
-                let is_remote = rt.kind == "remote";
-                // CUDA-unavailable state: a runtime that needs an NVIDIA GPU on a box
-                // without one. Detect from the requirement text (case-insensitive).
-                let req_lower = rt.requires.to_lowercase();
-                let needs_nvidia = req_lower.contains("nvidia") || req_lower.contains("cuda");
-                let gpu_unavailable = !is_remote && needs_nvidia && !nvidia;
-
-                // Right-hand state + action.
-                let mut right = div().flex().items_center().gap(px(theme::SP_2));
-                if rt.active {
-                    right = right.child(status_pill("active", theme::SUCCESS, theme::SUCCESS_SUBTLE));
-                } else if let Some(f) = prog {
-                    let pct = (f * 100.0).clamp(0.0, 100.0);
-                    right = right
-                        .child(div().w(px(120.0)).child(progress_bar(f.clamp(0.0, 1.0), false)))
-                        .child(
-                            div()
-                                .text_size(px(theme::TS_SMALL))
-                                .text_color(rgb(theme::TEXT_MUTED))
-                                .child(format!("{pct:.0}%")),
-                        );
-                } else if gpu_unavailable {
-                    right = right
-                        .child(status_pill("unavailable", theme::TEXT_MUTED, theme::CHIP_IDLE))
-                        .child(button_disabled("Install"));
-                } else if is_remote {
-                    let i = id.clone();
-                    right = right.child(button(
-                        "Use",
-                        ButtonVariant::Secondary,
-                        cx.listener(move |this, _, _, cx| this.set_runtime(i.clone(), cx)),
-                    ));
-                } else if !rt.installed {
-                    let i = id.clone();
-                    right = right.child(button(
-                        "Install",
-                        ButtonVariant::Primary,
-                        cx.listener(move |this, _, _, cx| this.install_runtime(i.clone(), cx)),
-                    ));
-                } else {
-                    let i = id.clone();
-                    right = right.child(button(
-                        "Use",
-                        ButtonVariant::Secondary,
-                        cx.listener(move |this, _, _, cx| this.set_runtime(i.clone(), cx)),
-                    ));
-                }
-
-                // Label + requirement line.
-                let mut left = div().flex().flex_col().gap(px(2.0)).child(
-                    div()
-                        .text_size(px(theme::TS_BODY))
-                        .font_weight(gpui::FontWeight(theme::FW_MEDIUM as f32))
-                        .text_color(rgb(theme::TEXT_PRIMARY))
-                        .child(rt.label.clone()),
-                );
-                if !rt.requires.is_empty() {
-                    left = left.child(
-                        div()
-                            .text_size(px(theme::TS_SMALL))
-                            .text_color(rgb(theme::TEXT_MUTED))
-                            .child(rt.requires.clone()),
-                    );
-                }
-                if gpu_unavailable {
-                    left = left.child(
-                        div()
-                            .text_size(px(theme::TS_SMALL))
-                            .text_color(rgb(theme::TEXT_MUTED))
-                            .child("no NVIDIA GPU detected"),
-                    );
-                }
-                let content = div()
-                    .flex_1()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(px(theme::SP_3))
-                    .child(left)
-                    .child(right);
-
-                // The whole row is selectable only when picking it is meaningful: an
-                // installed local runtime or an available remote, and not already active /
-                // installing / gpu-unavailable. Otherwise a no-op listener.
-                let selectable = !rt.active
-                    && prog.is_none()
-                    && !gpu_unavailable
-                    && (is_remote || rt.installed);
-                let i = id.clone();
-                if selectable {
-                    list_row(
-                        &format!("rt-{id}"),
-                        rt.active,
-                        cx.listener(move |this, _, _, cx| this.set_runtime(i.clone(), cx)),
-                        content,
-                    )
-                    .into_any_element()
-                } else {
-                    list_row(
-                        &format!("rt-{id}"),
-                        rt.active,
-                        cx.listener(|_, _, _, _| {}),
-                        content,
-                    )
-                    .into_any_element()
-                }
-            })
-            .collect();
-
-        // Model manager: one row per model the active runtime reports. Each row carries
-        // its own active tint (so it's a plain container, not a list_row).
-        let model_rows: Vec<gpui::AnyElement> = self
-            .asr
-            .models
-            .iter()
-            .map(|m| {
-                let repo = m.repo.clone();
-                let prog = asr_progress.get(&repo).copied();
-                let downloading = prog.is_some() || m.downloading;
-
-                let mut right = div().flex().items_center().gap(px(theme::SP_2));
-                if downloading {
-                    let f = prog.unwrap_or(0.0).clamp(0.0, 1.0);
-                    right = right
-                        .child(div().w(px(140.0)).child(progress_bar(f, false)))
-                        .child(
-                            div()
-                                .text_size(px(theme::TS_SMALL))
-                                .text_color(rgb(theme::TEXT_MUTED))
-                                .child(format!("{:.0}%", f * 100.0)),
-                        );
-                } else if m.active && m.downloaded {
-                    let r = repo.clone();
-                    right = right
-                        .child(status_pill("active", theme::SUCCESS, theme::SUCCESS_SUBTLE))
-                        .child(button(
-                            "Remove",
-                            ButtonVariant::Destructive,
-                            cx.listener(move |this, _, _, cx| this.delete_model(r.clone(), cx)),
-                        ));
-                } else if m.active {
-                    let r = repo.clone();
-                    right = right
-                        .child(status_pill("needs download", theme::WARNING, theme::WARNING_SUBTLE))
-                        .child(button(
-                            "Download",
-                            ButtonVariant::Primary,
-                            cx.listener(move |this, _, _, cx| this.download_model(r.clone(), cx)),
-                        ));
-                } else if m.downloaded {
-                    let (r_use, r_rm) = (repo.clone(), repo.clone());
-                    right = right
-                        .child(status_pill("downloaded", theme::SUCCESS, theme::SUCCESS_SUBTLE))
-                        .child(button(
-                            "Use",
-                            ButtonVariant::Secondary,
-                            cx.listener(move |this, _, _, cx| this.set_active_model(r_use.clone(), cx)),
-                        ))
-                        .child(button(
-                            "Remove",
-                            ButtonVariant::Destructive,
-                            cx.listener(move |this, _, _, cx| this.delete_model(r_rm.clone(), cx)),
-                        ));
-                } else {
-                    let r = repo.clone();
-                    right = right.child(button(
-                        "Download",
-                        ButtonVariant::Primary,
-                        cx.listener(move |this, _, _, cx| this.download_model(r.clone(), cx)),
-                    ));
-                }
-
-                let mut name = div().flex().items_center().gap(px(theme::SP_2));
-                if m.active {
-                    name = name.child(
-                        div().flex_none().size(px(8.0)).rounded_full().bg(rgb(theme::SUCCESS)),
-                    );
-                }
-                name = name
-                    .child(
-                        div()
-                            .text_size(px(theme::TS_BODY))
-                            .font_weight(gpui::FontWeight(theme::FW_MEDIUM as f32))
-                            .text_color(rgb(theme::TEXT_PRIMARY))
-                            .child(m.name.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(theme::TS_SMALL))
-                            .text_color(rgb(theme::TEXT_MUTED))
-                            .child(format!("· {}", m.size_label)),
-                    );
-
+    /// The content pane (right side): the section header (title + Back) then the active
+    /// section's card(s). `flex-1, min-width 0, padding 22×26, gap 16`.
+    fn settings_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let section = self.settings_section;
+        let header = div()
+            .flex()
+            .justify_between()
+            .items_center()
+            .child(
                 div()
+                    .text_size(px(theme::TS_SECTION))
+                    .font_weight(gpui::FontWeight(theme::FW_SEMIBOLD as f32))
+                    .text_color(rgb(theme::TEXT_PRIMARY))
+                    .child(section.label()),
+            )
+            .child(
+                // Back to the dashboard. Same effect as the shell's header Back button.
+                div()
+                    .id("settings-back")
                     .flex()
                     .items_center()
-                    .justify_between()
-                    .gap(px(theme::SP_3))
-                    .py(px(10.0))
-                    .px(px(12.0))
-                    .rounded(px(theme::RADIUS_MD))
-                    .border_1()
-                    .border_color(rgb(theme::BORDER))
-                    .when(m.active, |d| d.bg(rgb(theme::ACTIVE_ROW)))
-                    .child(name)
-                    .child(right)
-                    .into_any_element()
-            })
-            .collect();
+                    .gap(px(6.0))
+                    .px(px(11.0))
+                    .py(px(7.0))
+                    .rounded(px(theme::RADIUS_SM))
+                    .cursor_pointer()
+                    .text_color(rgb(theme::TEXT_SECONDARY))
+                    .font_weight(gpui::FontWeight(theme::FW_MEDIUM as f32))
+                    .text_size(px(theme::TS_BODY))
+                    .hover(|s| s.bg(rgba(theme::GHOST_HOVER)))
+                    .child(icon("chevron-left", 15.0, theme::TEXT_SECONDARY))
+                    .child("Back")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.show_settings = false;
+                        cx.notify();
+                    })),
+            );
 
-        let runtime_panel = div()
+        let mut content: Vec<gpui::AnyElement> = Vec::new();
+        match section {
+            SettingsSection::CaptureQuality => content.push(self.section_capture(cx)),
+            SettingsSection::Transcription => content.push(self.section_transcription(window, cx)),
+            SettingsSection::Voice => content.extend(self.section_voice(cx)),
+            SettingsSection::IndexEndpoint => content.push(self.section_index(window, cx)),
+            SettingsSection::Skills => content.push(self.section_skills(cx)),
+            SettingsSection::Permissions => content.push(self.section_permissions(cx)),
+            SettingsSection::Updates => content.push(self.section_updates(cx)),
+        }
+
+        div()
+            .id("settings-content")
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .overflow_y_scroll() // long sections scroll within the pane, not the whole window
             .flex()
             .flex_col()
-            .gap(px(theme::SP_2))
-            .child(eyebrow("Runtime"))
-            .children(rt_rows);
+            .gap(px(theme::SP_4))
+            .px(px(26.0))
+            .py(px(22.0))
+            .child(header)
+            .children(content)
+    }
 
-        let mut asr_panel = div().flex().flex_col().gap(px(theme::SP_2)).child(eyebrow("Models"));
-        if self.asr.backend_available {
-            asr_panel = asr_panel.children(model_rows);
-        } else {
-            asr_panel = asr_panel.child(
+    /// The Settings left-nav (#71): brand + daemon line at top, the section list, a spacer,
+    /// then the hotkey hint + daemon status pinned to the bottom. Clicking a row sets
+    /// `settings_section` (→ re-render).
+    pub(crate) fn settings_nav(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let (daemon_line, reachable) = match &self.health {
+            Some(h) if h.ok => (format!("daemon v{} · pid {}", h.version, h.pid), true),
+            _ => ("no daemon".to_string(), false),
+        };
+
+        // Brand block: "Capture" 15/600 + the daemon line in mono 11px below it.
+        let brand = div()
+            .px(px(6.0))
+            .child(
                 div()
-                    .text_size(px(theme::TS_BODY))
+                    .text_size(px(theme::TS_HEADING))
+                    .font_weight(gpui::FontWeight(theme::FW_SEMIBOLD as f32))
+                    .text_color(rgb(theme::TEXT_PRIMARY))
+                    .child("Capture"),
+            )
+            .child(
+                // The frame renders this in mono; the app bundles no mono face, so it stays
+                // in the default family at the mono size/color (matches the prior nav).
+                div()
+                    .mt(px(5.0))
+                    .text_size(px(theme::TS_EYEBROW))
                     .text_color(rgb(theme::TEXT_MUTED))
-                    .child("Runtime unavailable in this daemon — capture still works."),
+                    .child(daemon_line),
+            );
+
+        // The section list: one button per SettingsSection.
+        let mut items = div().flex().flex_col().gap(px(3.0));
+        for s in SettingsSection::ALL {
+            let active = s == self.settings_section;
+            items = items.child(
+                div()
+                    .id(SharedString::from(s.label()))
+                    .flex()
+                    .items_center()
+                    .gap(px(theme::SP_2) + px(2.0))
+                    .w_full()
+                    .px(px(10.0))
+                    .py(px(theme::SP_2))
+                    .rounded(px(theme::RADIUS_MD))
+                    .cursor_pointer()
+                    .text_size(px(theme::TS_BODY))
+                    .font_weight(gpui::FontWeight(theme::FW_MEDIUM as f32))
+                    .when(active, |d| d.bg(rgb(theme::ACCENT_SUBTLE)))
+                    .text_color(rgb(if active { theme::ACCENT_TEXT_STRONG } else { theme::TEXT_SECONDARY }))
+                    .when(!active, |d| d.hover(|st| st.bg(rgb(theme::ELEVATED))))
+                    .child(icon(s.icon(), 15.0, if active { theme::ACCENT_TEXT_STRONG } else { theme::TEXT_MUTED }))
+                    .child(div().child(s.label()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.settings_section = s;
+                        cx.notify();
+                    })),
             );
         }
 
-        // Capture-quality settings (Settings screen): screenshot format + resolution
-        // + jpeg quality, applied to new captures via shot_settings().
-        let is_jpeg = self.shot_format == "jpeg";
-        let mut quality_panel = div()
+        // Bottom block: hotkey hint (if bound) + the inline daemon status dot+label.
+        let mut bottom = div()
+            .pt(px(theme::SP_3))
+            .border_t_1()
+            .border_color(rgb(theme::HAIRLINE))
             .flex()
             .flex_col()
-            .gap(px(theme::SP_3))
-            .child(
+            .gap(px(9.0));
+        if self.hotkey_id != 0 {
+            bottom = bottom.child(
                 div()
-                    .flex()
-                    .gap_2()
-                    .items_center()
-                    .child(self.field_label("Screenshots", 96.0))
+                    .px(px(6.0))
+                    .text_size(px(theme::TS_EYEBROW))
+                    .text_color(rgb(theme::ACCENT_TEXT))
+                    .child(format!("{} toggles capture", crate::hotkey::LABEL)),
+            );
+        }
+        let (dot_color, status_label) = if reachable {
+            (theme::SUCCESS, "reachable")
+        } else {
+            (theme::ERROR, "offline")
+        };
+        bottom = bottom.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .px(px(6.0))
+                .text_size(px(theme::TS_EYEBROW))
+                .text_color(rgb(dot_color))
+                .child(div().flex_none().size(px(6.0)).rounded_full().bg(rgb(dot_color)))
+                .child(status_label),
+        );
+
+        div()
+            .flex_none()
+            .w(px(214.0))
+            .flex()
+            .flex_col()
+            .gap(px(theme::SP_4))
+            .px(px(theme::SP_3))
+            .py(px(theme::SP_4))
+            .bg(rgb(theme::NAV_BG))
+            .border_r_1()
+            .border_color(rgb(theme::HAIRLINE))
+            .child(brand)
+            .child(items)
+            .child(div().flex_1())
+            .child(bottom)
+    }
+
+    // ── Section: Capture quality ─────────────────────────────────────────────
+    /// One card of `.row`s — screenshots / format / resolution / jpeg-quality.
+    fn section_capture(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let is_jpeg = self.shot_format == "jpeg";
+        let mut rows = div()
+            .flex()
+            .flex_col()
+            .gap(px(13.0))
+            .child(
+                self.field_row("Screenshots")
                     .child(chip("cap-shots-on", "On", self.capture_screenshots, cx.listener(|this, _, _, cx| {
                         this.capture_screenshots = true;
                         this.save_settings();
@@ -300,11 +228,7 @@ impl CaptureApp {
                     }))),
             )
             .child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .items_center()
-                    .child(self.field_label("Format", 96.0))
+                self.field_row("Format")
                     .child(chip("fmt-png", "PNG", self.shot_format == "png", cx.listener(|this, _, _, cx| {
                         this.shot_format = "png".into();
                         this.save_settings();
@@ -317,11 +241,7 @@ impl CaptureApp {
                     }))),
             )
             .child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .items_center()
-                    .child(self.field_label("Resolution", 96.0))
+                self.field_row("Resolution")
                     .children(RES_PRESETS.iter().enumerate().map(|(i, p)| {
                         chip(&format!("res-{i}"), p.0, self.shot_res_ix == i, cx.listener(move |this, _, _, cx| {
                             this.shot_res_ix = i;
@@ -331,12 +251,8 @@ impl CaptureApp {
                     })),
             );
         if is_jpeg {
-            quality_panel = quality_panel.child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .items_center()
-                    .child(self.field_label("JPEG quality", 96.0))
+            rows = rows.child(
+                self.field_row("JPEG quality")
                     .children([60u32, 80, 95].into_iter().map(|q| {
                         chip(&format!("q-{q}"), &q.to_string(), self.jpeg_quality == q, cx.listener(move |this, _, _, cx| {
                             this.jpeg_quality = q;
@@ -346,351 +262,586 @@ impl CaptureApp {
                     })),
             );
         }
+        card(rows).into_any_element()
+    }
 
-        // Left-nav drives which section's panel(s) render in the content pane (#71). The prep
-        // blocks above are cheap to build; only the active section's elements are pushed.
-        let section = self.settings_section;
-        let mut content: Vec<gpui::AnyElement> = Vec::new();
-
-        if section == SettingsSection::CaptureQuality {
-            content.push(quality_panel.into_any_element());
-        }
-
-        if section == SettingsSection::Updates {
-            content.push({
-            // App update (#48): offer a newer GitHub release; install only after confirm.
-            let panel = div()
-                .flex()
-                .flex_col()
-                .gap(px(theme::SP_2))
-                .child(eyebrow("Version"));
-            let mut row = div()
-                .flex()
-                .gap_2()
-                .items_center()
-                .child(self.field_label("App", 70.0));
-            match (&self.update_info, self.updating) {
-                (_, true) => {
-                    // The DMG/exe is ~175 MB, so show a real progress bar (#48). `t == 0` means the
-                    // server didn't send Content-Length yet → indeterminate (just downloaded MB).
-                    let (d, t) = self.update_progress.unwrap_or((0, 0));
-                    let dmb = d as f64 / 1_048_576.0;
-                    if t > 0 {
-                        let frac = (d as f32 / t as f32).clamp(0.0, 1.0);
-                        let tmb = t as f64 / 1_048_576.0;
-                        row = row
-                            .child(div().w(px(160.0)).child(progress_bar(frac, false)))
-                            .child(
-                                div()
-                                    .text_size(px(theme::TS_SMALL))
-                                    .text_color(rgb(theme::ACCENT_TEXT))
-                                    .child(format!(
-                                        "downloading update… {}%  ({:.0}/{:.0} MB)",
-                                        (frac * 100.0) as i32,
-                                        dmb,
-                                        tmb,
-                                    )),
-                            );
-                    } else {
-                        row = row.child(
-                            div()
-                                .text_size(px(theme::TS_SMALL))
-                                .text_color(rgb(theme::ACCENT_TEXT))
-                                .child(format!("downloading update… ({:.0} MB)", dmb)),
-                        );
-                    }
-                }
-                (Some(info), false) => {
-                    let info2 = info.clone();
-                    row = row
-                        .child(div().text_color(rgb(theme::WARNING)).child(format!("v{} available (you have v{})", info.version, update::CURRENT)))
-                        .child(button(
-                            "Update…",
-                            ButtonVariant::Primary,
-                            cx.listener(move |this, _, _, cx| {
-                                this.confirm = Some(ConfirmKind::Update(info2.clone()));
-                                cx.notify();
-                            }),
-                        ));
-                }
-                (None, false) => {
-                    row = row.child(div().text_color(rgb(theme::TEXT_MUTED)).child(format!("v{} · up to date", update::CURRENT)));
-                }
-            }
-            panel.child(row).into_any_element()
-            });
-        }
-
-        if section == SettingsSection::Transcription {
-            content.push({
-            // Transcription settings (#45): language + chunk length. Pinning the language
-            // stops Whisper hallucinating "Thank you." on short non-English chunks; a 30s
-            // chunk is the reliable default.
+    // ── Section: Transcription ───────────────────────────────────────────────
+    /// One card: Language (searchable dropdown) + Chunk (chips).
+    fn section_transcription(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let asr_lang_focused = self.asr_language_focus.is_focused(window);
+        // Transcription settings (#45): language + chunk length. Pinning the language
+        // stops Whisper hallucinating "Thank you." on short non-English chunks; a 30s
+        // chunk is the reliable default.
+        card(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(theme::SP_3))
+                .gap(px(13.0))
                 .child(self.language_field(asr_lang_focused, cx))
-                .child(self.chunk_chips(cx))
-                .into_any_element()
-            });
-        }
+                .child(self.chunk_chips(cx)),
+        )
+        .into_any_element()
+    }
 
-        if section == SettingsSection::IndexEndpoint {
-            content.push({
-            // Multimodal index endpoint (#52/#53): structured provider + host:port + key, and a
-            // model dropdown. Indexing is OFF until set AND reachable (the pill reflects status).
-            let status_pill_el = if self.index_status.available {
-                status_pill("reachable", theme::SUCCESS, theme::SUCCESS_SUBTLE)
-            } else if self.index_status.configured {
-                status_pill("unreachable", theme::ERROR, theme::ERROR_SUBTLE)
-            } else {
-                status_pill("not set", theme::TEXT_MUTED, theme::CHIP_IDLE)
-            };
-            let is_base = self.index_is_base_url();
-            let mut panel = div()
+    // ── Section: Voice recognition ───────────────────────────────────────────
+    /// First a Runtime card (eyebrow + note + wrapping runtime chips), then — based on the
+    /// ACTIVE runtime — a remote-config card, a CUDA-unavailable dashed box, or the Whisper
+    /// models card.
+    fn section_voice(&mut self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let (asr_progress, rt_install) = {
+            let live = self.live.lock().unwrap();
+            (live.asr_progress.clone(), live.runtime_install.clone())
+        };
+        let nvidia = self.runtimes.gpu.nvidia;
+
+        // Classify the active runtime to pick the second card.
+        let active_rt = self.runtimes.runtimes.iter().find(|r| r.active).cloned();
+        let active_remote = active_rt.as_ref().map(|r| r.kind == "remote").unwrap_or(false);
+        let active_needs_nvidia = active_rt
+            .as_ref()
+            .map(|r| {
+                let req = r.requires.to_lowercase();
+                r.kind != "remote" && (req.contains("nvidia") || req.contains("cuda"))
+            })
+            .unwrap_or(false);
+        let cuda_unavailable = active_needs_nvidia && !nvidia;
+
+        // Runtime selector card: eyebrow + note + the runtimes as wrapping chips.
+        let note = if active_remote {
+            "Transcription runs on the configured remote endpoint."
+        } else if cuda_unavailable {
+            "The active runtime needs an NVIDIA GPU. Switch to CPU or a remote endpoint."
+        } else {
+            "Choose where transcription runs. Local engines download models on demand; remote sends audio to an endpoint."
+        };
+        let mut chips = div().flex().gap(px(theme::SP_2)).flex_wrap();
+        for rt in &self.runtimes.runtimes {
+            let id = rt.id.clone();
+            // Selecting a runtime = activating it (set_runtime). Selected = the active one.
+            chips = chips.child(chip(
+                &format!("rt-{id}"),
+                &rt.label,
+                rt.active,
+                cx.listener(move |this, _, _, cx| this.set_runtime(id.clone(), cx)),
+            ));
+        }
+        let runtime_card = card(
+            div()
                 .flex()
                 .flex_col()
-                .gap(px(theme::SP_3))
+                .child(eyebrow("Runtime"))
                 .child(
                     div()
+                        .mt(px(theme::SP_2))
+                        .mb(px(14.0))
+                        .text_size(px(theme::TS_SMALL))
+                        .line_height(px(18.0))
+                        .text_color(rgb(theme::TEXT_MUTED))
+                        .child(note),
+                )
+                .child(chips),
+        )
+        .into_any_element();
+
+        let mut out = vec![runtime_card];
+
+        if active_remote {
+            // Remote-config card. No backend wiring exists for editing the remote endpoint
+            // yet, so the fields are read-only (mirrors the frame; invents no calls).
+            out.push(
+                card(
+                    div()
                         .flex()
-                        .gap_2()
-                        .items_center()
+                        .flex_col()
+                        .gap(px(13.0))
+                        .child(
+                            self.field_row("Endpoint")
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .px(px(theme::SP_3))
+                                        .py(px(theme::SP_2))
+                                        .rounded(px(theme::RADIUS_MD))
+                                        .border_1()
+                                        .border_color(rgb(theme::BORDER))
+                                        .bg(rgb(theme::BG))
+                                        .text_size(px(theme::TS_BODY))
+                                        .text_color(rgb(theme::TEXT_MUTED))
+                                        .child("configured on the remote daemon"),
+                                ),
+                        )
+                        .child(
+                            self.field_row("Model").child(
+                                div()
+                                    .flex_1()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .px(px(theme::SP_3))
+                                    .py(px(theme::SP_2))
+                                    .rounded(px(theme::RADIUS_MD))
+                                    .border_1()
+                                    .border_color(rgb(theme::BORDER))
+                                    .bg(rgb(theme::BG))
+                                    .text_size(px(theme::TS_BODY))
+                                    .text_color(rgb(theme::TEXT_PRIMARY))
+                                    .child("server default")
+                                    .child(icon("chevron-down", 15.0, theme::TEXT_MUTED)),
+                            ),
+                        )
                         .child(
                             div()
-                                .text_size(px(theme::TS_BODY))
-                                .font_weight(gpui::FontWeight(theme::FW_MEDIUM as f32))
-                                .text_color(rgb(theme::TEXT_PRIMARY))
-                                .child("Index endpoint"),
-                        )
-                        .child(status_pill_el),
+                                .text_size(px(theme::TS_SMALL))
+                                .line_height(px(18.0))
+                                .text_color(rgb(theme::TEXT_MUTED))
+                                .child("Models are served by the remote endpoint — no local download required."),
+                        ),
                 )
-                // Provider chips: selecting prefills the port + re-fetches models.
-                .child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .items_center()
-                        .flex_wrap()
-                        .child(self.field_label("provider", 60.0))
-                        .children(INDEX_PROVIDERS.iter().map(|(id, plabel, _, _, _)| {
-                            let pid = id.to_string();
-                            chip(
-                                &format!("idx-prov-{id}"),
-                                plabel,
-                                self.index_provider == *id,
-                                cx.listener(move |this, _, _, cx| this.set_index_provider(&pid, cx)),
+                .into_any_element(),
+            );
+        } else if cuda_unavailable {
+            // CUDA-unavailable dashed box: amber dot + message + a disabled install button.
+            out.push(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(14.0))
+                    .p(px(theme::SP_4))
+                    .rounded(px(theme::RADIUS_LG))
+                    .border_1()
+                    .border_dashed()
+                    .border_color(rgb(theme::BORDER))
+                    .bg(rgb(theme::BG))
+                    .child(div().flex_none().size(px(8.0)).rounded_full().bg(rgb(theme::WARNING)))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(3.0))
+                            .child(
+                                div()
+                                    .text_size(px(theme::TS_BODY))
+                                    .font_weight(gpui::FontWeight(theme::FW_MEDIUM as f32))
+                                    .text_color(rgb(theme::TEXT_PRIMARY))
+                                    .child("CUDA runtime not available"),
                             )
-                        })),
-                )
-                // Host (or "Base URL" for the custom provider).
-                .child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .items_center()
-                        .child(self.field_label(if is_base { "base URL" } else { "host" }, 60.0))
+                            .child(
+                                div()
+                                    .text_size(px(theme::TS_SMALL))
+                                    .text_color(rgb(theme::TEXT_MUTED))
+                                    .child("No NVIDIA GPU detected on this machine. Use CPU or a remote endpoint."),
+                            ),
+                    )
+                    .child(div().flex_1())
+                    .child(button_disabled("Install runtime pack"))
+                    .into_any_element(),
+            );
+        } else {
+            // Whisper models card.
+            out.push(self.asr_models_card(&asr_progress, cx));
+        }
+
+        // The runtime-install progress is surfaced inline per-runtime in the frame's intent;
+        // we keep the SSE feed read (`rt_install`) consulted so an in-flight install shows
+        // its progress on the active engine row when one exists.
+        let _ = rt_install;
+        out
+    }
+
+    /// The Whisper models card: a baseline title row + one row per model with its state.
+    fn asr_models_card(
+        &mut self,
+        asr_progress: &std::collections::HashMap<String, f32>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let title_row = div()
+            .flex()
+            .items_baseline()
+            .gap(px(theme::SP_2))
+            .mb(px(14.0))
+            .child(
+                div()
+                    .text_size(px(theme::TS_BODY))
+                    .font_weight(gpui::FontWeight(theme::FW_SEMIBOLD as f32))
+                    .text_color(rgb(theme::TEXT_PRIMARY))
+                    .child("Whisper models"),
+            )
+            .child(
+                div()
+                    .text_size(px(theme::TS_SMALL))
+                    .text_color(rgb(theme::TEXT_MUTED))
+                    .child(if self.asr.backend_available {
+                        "downloaded on demand · ~/.cache/huggingface"
+                    } else {
+                        "runtime unavailable in this daemon — capture still works"
+                    }),
+            );
+
+        let mut body = div().flex().flex_col().child(title_row);
+
+        if self.asr.backend_available {
+            let mut rows = div().flex().flex_col().gap(px(1.0));
+            for m in &self.asr.models {
+                let repo = m.repo.clone();
+                let prog = asr_progress.get(&repo).copied();
+                let downloading = prog.is_some() || m.downloading;
+
+                let mut right = div().flex().flex_none().items_center().gap(px(theme::SP_2));
+                if downloading {
+                    let f = prog.unwrap_or(0.0).clamp(0.0, 1.0);
+                    right = right
+                        .child(div().w(px(140.0)).child(progress_bar(f, false)))
                         .child(
                             div()
-                                .id("index-host-input")
-                                .track_focus(&self.index_host_focus)
-                                .key_context("index-host")
-                                .on_key_down(cx.listener(|this, ev, _w, cx| this.on_index_field_key(IndexField::Host, ev, cx)))
-                                .flex_1()
-                                .px_2()
-                                .py_1()
-                                .rounded_md()
-                                .border_1()
-                                .border_color(if index_host_focused { rgb(theme::ACCENT_BORDER) } else { rgb(theme::BORDER) })
-                                .bg(rgb(theme::PANEL))
-                                .text_color(if self.index_host.is_empty() { rgb(theme::TEXT_MUTED) } else { rgb(theme::TEXT_PRIMARY) })
-                                .child(if self.index_host.is_empty() {
-                                    if is_base { "http://1.2.3.4:8000/v1  (Enter to check)".to_string() }
-                                    else { "192.168.31.217  (Enter to check)".to_string() }
-                                } else if index_host_focused {
-                                    format!("{}▏", self.index_host)
-                                } else {
-                                    self.index_host.clone()
-                                })
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    window.focus(&this.index_host_focus);
-                                    cx.notify();
-                                })),
+                                .text_size(px(theme::TS_SMALL))
+                                .text_color(rgb(theme::TEXT_MUTED))
+                                .child(format!("{:.0}%", f * 100.0)),
+                        );
+                } else if m.active {
+                    // Active model: a SUCCESS dot+"active" plus a Remove (it's downloaded).
+                    right = right
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .text_size(px(theme::TS_SMALL))
+                                .text_color(rgb(theme::SUCCESS))
+                                .child(div().flex_none().size(px(6.0)).rounded_full().bg(rgb(theme::SUCCESS)))
+                                .child("active"),
+                        );
+                    if m.downloaded {
+                        let r = repo.clone();
+                        right = right.child(button_sm(
+                            "Remove",
+                            ButtonVariant::Destructive,
+                            cx.listener(move |this, _, _, cx| this.delete_model(r.clone(), cx)),
+                        ));
+                    } else {
+                        let r = repo.clone();
+                        right = right.child(button_sm(
+                            "Download",
+                            ButtonVariant::Primary,
+                            cx.listener(move |this, _, _, cx| this.download_model(r.clone(), cx)),
+                        ));
+                    }
+                } else if m.downloaded {
+                    // Downloaded, not active: check+"downloaded" + Use + Remove.
+                    let (r_use, r_rm) = (repo.clone(), repo.clone());
+                    right = right
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(5.0))
+                                .text_size(px(theme::TS_SMALL))
+                                .text_color(rgb(theme::SUCCESS))
+                                .child(icon("check", 13.0, theme::SUCCESS))
+                                .child("downloaded"),
                         )
-                        .child(button("Check", ButtonVariant::Secondary, cx.listener(|this, _, _, cx| this.probe_index_status(cx)))),
-                );
-            // Port (host:port providers only — custom hides it).
-            if !is_base {
-                panel = panel.child(
+                        .child(button_sm(
+                            "Use",
+                            ButtonVariant::Secondary,
+                            cx.listener(move |this, _, _, cx| this.set_active_model(r_use.clone(), cx)),
+                        ))
+                        .child(button_sm(
+                            "Remove",
+                            ButtonVariant::Destructive,
+                            cx.listener(move |this, _, _, cx| this.delete_model(r_rm.clone(), cx)),
+                        ));
+                } else {
+                    // Available: a Download action.
+                    let r = repo.clone();
+                    right = right.child(button(
+                        "Download",
+                        ButtonVariant::Primary,
+                        cx.listener(move |this, _, _, cx| this.download_model(r.clone(), cx)),
+                    ));
+                }
+
+                // Left group (name · size) is allowed to shrink + truncate so the action
+                // buttons (flex_none) always stay on-screen when the window is narrow.
+                let left = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .min_w_0()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .text_size(px(theme::TS_BODY))
+                            .text_color(rgb(theme::TEXT_PRIMARY))
+                            .child(m.name.clone()),
+                    )
+                    .child(div().flex_none().text_size(px(theme::TS_SMALL)).text_color(rgb(theme::TEXT_DISABLED)).child("·"))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(px(theme::TS_SMALL))
+                            .text_color(rgb(theme::TEXT_MUTED))
+                            .child(m.size_label.clone()),
+                    );
+                rows = rows.child(
                     div()
                         .flex()
-                        .gap_2()
                         .items_center()
-                        .child(self.field_label("port", 60.0))
-                        .child(
-                            div()
-                                .id("index-port-input")
-                                .track_focus(&self.index_port_focus)
-                                .key_context("index-port")
-                                .on_key_down(cx.listener(|this, ev, _w, cx| this.on_index_field_key(IndexField::Port, ev, cx)))
-                                .w(px(110.0))
-                                .px_2()
-                                .py_1()
-                                .rounded_md()
-                                .border_1()
-                                .border_color(if index_port_focused { rgb(theme::ACCENT_BORDER) } else { rgb(theme::BORDER) })
-                                .bg(rgb(theme::PANEL))
-                                .text_color(if self.index_port.is_empty() { rgb(theme::TEXT_MUTED) } else { rgb(theme::TEXT_PRIMARY) })
-                                .child(if self.index_port.is_empty() {
-                                    "1234".to_string()
-                                } else if index_port_focused {
-                                    format!("{}▏", self.index_port)
-                                } else {
-                                    self.index_port.clone()
-                                })
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    window.focus(&this.index_port_focus);
-                                    cx.notify();
-                                })),
-                        ),
-                );
-            }
-            // API key (openai only).
-            if self.index_needs_key() {
-                panel = panel.child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .items_center()
-                        .child(self.field_label("API key", 60.0))
-                        .child(
-                            div()
-                                .id("index-key-input")
-                                .track_focus(&self.index_key_focus)
-                                .key_context("index-key")
-                                .on_key_down(cx.listener(|this, ev, _w, cx| this.on_index_field_key(IndexField::Key, ev, cx)))
-                                .flex_1()
-                                .px_2()
-                                .py_1()
-                                .rounded_md()
-                                .border_1()
-                                .border_color(if index_key_focused { rgb(theme::ACCENT_BORDER) } else { rgb(theme::BORDER) })
-                                .bg(rgb(theme::PANEL))
-                                .text_color(if self.index_key.is_empty() { rgb(theme::TEXT_MUTED) } else { rgb(theme::TEXT_PRIMARY) })
-                                .child(if self.index_key.is_empty() {
-                                    "sk-…  (Enter to check)".to_string()
-                                } else if index_key_focused {
-                                    format!("{}▏", self.index_key)
-                                } else {
-                                    self.index_key.clone()
-                                })
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    window.focus(&this.index_key_focus);
-                                    cx.notify();
-                                })),
-                        ),
+                        .gap(px(theme::SP_3))
+                        .py(px(9.0))
+                        .px(px(10.0))
+                        .rounded(px(theme::RADIUS_MD))
+                        .when(m.active, |d| d.bg(rgb(theme::ACTIVE_ROW)))
+                        .child(left)
+                        .child(div().flex_1())
+                        .child(right),
                 );
             }
-            // Model dropdown (#53) + Refresh, reusing the language-dropdown pattern.
-            panel = panel.child(self.index_model_field(cx));
-            panel
-                .child(
-                    // Leaf sampling rate: caption every round(1/rate)-th frame. Coarser =
-                    // far fewer vision calls (a long session has thousands of frames).
-                    div()
-                        .flex()
-                        .gap_2()
-                        .items_center()
-                        .child(self.field_label("frames", 44.0))
-                        .children([1.0f64, 0.5, 0.25, 0.1, 0.05].into_iter().map(|r| {
-                            let label = if r >= 1.0 {
-                                "all".to_string()
-                            } else {
-                                format!("1/{}", (1.0 / r).round() as i32)
-                            };
+            body = body.child(rows);
+        }
+
+        card(body).into_any_element()
+    }
+
+    // ── Section: Index endpoint ──────────────────────────────────────────────
+    /// One card: eyebrow + status pill, then Provider / Host / Port / Model / Frames / Preset.
+    fn section_index(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let index_host_focused = self.index_host_focus.is_focused(window);
+        let index_port_focused = self.index_port_focus.is_focused(window);
+        let index_key_focused = self.index_key_focus.is_focused(window);
+
+        // Multimodal index endpoint (#52/#53): structured provider + host:port + key, and a
+        // model dropdown. Indexing is OFF until set AND reachable (the pill reflects status).
+        let status_pill_el = if self.index_status.available {
+            status_pill("reachable", theme::SUCCESS, theme::SUCCESS_SUBTLE)
+        } else if self.index_status.configured {
+            status_pill("unreachable", theme::ERROR, theme::ERROR_SUBTLE)
+        } else {
+            status_pill("not set", theme::TEXT_MUTED, theme::CHIP_IDLE)
+        };
+        let is_base = self.index_is_base_url();
+
+        let mut rows = div()
+            .flex()
+            .flex_col()
+            .gap(px(13.0))
+            // Provider chips: selecting prefills the port + re-fetches models.
+            .child(
+                self.field_row("Provider")
+                    .flex_wrap()
+                    .children(INDEX_PROVIDERS.iter().map(|(id, plabel, _, _, _)| {
+                        let pid = id.to_string();
+                        chip(
+                            &format!("idx-prov-{id}"),
+                            plabel,
+                            self.index_provider == *id,
+                            cx.listener(move |this, _, _, cx| this.set_index_provider(&pid, cx)),
+                        )
+                    })),
+            )
+            // Host (or "Base URL" for the custom provider) + Check.
+            .child(
+                self.field_row(if is_base { "Base URL" } else { "Host" })
+                    .child(self.index_input(
+                        "index-host-input",
+                        &self.index_host_focus,
+                        IndexField::Host,
+                        index_host_focused,
+                        &self.index_host,
+                        if is_base { "http://1.2.3.4:8000/v1  (Enter to check)" } else { "192.168.31.217  (Enter to check)" },
+                        true,
+                        cx,
+                    ))
+                    .child(button("Check", ButtonVariant::Secondary, cx.listener(|this, _, _, cx| this.probe_index_status(cx)))),
+            );
+
+        // Port (host:port providers only — custom hides it).
+        if !is_base {
+            rows = rows.child(
+                self.field_row("Port").child(self.index_input(
+                    "index-port-input",
+                    &self.index_port_focus,
+                    IndexField::Port,
+                    index_port_focused,
+                    &self.index_port,
+                    "1234",
+                    false,
+                    cx,
+                )),
+            );
+        }
+        // API key (openai only).
+        if self.index_needs_key() {
+            rows = rows.child(
+                self.field_row("API key").child(self.index_input(
+                    "index-key-input",
+                    &self.index_key_focus,
+                    IndexField::Key,
+                    index_key_focused,
+                    &self.index_key,
+                    "sk-…  (Enter to check)",
+                    true,
+                    cx,
+                )),
+            );
+        }
+        // Model dropdown (#53) + Refresh — restyled in indexing.rs to match `.fld`.
+        rows = rows
+            .child(self.index_model_field(cx))
+            .child(
+                // Leaf sampling rate: caption every round(1/rate)-th frame. Coarser =
+                // far fewer vision calls (a long session has thousands of frames).
+                self.field_row("Frames").children([1.0f64, 0.5, 0.25, 0.1, 0.05].into_iter().map(|r| {
+                    let label = if r >= 1.0 {
+                        "all".to_string()
+                    } else {
+                        format!("1/{}", (1.0 / r).round() as i32)
+                    };
+                    chip(
+                        &format!("idx-rate-{r}"),
+                        &label,
+                        (self.index_sample_rate - r).abs() < 1e-3,
+                        cx.listener(move |this, _, _, cx| {
+                            this.index_sample_rate = r;
+                            this.save_settings();
+                            cx.notify();
+                        }),
+                    )
+                })),
+            )
+            .child(
+                // Prompt preset: what's right for a meeting is wrong for a lecture.
+                self.field_row("Preset").children(
+                    [("auto", "Auto"), ("meeting", "Meeting"), ("lecture", "Lecture"), ("general", "General")]
+                        .into_iter()
+                        .map(|(key, label)| {
                             chip(
-                                &format!("idx-rate-{r}"),
-                                &label,
-                                (self.index_sample_rate - r).abs() < 1e-3,
+                                &format!("idx-preset-{key}"),
+                                label,
+                                self.index_preset == key,
                                 cx.listener(move |this, _, _, cx| {
-                                    this.index_sample_rate = r;
+                                    this.index_preset = key.to_string();
                                     this.save_settings();
                                     cx.notify();
                                 }),
                             )
-                        })),
-                )
-                .child(
-                    // Prompt preset: what's right for a meeting is wrong for a lecture.
-                    div()
-                        .flex()
-                        .gap_2()
-                        .items_center()
-                        .child(self.field_label("about", 44.0))
-                        .children(
-                            [("auto", "Auto"), ("meeting", "Meeting"), ("lecture", "Lecture"), ("general", "General")]
-                                .into_iter()
-                                .map(|(key, label)| {
-                                    chip(
-                                        &format!("idx-preset-{key}"),
-                                        label,
-                                        self.index_preset == key,
-                                        cx.listener(move |this, _, _, cx| {
-                                            this.index_preset = key.to_string();
-                                            this.save_settings();
-                                            cx.notify();
-                                        }),
-                                    )
-                                }),
-                        ),
-                )
-                .into_any_element()
-            });
-        }
+                        }),
+                ),
+            );
 
-        if section == SettingsSection::Skills {
-            content.push({
-            // One row per agent: the skill label on the left; an install/update action
-            // (or an "installed" pill) on the right, per its cached status (§5).
+        let header = div()
+            .flex()
+            .items_center()
+            .gap(px(theme::SP_2) + px(2.0))
+            .mb(px(theme::SP_4))
+            .child(eyebrow("Endpoint"))
+            .child(status_pill_el);
+
+        card(div().flex().flex_col().child(header).child(rows)).into_any_element()
+    }
+
+    /// A `.inp`-styled, focus-tracked index text field (host / port / key). Keeps the
+    /// per-field focus handle + the shared `on_index_field_key` handler.
+    #[allow(clippy::too_many_arguments)]
+    fn index_input(
+        &self,
+        id: &'static str,
+        focus: &gpui::FocusHandle,
+        field: IndexField,
+        focused: bool,
+        value: &str,
+        placeholder: &str,
+        grow: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let value = value.to_string();
+        let placeholder = placeholder.to_string();
+        let mut el = div()
+            .id(SharedString::from(id))
+            .track_focus(focus)
+            .key_context(id)
+            .on_key_down(cx.listener(move |this, ev, _w, cx| this.on_index_field_key(field, ev, cx)))
+            .px(px(theme::SP_3))
+            .py(px(theme::SP_2))
+            .rounded(px(theme::RADIUS_MD))
+            .border_1()
+            .border_color(if focused { rgb(theme::ACCENT_BORDER) } else { rgb(theme::BORDER) })
+            .bg(rgb(theme::BG))
+            .text_size(px(theme::TS_BODY))
+            .text_color(if value.is_empty() { rgb(theme::TEXT_MUTED) } else { rgb(theme::TEXT_PRIMARY) })
+            .cursor_pointer()
+            .child(if value.is_empty() {
+                placeholder
+            } else if focused {
+                format!("{value}▏")
+            } else {
+                value
+            })
+            .on_click(cx.listener({
+                let focus = focus.clone();
+                move |_this, _, window, cx| {
+                    window.focus(&focus);
+                    cx.notify();
+                }
+            }));
+        if grow {
+            el = el.flex_1();
+        } else {
+            el = el.w(px(140.0));
+        }
+        el
+    }
+
+    // ── Section: Skills ──────────────────────────────────────────────────────
+    /// One card: a bordered row per coding agent — clipboard icon + name/desc + action.
+    fn section_skills(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let rows = skill::AGENTS.iter().enumerate().map(|(ix, a)| {
+            let status = self.skill_status.get(ix).copied();
+            let installed = matches!(status, Some(skill::SkillStatus::UpToDate) | Some(skill::SkillStatus::UpdateAvailable));
+            let desc = match status {
+                Some(skill::SkillStatus::UpToDate) => "Capture skill · installed",
+                Some(skill::SkillStatus::UpdateAvailable) => "Capture skill · update available",
+                _ => "Capture skill · not installed",
+            };
+
+            let mut right = div().flex().items_center().gap(px(theme::SP_2));
+            match status {
+                Some(skill::SkillStatus::UpToDate) => {
+                    right = right.child(status_pill("installed", theme::SUCCESS, theme::SUCCESS_SUBTLE));
+                }
+                Some(skill::SkillStatus::UpdateAvailable) => {
+                    right = right
+                        .child(status_pill("update available", theme::WARNING, theme::WARNING_SUBTLE))
+                        .child(button(
+                            "Update",
+                            ButtonVariant::Primary,
+                            cx.listener(move |this, _, _, cx| this.install_skill(ix, cx)),
+                        ));
+                }
+                _ => {
+                    right = right.child(button(
+                        "Install",
+                        ButtonVariant::Secondary,
+                        cx.listener(move |this, _, _, cx| this.install_skill(ix, cx)),
+                    ));
+                }
+            }
+
             div()
                 .flex()
-                .flex_col()
-                .gap(px(theme::SP_2))
-                .children(skill::AGENTS.iter().enumerate().map(|(ix, a)| {
-                    let mut right = div().flex().items_center().gap(px(theme::SP_2));
-                    match self.skill_status.get(ix) {
-                        Some(skill::SkillStatus::UpToDate) => {
-                            right = right.child(status_pill("installed", theme::SUCCESS, theme::SUCCESS_SUBTLE));
-                        }
-                        Some(skill::SkillStatus::UpdateAvailable) => {
-                            right = right
-                                .child(status_pill("update", theme::WARNING, theme::WARNING_SUBTLE))
-                                .child(button(
-                                    "Update",
-                                    ButtonVariant::Secondary,
-                                    cx.listener(move |this, _, _, cx| this.install_skill(ix, cx)),
-                                ));
-                        }
-                        _ => {
-                            right = right.child(button(
-                                "Install",
-                                ButtonVariant::Primary,
-                                cx.listener(move |this, _, _, cx| this.install_skill(ix, cx)),
-                            ));
-                        }
-                    }
+                .items_center()
+                .gap(px(theme::SP_3))
+                .p(px(theme::SP_3))
+                .rounded(px(theme::RADIUS_MD))
+                .border_1()
+                .border_color(rgb(theme::ELEVATED))
+                .bg(rgb(theme::BG))
+                .child(icon("clipboard", 16.0, if installed { theme::ACCENT_TEXT } else { theme::TEXT_MUTED }))
+                .child(
                     div()
                         .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap(px(theme::SP_3))
-                        .py(px(10.0))
-                        .px(px(12.0))
-                        .rounded(px(theme::RADIUS_MD))
-                        .border_1()
-                        .border_color(rgb(theme::BORDER))
-                        .bg(rgb(theme::PANEL))
+                        .flex_col()
+                        .gap(px(2.0))
                         .child(
                             div()
                                 .text_size(px(theme::TS_BODY))
@@ -698,149 +849,160 @@ impl CaptureApp {
                                 .text_color(rgb(theme::TEXT_PRIMARY))
                                 .child(a.label),
                         )
-                        .child(right)
-                }))
-                .into_any_element()
-            });
-        }
+                        .child(
+                            div()
+                                .text_size(px(theme::TS_SMALL))
+                                .text_color(rgb(theme::TEXT_MUTED))
+                                .child(desc),
+                        ),
+                )
+                .child(div().flex_1())
+                .child(right)
+        });
 
-        if section == SettingsSection::Permissions {
-            content.push({
-            // Permissions (macOS): Screen Recording + Microphone status, Grant
-            // (prompt), Settings (grant/revoke), Restart daemon (apply a new Screen
-            // Recording grant without quitting the app — the agent respawns it).
-            let sr = self.perms.screen_recording.clone();
-            let mic = self.perms.microphone.clone();
-            let show = matches!(sr.as_str(), "granted" | "denied")
-                || matches!(mic.as_str(), "granted" | "denied" | "undetermined");
-            let mut panel = div().flex().flex_col().gap(px(theme::SP_2));
-            if show {
-                panel = panel
-                    .child(self.perm_row(
-                        "Screen Recording",
-                        &sr,
-                        "screenshots + window titles",
-                        "screen_recording",
-                        "Privacy_ScreenCapture",
-                        true, // promptable here (CoreGraphics FFI)
-                        cx,
-                    ))
-                    .child(self.perm_row(
-                        "Microphone",
-                        &mic,
-                        "mic-fallback audio",
-                        "microphone",
-                        "Privacy_Microphone",
-                        true, // promptable via the bundled agent one-shot (shared Team ID)
-                        cx,
-                    ))
-                    .child(
-                        div().pt(px(theme::SP_1)).child(button(
-                            "Restart daemon",
-                            ButtonVariant::Secondary,
-                            cx.listener(|this, _, _, cx| this.restart_daemon(cx)),
-                        )),
-                    );
-            }
-            panel.into_any_element()
-            });
-        }
-
-        if section == SettingsSection::Voice {
-            content.push(runtime_panel.into_any_element());
-            content.push(asr_panel.into_any_element());
-        }
-
-        let content_pane = div()
-            .flex_1()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .pl(px(24.0))
-            .child(
-                div()
-                    .text_size(px(theme::TS_SECTION))
-                    .font_weight(gpui::FontWeight(theme::FW_SEMIBOLD as f32))
-                    .text_color(rgb(theme::TEXT_PRIMARY))
-                    .child(section.label()),
-            )
-            .children(content);
-
-        vec![div()
-            .flex()
-            .w_full()
-            .child(self.settings_nav(cx))
-            .child(content_pane)
-            .into_any_element()]
+        card(div().flex().flex_col().gap(px(theme::SP_2)).children(rows)).into_any_element()
     }
 
-    /// The Settings left-nav (#71): the "Capture" title + daemon status pill + hotkey hint,
-    /// then the clickable section list. Clicking a row sets `settings_section` (→ re-render).
-    pub(crate) fn settings_nav(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (daemon_line, reachable) = match &self.health {
-            Some(h) if h.ok => (format!("daemon v{} · pid {}", h.version, h.pid), true),
-            _ => ("no daemon".to_string(), false),
-        };
-        let mut nav = div()
+    // ── Section: Permissions ─────────────────────────────────────────────────
+    /// One card: a perm row per permission, then a full-width Restart daemon button.
+    fn section_permissions(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        // Permissions (macOS): Screen Recording + Microphone status, Grant (prompt),
+        // Settings (grant/revoke), Restart daemon (apply a new Screen Recording grant
+        // without quitting — the agent respawns it).
+        let sr = self.perms.screen_recording.clone();
+        let mic = self.perms.microphone.clone();
+        let mut rows = div().flex().flex_col().gap(px(theme::SP_3));
+        rows = rows
+            .child(self.perm_row(
+                "Screen Recording",
+                &sr,
+                "screenshots + window titles",
+                "screen_recording",
+                "Privacy_ScreenCapture",
+                true, // promptable here (CoreGraphics FFI)
+                cx,
+            ))
+            .child(self.perm_row(
+                "Microphone",
+                &mic,
+                "mic-fallback audio",
+                "microphone",
+                "Privacy_Microphone",
+                true, // promptable via the bundled agent one-shot (shared Team ID)
+                cx,
+            ));
+
+        let restart = div()
+            .mt(px(theme::SP_4))
+            .id("perm-restart")
             .flex()
-            .flex_col()
-            .flex_none()
-            .w(px(200.0))
-            .gap_1()
-            .pr(px(16.0))
-            .border_r_1()
+            .items_center()
+            .justify_center()
+            .gap(px(7.0))
+            .w_full()
+            .h(px(32.0))
+            .rounded(px(theme::RADIUS_SM))
+            .border_1()
             .border_color(rgb(theme::BORDER))
-            .child(
-                div()
-                    .text_size(px(theme::TS_TITLE))
-                    .font_weight(gpui::FontWeight(theme::FW_SEMIBOLD as f32))
-                    .text_color(rgb(theme::TEXT_PRIMARY))
-                    .child("Capture"),
-            )
-            .child(
-                div()
-                    .text_size(px(theme::TS_SMALL))
-                    .text_color(rgb(theme::TEXT_MUTED))
-                    .child(daemon_line),
-            )
-            .child(if reachable {
-                status_pill("reachable", theme::SUCCESS, theme::SUCCESS_SUBTLE)
-            } else {
-                status_pill("offline", theme::ERROR, theme::ERROR_SUBTLE)
-            });
-        if self.hotkey_id != 0 {
-            nav = nav.child(
-                div()
-                    .text_size(px(theme::TS_SMALL))
-                    .text_color(rgb(theme::ACCENT_TEXT))
-                    .child(format!("{} toggles capture", crate::hotkey::LABEL)),
-            );
+            .bg(rgb(theme::ELEVATED))
+            .text_size(px(theme::TS_BODY))
+            .font_weight(gpui::FontWeight(theme::FW_MEDIUM as f32))
+            .text_color(rgb(theme::TEXT_PRIMARY))
+            .cursor_pointer()
+            .hover(|s| s.border_color(rgb(theme::BORDER_STRONG)))
+            .child(icon("refresh", 15.0, theme::TEXT_PRIMARY))
+            .child("Restart daemon")
+            .on_click(cx.listener(|this, _, _, cx| this.restart_daemon(cx)));
+
+        card(div().flex().flex_col().child(rows).child(restart)).into_any_element()
+    }
+
+    // ── Section: App & updates ───────────────────────────────────────────────
+    /// One card: Version + Update (progress while downloading, else up-to-date / available).
+    fn section_updates(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        // App update (#48): offer a newer GitHub release; install only after confirm.
+        let mut update_row = self.field_row("Update");
+        match (&self.update_info, self.updating) {
+            (_, true) => {
+                // The DMG/exe is ~175 MB, so show a real progress bar (#48). `t == 0` means the
+                // server didn't send Content-Length yet → indeterminate (just downloaded MB).
+                let (d, t) = self.update_progress.unwrap_or((0, 0));
+                let dmb = d as f64 / 1_048_576.0;
+                if t > 0 {
+                    let frac = (d as f32 / t as f32).clamp(0.0, 1.0);
+                    let tmb = t as f64 / 1_048_576.0;
+                    update_row = update_row
+                        .child(
+                            div()
+                                .text_size(px(theme::TS_BODY))
+                                .text_color(rgb(theme::TEXT_SECONDARY))
+                                .child(format!("downloading v{}", self.update_info.as_ref().map(|i| i.version.clone()).unwrap_or_default())),
+                        )
+                        .child(div().flex_1())
+                        .child(div().w(px(200.0)).child(progress_bar(frac, false)))
+                        .child(
+                            div()
+                                .text_size(px(theme::TS_SMALL))
+                                .text_color(rgb(theme::TEXT_SECONDARY))
+                                .child(format!("{}% · {:.0} / {:.0} MB", (frac * 100.0) as i32, dmb, tmb)),
+                        );
+                } else {
+                    update_row = update_row
+                        .child(
+                            div()
+                                .text_size(px(theme::TS_BODY))
+                                .text_color(rgb(theme::TEXT_SECONDARY))
+                                .child(format!("downloading update… ({:.0} MB)", dmb)),
+                        )
+                        .child(div().flex_1())
+                        .child(div().w(px(200.0)).child(progress_bar(0.0, false)));
+                }
+            }
+            (Some(info), false) => {
+                let info2 = info.clone();
+                update_row = update_row
+                    .child(
+                        div()
+                            .text_size(px(theme::TS_BODY))
+                            .text_color(rgb(theme::WARNING))
+                            .child(format!("v{} available", info.version)),
+                    )
+                    .child(div().flex_1())
+                    .child(button(
+                        "Update…",
+                        ButtonVariant::Primary,
+                        cx.listener(move |this, _, _, cx| {
+                            this.confirm = Some(ConfirmKind::Update(info2.clone()));
+                            cx.notify();
+                        }),
+                    ));
+            }
+            (None, false) => {
+                update_row = update_row.child(
+                    div()
+                        .text_size(px(theme::TS_BODY))
+                        .text_color(rgb(theme::TEXT_SECONDARY))
+                        .child("up to date"),
+                );
+            }
         }
-        nav = nav.child(div().h(px(8.0))); // spacer before the section list
-        for s in SettingsSection::ALL {
-            let active = s == self.settings_section;
-            nav = nav.child(
-                div()
-                    .id(SharedString::from(s.label()))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_2()
-                    .py(px(6.0))
-                    .rounded(px(theme::RADIUS_SM))
-                    .cursor_pointer()
-                    .when(active, |d| d.bg(rgb(theme::ACCENT_SUBTLE)))
-                    .text_color(rgb(if active { theme::ACCENT_TEXT_STRONG } else { theme::TEXT_SECONDARY }))
-                    .when(!active, |d| d.hover(|st| st.bg(rgba(theme::GHOST_HOVER))))
-                    .child(icon(s.icon(), 15.0, if active { theme::ACCENT_TEXT_STRONG } else { theme::TEXT_MUTED }))
-                    .child(div().text_size(px(theme::TS_BODY)).child(s.label()))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.settings_section = s;
-                        cx.notify();
-                    })),
-            );
-        }
-        nav
+
+        card(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(14.0))
+                .child(
+                    self.field_row("Version").child(
+                        div()
+                            .text_size(px(theme::TS_BODY))
+                            .text_color(rgb(theme::TEXT_PRIMARY))
+                            .child(format!("v{}", update::CURRENT)),
+                    ),
+                )
+                .child(update_row),
+        )
+        .into_any_element()
     }
 
     /// The transcription-language control (#45): an editable ISO-code field + the active
@@ -868,43 +1030,38 @@ impl CaptureApp {
         let open = self.lang_dropdown_open;
 
         let mut col = div().flex().flex_col().gap_1().child(
-            div()
-                .flex()
-                .gap_2()
-                .items_center()
-                .child(self.field_label("Language", 70.0))
-                .child(
-                    div()
-                        .id("asr-lang-input")
-                        .track_focus(&self.asr_language_focus)
-                        .key_context("asr-lang")
-                        .on_key_down(cx.listener(Self::on_asr_language_key))
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap(px(theme::SP_2))
-                        .w(px(220.0))
-                        .py(px(theme::SP_2))
-                        .px(px(theme::SP_3))
-                        .rounded(px(theme::RADIUS_MD))
-                        .text_size(px(theme::TS_BODY))
-                        .border_1()
-                        .border_color(if focused || open { rgb(theme::ACCENT_BORDER) } else { rgb(theme::BORDER) })
-                        .bg(rgb(theme::PANEL))
-                        .cursor_pointer()
-                        .when(!focused && !open, |d| d.hover(|s| s.border_color(rgb(theme::BORDER_STRONG))))
-                        .text_color(if dim { rgb(theme::TEXT_MUTED) } else { rgb(theme::TEXT_PRIMARY) })
-                        .child(field_text)
-                        .child(icon("chevron-down", 15.0, theme::TEXT_MUTED))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.lang_dropdown_open = !this.lang_dropdown_open;
-                            this.asr_language.clear();
-                            if this.lang_dropdown_open {
-                                window.focus(&this.asr_language_focus);
-                            }
-                            cx.notify();
-                        })),
-                ),
+            self.field_row("Language").child(
+                div()
+                    .id("asr-lang-input")
+                    .track_focus(&self.asr_language_focus)
+                    .key_context("asr-lang")
+                    .on_key_down(cx.listener(Self::on_asr_language_key))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(theme::SP_2))
+                    .w(px(240.0))
+                    .py(px(theme::SP_2))
+                    .px(px(theme::SP_3))
+                    .rounded(px(theme::RADIUS_MD))
+                    .text_size(px(theme::TS_BODY))
+                    .border_1()
+                    .border_color(if focused || open { rgb(theme::ACCENT_BORDER) } else { rgb(theme::BORDER) })
+                    .bg(rgb(theme::BG))
+                    .cursor_pointer()
+                    .when(!focused && !open, |d| d.hover(|s| s.border_color(rgb(theme::BORDER_STRONG))))
+                    .text_color(if dim { rgb(theme::TEXT_MUTED) } else { rgb(theme::TEXT_PRIMARY) })
+                    .child(field_text)
+                    .child(icon("chevron-down", 15.0, theme::TEXT_MUTED))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.lang_dropdown_open = !this.lang_dropdown_open;
+                        this.asr_language.clear();
+                        if this.lang_dropdown_open {
+                            window.focus(&this.asr_language_focus);
+                        }
+                        cx.notify();
+                    })),
+            ),
         );
 
         if self.lang_dropdown_open {
@@ -913,8 +1070,8 @@ impl CaptureApp {
             let mut list = div()
                 .flex()
                 .flex_col()
-                .ml(px(78.0))
-                .w(px(220.0))
+                .ml(px(132.0))
+                .w(px(240.0))
                 .p(px(theme::SP_1))
                 .rounded(px(theme::RADIUS_MD))
                 .border_1()
@@ -969,28 +1126,33 @@ impl CaptureApp {
     /// short-chunk hallucination; smaller = lower latency.
     pub(crate) fn chunk_chips(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let cur = self.asr.chunk_seconds;
-        div()
-            .flex()
-            .gap_2()
-            .items_center()
-            .child(self.field_label("Chunk", 70.0))
-            .children([8.0f64, 15.0, 30.0, 60.0].into_iter().map(|s| {
-                chip(
-                    &format!("chunk-{s}"),
-                    &format!("{s:.0}s"),
-                    (cur - s).abs() < 0.5,
-                    cx.listener(move |this, _, _, cx| this.set_asr_chunk(s, cx)),
-                )
-            }))
+        self.field_row("Chunk").children([8.0f64, 15.0, 30.0, 60.0].into_iter().map(|s| {
+            chip(
+                &format!("chunk-{s}"),
+                &format!("{s:.0}s"),
+                (cur - s).abs() < 0.5,
+                cx.listener(move |this, _, _, cx| this.set_asr_chunk(s, cx)),
+            )
+        }))
     }
 
-    /// A consistent left-hand field label (min-width aligned, TEXT_SECONDARY body)
-    /// for the row-based controls (capture quality, transcription, index endpoint).
-    fn field_label(&self, text: &'static str, min_w: f32) -> impl IntoElement {
+    /// A `.row`: a 118px muted `.lbl` (via `field_label`) followed by a flex row, gap 14,
+    /// items-center — the caller `.child(...)`s the controls. Matches the design `.row`/`.lbl`.
+    fn field_row(&self, label: &'static str) -> gpui::Div {
         div()
-            .min_w(px(min_w))
+            .flex()
+            .items_center()
+            .gap(px(14.0))
+            .child(self.field_label(label))
+    }
+
+    /// A consistent left-hand field label (design `.lbl`): 118px fixed, TEXT_MUTED body.
+    fn field_label(&self, text: &'static str) -> impl IntoElement {
+        div()
+            .w(px(118.0))
+            .flex_none()
             .text_size(px(theme::TS_BODY))
-            .text_color(rgb(theme::TEXT_SECONDARY))
+            .text_color(rgb(theme::TEXT_MUTED))
             .child(text)
     }
 
@@ -1008,77 +1170,51 @@ impl CaptureApp {
         can_prompt: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let glyph = if kind == "microphone" { "mic" } else { "shield" };
-        let left = div()
+        // Name column: 160px fixed (design), TEXT_PRIMARY body.
+        let name = div()
+            .w(px(160.0))
+            .flex_none()
+            .text_size(px(theme::TS_BODY))
+            .text_color(rgb(theme::TEXT_PRIMARY))
+            .child(title);
+        let _ = why;
+
+        // Status: a dot + label. granted→SUCCESS, not-granted→WARNING, undetermined→muted.
+        let (dot, label, prompt_btn): (u32, &str, bool) = match status {
+            "granted" => (theme::SUCCESS, "granted", false),
+            "undetermined" => (theme::TEXT_MUTED, "not requested", false),
+            _ => (theme::WARNING, "not granted", true),
+        };
+        let status_el = div()
             .flex()
             .items_center()
-            .gap(px(theme::SP_3))
-            .child(icon(glyph, 16.0, theme::TEXT_MUTED))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.0))
-                    .child(
-                        div()
-                            .text_size(px(theme::TS_BODY))
-                            .font_weight(gpui::FontWeight(theme::FW_MEDIUM as f32))
-                            .text_color(rgb(theme::TEXT_PRIMARY))
-                            .child(title),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(theme::TS_SMALL))
-                            .text_color(rgb(theme::TEXT_MUTED))
-                            .child(why),
-                    ),
-            );
+            .gap(px(6.0))
+            .text_size(px(theme::TS_SMALL))
+            .text_color(rgb(dot))
+            .child(div().flex_none().size(px(6.0)).rounded_full().bg(rgb(dot)))
+            .child(label);
 
-        // "not granted" stays WARNING amber here — the ERROR-red blocking treatment is
-        // the dashboard's job (#74). Undetermined → neutral "not requested".
         let mut right = div().flex().items_center().gap(px(theme::SP_2));
-        match status {
-            "granted" => {
-                right = right.child(status_pill("granted", theme::SUCCESS, theme::SUCCESS_SUBTLE));
-            }
-            "undetermined" => {
-                right = right
-                    .child(status_pill("not requested", theme::TEXT_MUTED, theme::CHIP_IDLE))
-                    .child(button(
-                        "Settings",
-                        ButtonVariant::Secondary,
-                        cx.listener(move |this, _, _, cx| this.open_privacy_settings(pane, cx)),
-                    ));
-            }
-            _ => {
-                right = right.child(status_pill("not granted", theme::WARNING, theme::WARNING_SUBTLE));
-                if can_prompt {
-                    right = right.child(button(
-                        "Grant",
-                        ButtonVariant::Primary,
-                        cx.listener(move |this, _, _, cx| this.request_permission(kind, cx)),
-                    ));
-                }
-                right = right.child(button(
-                    "Settings",
-                    ButtonVariant::Secondary,
-                    cx.listener(move |this, _, _, cx| this.open_privacy_settings(pane, cx)),
-                ));
-            }
+        if prompt_btn && can_prompt {
+            right = right.child(button(
+                "Grant",
+                ButtonVariant::Primary,
+                cx.listener(move |this, _, _, cx| this.request_permission(kind, cx)),
+            ));
         }
+        right = right.child(button(
+            "Settings",
+            ButtonVariant::Secondary,
+            cx.listener(move |this, _, _, cx| this.open_privacy_settings(pane, cx)),
+        ));
 
         div()
             .flex()
             .items_center()
-            .justify_between()
-            .gap(px(theme::SP_3))
-            .py(px(10.0))
-            .px(px(12.0))
-            .rounded(px(theme::RADIUS_MD))
-            .border_1()
-            .border_color(rgb(theme::BORDER))
-            .bg(rgb(theme::PANEL))
-            .child(left)
+            .gap(px(14.0))
+            .child(name)
+            .child(status_el)
+            .child(div().flex_1())
             .child(right)
     }
 }

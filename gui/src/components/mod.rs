@@ -2,6 +2,7 @@
 //! Relocated verbatim from `app.rs` (#68 refactor); primitives extended in #70.
 
 pub(crate) mod button;
+pub(crate) mod card;
 pub(crate) mod chip;
 pub(crate) mod dropdown;
 pub(crate) mod icon;
@@ -10,8 +11,10 @@ pub(crate) mod modal;
 pub(crate) mod progress;
 pub(crate) mod section;
 
-pub(crate) use button::{button, ButtonVariant};
+pub(crate) use button::{button, button_sm, ButtonVariant};
 pub(crate) use chip::chip;
+#[allow(unused_imports)]
+pub(crate) use card::card;
 pub(crate) use icon::icon;
 
 // Primitives built in #70 but not wired into a screen until #71–#76. Re-exported

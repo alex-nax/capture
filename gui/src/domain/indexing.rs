@@ -39,34 +39,49 @@ impl CaptureApp {
     /// expands the fetched `index_models` as selectable rows, plus a Refresh affordance that
     /// re-fetches from the provider. Reuses the language-dropdown layout/idioms.
     pub(crate) fn index_model_field(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        use crate::components::chip;
-        use gpui::{div, px, rgb};
+        use crate::components::{button, icon, ButtonVariant};
+        use crate::theme;
+        use gpui::{div, px, rgb, rgba};
         let field_text = if self.index_model.is_empty() {
-            "server default ▾".to_string()
+            "server default".to_string()
         } else {
-            format!("{} ▾", self.index_model)
+            self.index_model.clone()
         };
         let dim = self.index_model.is_empty();
+        let open = self.model_dropdown_open;
 
+        // Label (118px `.lbl`) + the `.fld` dropdown field + a secondary Refresh button.
         let mut col = div().flex().flex_col().gap_1().child(
             div()
                 .flex()
-                .gap_2()
                 .items_center()
-                .child(div().min_w(px(60.0)).text_color(rgb(0x9aa0a6)).child("model"))
+                .gap(px(14.0))
+                .child(
+                    div()
+                        .w(px(118.0))
+                        .flex_none()
+                        .text_size(px(theme::TS_BODY))
+                        .text_color(rgb(theme::TEXT_MUTED))
+                        .child("Model"),
+                )
                 .child(
                     div()
                         .id("index-model-dropdown")
                         .flex_1()
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .px(px(theme::SP_3))
+                        .py(px(theme::SP_2))
+                        .rounded(px(theme::RADIUS_MD))
                         .border_1()
-                        .border_color(if self.model_dropdown_open { rgb(0x3d6a87) } else { rgb(0x2a2a2a) })
-                        .bg(rgb(0x1e1e1e))
+                        .border_color(if open { rgb(theme::ACCENT_BORDER) } else { rgb(theme::BORDER) })
+                        .bg(rgb(theme::BG))
                         .cursor_pointer()
-                        .text_color(if dim { rgb(0x666b6f) } else { rgb(0xe0e0e0) })
+                        .text_size(px(theme::TS_BODY))
+                        .text_color(if dim { rgb(theme::TEXT_MUTED) } else { rgb(theme::TEXT_PRIMARY) })
                         .child(field_text)
+                        .child(icon("chevron-down", 15.0, theme::TEXT_MUTED))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.model_dropdown_open = !this.model_dropdown_open;
                             // Lazily refresh on first open if we have nothing yet.
@@ -76,45 +91,48 @@ impl CaptureApp {
                             cx.notify();
                         })),
                 )
-                .child(chip(
-                    "idx-model-refresh",
+                .child(button(
                     "Refresh",
-                    false,
+                    ButtonVariant::Secondary,
                     cx.listener(|this, _, _, cx| this.fetch_index_models(cx)),
                 )),
         );
 
         if self.model_dropdown_open {
+            // §4 dropdown menu surface: ELEVATED / 1px BORDER, radius 6, pad 4.
             let mut list = div()
                 .flex()
                 .flex_col()
-                .ml(px(68.0))
+                .ml(px(132.0))
                 .w(px(280.0))
-                .rounded_md()
+                .p(px(theme::SP_1))
+                .rounded(px(theme::RADIUS_MD))
                 .border_1()
-                .border_color(rgb(0x3a3a3a))
-                .bg(rgb(0x16181c));
+                .border_color(rgb(theme::BORDER))
+                .bg(rgb(theme::ELEVATED));
             // A "server default" row (blank model) plus each fetched model.
             let default_active = self.index_model.is_empty();
             list = list.child(
                 div()
                     .id("idx-model-row-default")
                     .flex()
-                    .px_2()
-                    .py_1()
+                    .py(px(7.0))
+                    .px(px(10.0))
+                    .rounded(px(4.0))
                     .cursor_pointer()
-                    .hover(|s| s.bg(rgb(0x23262b)))
-                    .when(default_active, |s| s.bg(rgb(0x1d2733)))
-                    .text_color(rgb(0x9aa0a6))
+                    .text_size(px(theme::TS_BODY))
+                    .when(default_active, |s| s.bg(rgb(theme::ACCENT_SUBTLE)).text_color(rgb(theme::ACCENT_TEXT)))
+                    .when(!default_active, |s| s.text_color(rgb(theme::TEXT_MUTED)).hover(|h| h.bg(rgba(theme::GHOST_HOVER))))
                     .child("server default")
                     .on_click(cx.listener(|this, _, _, cx| this.set_index_model(String::new(), cx))),
             );
             if self.index_models.is_empty() {
                 list = list.child(
                     div()
-                        .px_2()
-                        .py_1()
-                        .text_color(rgb(0x6a6a6a))
+                        .py(px(7.0))
+                        .px(px(10.0))
+                        .text_size(px(theme::TS_BODY))
+                        .text_color(rgb(theme::TEXT_MUTED))
                         .child("no models — set host/port, then Refresh"),
                 );
             } else {
@@ -125,12 +143,13 @@ impl CaptureApp {
                         div()
                             .id(("idx-model-row", i))
                             .flex()
-                            .px_2()
-                            .py_1()
+                            .py(px(7.0))
+                            .px(px(10.0))
+                            .rounded(px(4.0))
                             .cursor_pointer()
-                            .hover(|s| s.bg(rgb(0x23262b)))
-                            .when(is_active, |s| s.bg(rgb(0x1d2733)))
-                            .text_color(rgb(0xc8ccd0))
+                            .text_size(px(theme::TS_BODY))
+                            .when(is_active, |s| s.bg(rgb(theme::ACCENT_SUBTLE)).text_color(rgb(theme::ACCENT_TEXT)))
+                            .when(!is_active, |s| s.text_color(rgb(theme::TEXT_SECONDARY)).hover(|h| h.bg(rgba(theme::GHOST_HOVER))))
                             .child(model.clone())
                             .on_click(cx.listener(move |this, _, _, cx| this.set_index_model(m.clone(), cx))),
                     );

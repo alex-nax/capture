@@ -16,16 +16,18 @@ pub(crate) enum ButtonVariant {
 /// Shared chrome for every button variant: height 32, radius 5 (RADIUS_SM),
 /// horizontal padding ~14, body type, with per-variant fill/border/text/weight
 /// + hover (and pressed for Primary). `id` keys the interactive element.
-fn base(id: &str, variant: &ButtonVariant) -> gpui::Stateful<gpui::Div> {
+fn base(id: &str, variant: &ButtonVariant, small: bool) -> gpui::Stateful<gpui::Div> {
     let b = div()
         .id(SharedString::from(id.to_string()))
         .flex()
+        .flex_none() // never let a button shrink/clip when a row is tight — the label area truncates instead
         .items_center()
         .justify_center()
-        .h(px(32.0))
-        .px(px(14.0))
+        .when(!small, |d| d.h(px(32.0)))
+        .when(small, |d| d.py(px(4.0)))
+        .px(if small { px(11.0) } else { px(14.0) })
         .rounded(px(theme::RADIUS_SM))
-        .text_size(px(theme::TS_BODY))
+        .text_size(px(if small { theme::TS_SMALL } else { theme::TS_BODY }))
         .cursor_pointer();
     match variant {
         ButtonVariant::Primary => b
@@ -60,7 +62,17 @@ pub(crate) fn button(
     variant: ButtonVariant,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    base(label, &variant).child(label.to_string()).on_click(on_click)
+    base(label, &variant, false).child(label.to_string()).on_click(on_click)
+}
+
+/// A compact button for dense rows (model/skill actions): padding 4×11, 12px, no fixed
+/// height. Same variant palette as `button`.
+pub(crate) fn button_sm(
+    label: &str,
+    variant: ButtonVariant,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    base(label, &variant, true).child(label.to_string()).on_click(on_click)
 }
 
 /// A button with a leading icon (gap 7px) sized to the label. The icon is tinted
@@ -78,7 +90,7 @@ pub(crate) fn icon_button(
         ButtonVariant::Ghost => theme::TEXT_SECONDARY,
         ButtonVariant::Destructive => theme::ERROR,
     };
-    base(label, &variant)
+    base(label, &variant, false)
         .gap(px(7.0))
         .child(icon(icon_name, 15.0, tint))
         .child(label.to_string())

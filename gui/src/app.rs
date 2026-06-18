@@ -856,7 +856,13 @@ impl Render for CaptureApp {
                     }
                 }),
             )
-            .child(
+            .child(if sett {
+                // The Settings screen owns the whole window: a flush left-nav + content
+                // two-pane (it renders its own brand, daemon line, status, and Back). No
+                // shared "capture" header bar, no outer padding/scroll — the content pane
+                // scrolls itself and the nav reaches the window edges.
+                div().size_full().children(settings_children).into_any_element()
+            } else {
                 div()
                     .id("root")
                     .track_scroll(&self.root_scroll)
@@ -875,8 +881,8 @@ impl Render for CaptureApp {
                             .justify_between()
                             .child(div().text_xl().child("capture"))
                             .child({
-                                // Back from a sub-screen (playback/settings), else open Settings.
-                                let in_sub = playback || settings;
+                                // Back from playback, else open Settings.
+                                let in_sub = playback;
                                 div()
                                     .id("hdr-btn")
                                     .flex()
@@ -901,19 +907,14 @@ impl Render for CaptureApp {
                                     }))
                             }),
                     )
-            .when(!sett, |d| {
-                // On Settings these live in the left-nav instead — don't double-render.
-                d.child(div().text_color(rgb(theme::TEXT_MUTED)).child(header))
+                    .child(div().text_color(rgb(theme::TEXT_MUTED)).child(header))
                     .child(div().text_color(rgb(theme::ACCENT_TEXT)).child(hotkey_hint))
+                    .child(div().text_color(rgb(theme::WARNING)).child(self.message.clone()))
+                    .children(dashboard_children)
+                    .children(playback.then(|| self.render_playback(window, cx)))
+                    .into_any_element()
             })
-            .child(div().text_color(rgb(theme::WARNING)).child(self.message.clone()))
-            // Active screen's children (dashboard OR settings; playback below). Only one
-            // of the three is non-empty, so the order of these blocks is immaterial.
-            .children(settings_children)
-            .children(dashboard_children)
-            .children(playback.then(|| self.render_playback(window, cx))),
-            )
-            .children(scrollbar)
+            .children(if sett { None } else { scrollbar })
             // Overlays: the confirmation modal + the start-capture preset picker.
             .children(overlays)
     }
