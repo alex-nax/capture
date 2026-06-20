@@ -173,10 +173,24 @@ impl CaptureApp {
                 .spawn(async move { d.stop(&id) })
                 .await;
             let _ = this.update(cx, |v, cx| {
-                v.message = match r {
-                    Ok(s) => format!("stopped {}", short_id(&s.session_id)).into(),
-                    Err(e) => format!("stop failed: {e}").into(),
-                };
+                match r {
+                    Ok(s) => {
+                        let sid = s.session_id.clone();
+                        v.message = format!("stopped {}", short_id(&sid)).into();
+                        // Reflect the stop immediately (don't wait for the next poll) so the row flips.
+                        if let Some(slot) = v.sessions.iter_mut().find(|x| x.session_id == sid) {
+                            *slot = s;
+                        } else {
+                            v.sessions.insert(0, s);
+                        }
+                        // Stop pressed on the live playback screen → reload it as the saved capture so
+                        // the scrubber + Manage appear in place (instead of a stale "live"/REC view).
+                        if v.playback.as_ref().map(|p| p.sid.as_str()) == Some(sid.as_str()) {
+                            v.select_session(sid, cx);
+                        }
+                    }
+                    Err(e) => v.message = format!("stop failed: {e}").into(),
+                }
                 cx.notify();
             });
         })
