@@ -16,6 +16,8 @@ mod macos;
 mod import;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(target_os = "windows")]
+mod windows_audio;
 
 /// One on-screen top-level window, in the `/v1/windows` wire shape (mirrors `core.list_windows`).
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -58,6 +60,8 @@ pub enum AudioTarget {
 pub struct AudioCapture {
     #[cfg(target_os = "macos")]
     inner: macos::MacAudioCapture,
+    #[cfg(target_os = "windows")]
+    inner: windows_audio::WinAudioCapture,
 }
 
 impl AudioCapture {
@@ -67,7 +71,11 @@ impl AudioCapture {
         {
             self.inner.stop()
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            self.inner.stop()
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             Ok(())
         }
@@ -85,7 +93,11 @@ pub fn start_audio_capture(
     {
         Ok(AudioCapture { inner: macos::start_audio_capture(target, on_samples)? })
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        Ok(AudioCapture { inner: windows_audio::start_audio_capture(target, on_samples)? })
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (target, on_samples);
         Err("audio capture is not supported on this platform yet".to_string())
@@ -111,7 +123,13 @@ pub fn start_audio_capture_dual(
     {
         Ok(AudioCapture { inner: macos::start_audio_capture_dual(app, mic_device, on_audio, on_mic)? })
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        Ok(AudioCapture {
+            inner: windows_audio::start_audio_capture_dual(app, mic_device, on_audio, on_mic)?,
+        })
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (app, mic_device, on_audio, on_mic);
         Err("audio capture is not supported on this platform yet".to_string())
@@ -318,7 +336,11 @@ pub fn audio_input_devices() -> Vec<AudioInputInfo> {
     {
         macos::audio_input_devices()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        windows_audio::audio_input_devices()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         Vec::new()
     }

@@ -64,9 +64,28 @@ runtimes first (owner: CPU + CUDA packs; runtimes before the capture backend). T
   `IsWindowVisible=false`. So window listing, screenshots, and per-app audio **cannot be observed
   headless from the agent shell**; they must be verified by running the app interactively (or via the
   daemon in the user's session). The logic is unit-tested + ported from production-proven v2 code.
-- **Next**: [B] GDI `BitBlt`/`PrintWindow` screenshots → shared `encode_image`; [C] WASAPI per-process
-  loopback (fold in `helper/audiocap_win_rs`) + mic + device list; [D] wire into the capture session loop;
-  then `#85` updater hardening + the single-`.exe`/WiX installer.
+### #66 slices B–D (same session) — screenshots + audio + wiring
+- **B (screenshots):** `capture_screenshot` via GDI — `PrintWindow(PW_RENDERFULLCONTENT)` for a window,
+  `BitBlt` for the primary display, `GetDIBits` top-down 32bpp → BGRA→RGBA → the shared `encode_image`.
+  Verified: full-screen capture produces a decodable PNG even in Session 0 (a virtual display exists);
+  window capture is the same pipeline (live-verified later).
+- **C (audio):** new `crates/platform/src/windows_audio.rs` — WASAPI **per-process loopback** (folds in
+  `helper/audiocap_win_rs`: `ActivateAudioInterfaceAsync` + `PROCESS_LOOPBACK`, requesting 16 kHz mono
+  s16le directly), **mic** capture (shared-mode at the device mix format → mono i16, `source_rate`=mix
+  rate so the session loop resamples), `start_audio_capture` + `_dual` (concurrent threads, joined on
+  stop/drop), and `audio_input_devices` (`IMMDeviceEnumerator` + `PKEY_Device_FriendlyName`). Pure PCM
+  conversion (float/PCM downmix, clamp) unit-tested. 11 platform tests green.
+- **D (wiring):** the engine session loop already calls `capture_platform::{list_windows,
+  capture_screenshot,start_audio_capture_dual}` **unconditionally** (no macOS gating), so the Windows
+  backends light it up by construction; `cargo build -p capture-daemon` is clean (engine+platform
+  integrated). windows-rs notes: `BOOL`/`TRUE` → `windows::core::BOOL`; `PrintWindow`/`PRINT_WINDOW_FLAGS`
+  live under `Storage::Xps`; `GetWindowDC` under `Graphics::Gdi`; `CreateEventW` needs `Win32_Security`;
+  `WAVEFORMATEX` is packed → read fields via `addr_of!`+`read_unaligned`.
+- **Capture core (A–D) is implemented.** Audio + device + window enumeration **cannot be observed from
+  the Session-0 dev shell** (0 devices/0 windows; only screen capture works via the virtual display) — so
+  the end-to-end "captures real pixels/audio" confirmation is the owner's interactive run.
+- **Next**: the **single-`.exe` + WiX/Inno installer** (the remaining #66 packaging piece); `#85` updater
+  hardening (so the pack pre-releases never hijack `/releases/latest`).
 
 ---
 
