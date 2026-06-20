@@ -1,0 +1,17 @@
+[package]
+name = "capture-engine"
+version = "0.1.0"
+edition = "2021"
+description = "v3 capture session orchestration: lifecycle, screenshots timer, audio→ASR pump, session.json (port of core/session.py + screenshots.py + audio.py)."
+
+[dependencies]
+capture-core = { path = "../core" }
+capture-platform = { path = "../platform" }
+capture-asr = { path = "../asr" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+getrandom = "0.2"
+shlex = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

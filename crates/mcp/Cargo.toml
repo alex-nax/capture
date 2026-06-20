@@ -1,0 +1,15 @@
+[package]
+name = "capture-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "v3 MCP stdio server: the capture tool surface, daemon-first against /v1 (port of capture_mcp/server.py)."
+
+[[bin]]
+name = "capture-mcp"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Blocking /v1 client — the MCP is a synchronous stdin/stdout JSON-RPC loop, no async runtime needed.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }

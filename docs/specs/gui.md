@@ -27,9 +27,11 @@ a frozen daemon with on-device mlx ASR.
   - `gui/src/daemon.rs` — `Daemon` client (mirrors `daemon/client.py`): `discover()`
     from `~/.capture/daemon.json`, `available()` (health probe),
     `health/sessions/windows/start/stop/transcript`, and `open_events()` (the
-    `/v1/events` SSE line reader). Plus `bundled_daemon()` (resolves
-    `Contents/Resources/captured/captured` in the packaged app) and `spawn_detached()`
-    (launch it in its own process group so captures outlive the GUI).
+    `/v1/events` SSE line reader). Plus `resolve_daemon()` → `bundled_daemon()` (the
+    `Contents/Resources/captured/captured` in the packaged app) **or, in dev, the
+    `captured` built beside `capture-gui` in the shared workspace target** (v3: the GUI
+    flips onto the Rust daemon — `cargo run -p capture-gui` self-spawns it), and
+    `spawn_detached()` (launch it in its own process group so captures outlive the GUI).
   - `gui/src/app.rs` — `CaptureApp` GPUI view (`Render`) + the poll loop + handlers +
     the background SSE thread feeding a shared `LiveState` (tracked session's
     transcript + latest screenshot path + ASR download progress) + the tray event loop +

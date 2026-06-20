@@ -27,6 +27,20 @@ Imported but out of scope here:
 - `src/capture_mcp/core/registry.py` — `SessionRegistry` (the registry itself moved to
   the engine in the M0a split; specced in [session-registry.md](session-registry.md)).
 
+## Onboarding / discovery (#78)
+
+The v3 MCP server is the **`capture-mcp` Rust binary** (`crates/mcp`), a daemon-first stdio
+JSON-RPC server. The signed app **bundles it** at `Capture.app/Contents/Resources/captured/capture-mcp`,
+so an app-only user has a working `.mcp.json` `command` with **no build**. The `capture` skill
+(`skills/capture/`) must therefore **discover before installing**: `scripts/discover_mcp.py` resolves
+the command in priority order (app bundle → `capture-mcp` on PATH → `target/release/capture-mcp` under
+`~/.capture-mcp` / `~/capture` / `CAPTURE_REPO` from `~/.capture/config.env`), **verifies each with a
+real MCP `initialize` + `tools/list` handshake**, and merges `.mcp.json` (`configure_mcp.register`).
+**The skill never clones or builds the project**: app users get the bundled binary, a dev's checkout
+exposes `target/release/capture-mcp` (built by the dev), and discovery finds either — if neither
+exists, the answer is "install the app", not a build. `initialize`/`tools/list` need no running daemon
+(only `tools/call` proxies `/v1`), so discovery works before the daemon is up.
+
 ## Public contract
 
 ### Process / transport

@@ -18,9 +18,9 @@ repo-local so it travels to other machines with the code.
    - `docs/specs/<scope>.md` for the scope you'll touch (this is the CONTRACT — load it first)
    - `docs/architecture.md` (hard constraints)
 3. **Bootstrap the env:**
-   - macOS: `./init.sh` (creates the uv-managed **arm64** venv, installs `.[mlx]`, builds the Swift helper, runs smoke).
-   - Windows (follow-up): there is no `init.ps1` yet — see `docs/specs/platform-abstraction.md` (feature #22). On Windows, expect the macOS-only paths (screencapture/Quartz/ScreenCaptureKit/sips) to be unavailable until the platform backends land.
-4. **Verify baseline BEFORE new work:** `python tests/smoke.py` → expect `20/20 passed`. Fix any regression from a previous session first.
+   - `./init.sh` — builds the cargo workspace and runs the tests (`cargo build --workspace` + `cargo test --workspace`). Just needs `cargo`; no Python venv, no Swift helper (the daemon does ScreenCaptureKit + AVFoundation natively).
+   - Windows (deferred, #66): packaging still references Python and is not wired for v3 yet — see `docs/specs/platform-abstraction.md`.
+4. **Verify baseline BEFORE new work:** `cargo test --workspace` → expect all green. Fix any regression from a previous session first.
 5. **Pick ONE feature** marked `"passes": false`. One feature per session.
 6. **Implement it**, honoring the hard constraints in `docs/architecture.md`.
 7. **📋 Update the matching `docs/specs/<scope>.md` in the SAME change** (MANDATORY — see AGENTS.md).
@@ -34,28 +34,28 @@ repo-local so it travels to other machines with the code.
     only after verified end-to-end testing. Never delete/reword existing feature descriptions.
 
 ## Project facts (load these — they bite otherwise)
-- **arm64 venv required** on this Mac: the system `python3` is x86_64 miniconda under Rosetta;
-  mlx-whisper/modern wheels need the uv-managed arm64 venv that `init.sh` creates.
-- **`server.py` stdout is the MCP transport** — never print to it; logs go to `stderr`.
-- **Async tool handlers** offload blocking work via `anyio.to_thread.run_sync` (don't block the loop).
+- **Single Rust cargo workspace** under `crates/` (package names keep the `capture-` prefix):
+  `core`, `platform`, `asr`, `asr-whisper`, `index`, `engine`, `daemon`, `mcp`, `gui`. `./init.sh`
+  just needs `cargo`. The dev/eval utilities under `tools/` are pure-stdlib `python3` /v1 clients.
+- **The `capture-mcp` stdout is the MCP transport** — never print to it; logs go to `stderr`.
 - **SCStreamError -3805** is a *transient* connection interruption (NOT a permission denial,
-  which is -3801). The helper auto-reconnects through it. Stable signing
-  (`scripts/setup_codesign.sh`) is only for making the Screen Recording grant persist across rebuilds.
-- **ASR model gotcha:** `mlx-community/whisper-base` does NOT exist (404). Use `whisper-tiny`
-  or the default `whisper-large-v3-turbo` via `CAPTURE_WHISPER_MODEL`.
+  which is -3801). The daemon auto-reconnects through it. A stable signing identity for the daemon
+  is only for making the Screen Recording grant persist across rebuilds.
+- **ASR engine:** the built-in whisper.cpp engine (`capture-asr-whisper`) uses GGML weights
+  (e.g. the default `ggml-large-v3-turbo`, or `ggml-tiny` for quick tests).
 
 ## Cross-platform / next work
-- Follow-up runs on a **Windows PC with an NVIDIA card**. Priorities there:
-  - Build the **platform abstraction** (feature #20/#21) so screenshots/windows/audio have
-    Windows backends (WASAPI loopback, `EnumWindows`, a Windows screenshot path) — design in
+- Follow-up runs on a **Windows PC with an NVIDIA card** (Windows packaging is deferred, #66).
+  Priorities there:
+  - Build out the **platform abstraction** so screenshots/windows/audio have Windows backends
+    (WASAPI loopback, `EnumWindows`, a Windows screenshot path) — design in
     `docs/specs/platform-abstraction.md`.
-  - **Benchmark local Whisper vs NVIDIA Nemotron-3.5 ASR** (feature #23) using the existing
-    Riva/Nemotron adapter (`src/capture_mcp/asr/nemotron.py`, `CAPTURE_RIVA_*` env).
+  - **Benchmark the local whisper.cpp engine vs a remote NVIDIA ASR backend** using the
+    openai-compatible/Riva remote backend (`CAPTURE_RIVA_*` env). Remote ASR backends are deferred (#80).
 
 ## Testing
-- Hermetic: `python tests/smoke.py` (no permissions/GPU).
-- Contracts: `python tests/contract/run_contracts.py` (frozen interfaces; `--regen` only after an intentional change + spec update).
-- Real ASR: transcribe a `say`→16k s16le clip via `MlxWhisper(model="mlx-community/whisper-tiny")`.
-- Helper: `bash scripts/build_helper.sh` then `./helper/audiocap --system` → expect `READY` + PCM.
+- Workspace suite: `cargo test --workspace` (no permissions/GPU). Single crate: `cargo test -p <crate>`.
+- Real ASR: transcribe a `say`→16k s16le clip through the whisper.cpp engine (`capture-asr-whisper`)
+  with a small GGML model (e.g. `ggml-tiny`).
 - End-to-end: attach to a real app by `pid`; confirm `screenshots/` fills and (with permission)
   `transcript.jsonl` fills.

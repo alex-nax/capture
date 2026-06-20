@@ -10,7 +10,8 @@ yields the SAME leaf frames, so the baseline / basic / custom arms all line up f
 and the scores are comparable.
 
 Repo root is discovered robustly (env CAPTURE_REPO, else walk up to the dir holding
-src/capture_mcp), so this travels to other machines / clones unchanged.
+tools/capture_v1.py), so this travels to other machines / clones unchanged. The daemon is
+now the native Rust `captured`; this proxies its /v1 index endpoint (no in-process engine).
 
 Usage:
   drive_index.py --session SID --session-dir DIR --out OUT.json
@@ -33,23 +34,23 @@ from pathlib import Path
 
 
 def find_repo() -> Path:
-    """Locate the capture-mcp repo root so we can import its daemon client.
+    """Locate the capture repo root (holds tools/capture_v1.py) so we can import the /v1 client.
     Priority: $CAPTURE_REPO -> walk up from this file -> walk up from cwd."""
     env = os.environ.get("CAPTURE_REPO")
-    if env and (Path(env) / "src" / "capture_mcp").is_dir():
+    if env and (Path(env) / "tools" / "capture_v1.py").is_file():
         return Path(env)
     for start in (Path(__file__).resolve(), Path.cwd().resolve()):
         for p in (start, *start.parents):
-            if (p / "src" / "capture_mcp").is_dir():
+            if (p / "tools" / "capture_v1.py").is_file():
                 return p
-    print("could not locate the capture-mcp repo root (no src/capture_mcp found); "
+    print("could not locate the capture repo root (no tools/capture_v1.py found); "
           "set CAPTURE_REPO=/path/to/capture", file=sys.stderr)
     raise SystemExit(2)
 
 
 REPO = find_repo()
-sys.path.insert(0, str(REPO / "src"))
-from capture_mcp.daemon.client import DaemonClient  # noqa: E402
+sys.path.insert(0, str(REPO / "tools"))
+from capture_v1 import Daemon  # noqa: E402
 
 
 def main() -> int:
@@ -67,7 +68,7 @@ def main() -> int:
                     help='JSON file with {"leaf_prompt", "leaf_schema"} — overrides --preset')
     args = ap.parse_args()
 
-    d = DaemonClient.from_discovery()
+    d = Daemon.discover()
     if not d or not d.available():
         print("daemon not available (is `captured` running? check ~/.capture/daemon.json)", file=sys.stderr)
         return 2

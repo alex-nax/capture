@@ -1,35 +1,29 @@
 #!/bin/bash
-# Bootstrap the capture-mcp dev environment. Idempotent.
+# Bootstrap the capture dev environment. v3: a single Rust cargo workspace — no Python venv,
+# no Swift helper (the daemon does ScreenCaptureKit + AVFoundation natively). Idempotent.
 set -e
 
 cd "$(dirname "$0")"
 
-# 1. arm64 venv (REQUIRED: system python3 here is x86_64 Rosetta; mlx needs arm64).
-if [ ! -d .venv ]; then
-  echo "Creating arm64 venv via uv..."
-  uv python install 3.12 >/dev/null 2>&1 || true
-  uv venv --python 3.12 --python-preference only-managed
-fi
-# shellcheck disable=SC1091
-source .venv/bin/activate
+command -v cargo >/dev/null 2>&1 || {
+  echo "cargo not found — install Rust from https://rustup.rs, then re-run ./init.sh" >&2
+  exit 1
+}
 
-ARCH=$(python -c "import platform; print(platform.machine())")
-echo "venv python arch: $ARCH"
-[ "$ARCH" = "arm64" ] || echo "WARNING: venv is $ARCH; mlx-whisper requires arm64."
+echo "Building the workspace (release-free; gpui's first compile is heavy) ..."
+cargo build --workspace
 
-# 2. Install the package + the Apple-Silicon ASR extra.
-echo "Installing package (.[mlx]) ..."
-uv pip install -e '.[mlx]'
+echo "Running the workspace tests ..."
+cargo test --workspace >/dev/null && echo "  tests passed."
 
-# 3. Build the ScreenCaptureKit per-app audio helper (needs Xcode CLT).
-if command -v swiftc >/dev/null 2>&1; then
-  bash scripts/build_helper.sh || echo "helper build failed (per-app audio unavailable)"
-else
-  echo "swiftc not found; skipping helper build (run: xcode-select --install)"
-fi
+cat <<'EOF'
 
-# 4. Smoke test (hermetic; no permissions/GPU required).
-echo "Running smoke test ..."
-python tests/smoke.py
+Environment ready. The whole app is one cargo workspace under crates/:
+  • daemon:  cargo run -p capture-daemon      # the /v1 server (binary `captured`)
+  • app:     cargo run -p capture-gui         # GPUI window (auto-spawns the daemon)
+  • MCP:     cargo run -p capture-mcp          # stdio server (proxies the daemon)
+  • tests:   cargo test --workspace
 
-echo "Environment ready. Run the server with: capture-mcp"
+The dev/eval utilities under tools/ and the eval skills are pure-stdlib Python /v1
+clients (any python3, no venv) — they proxy a running `captured`.
+EOF

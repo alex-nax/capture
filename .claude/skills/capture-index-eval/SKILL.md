@@ -31,9 +31,10 @@ Stating this prediction up front tells you what "good" looks like and stops you 
 text reconstruction (the worst failure mode — see Strudel in findings.md).
 
 ## Setup (load these — they bite otherwise)
-- Run from the repo root with the project venv (`.venv/bin/python`); `init.sh` creates it.
-- The **daemon (`captured`) must be running** — every build goes through `/v1`. `drive_index.py` discovers
-  it via `~/.capture/daemon.json`.
+- Run from the repo root with any `python3` — the eval scripts are pure-stdlib `/v1` clients (no venv,
+  no deps); they proxy the daemon via `tools/capture_v1.py`.
+- The **daemon must be running** — every build goes through `/v1`. The daemon is the native Rust
+  `captured` (`cargo run -p capture-daemon`). `drive_index.py` discovers it via `~/.capture/daemon.json`.
 - The daemon needs a vision **`endpoint`+`model`** passed: LM Studio (or similar) serving the local VLM,
   exported as `CAPTURE_INDEX_URL` (e.g. `http://HOST:1234/v1/chat/completions`) and a model like
   `qwen/qwen3.5-9b`. Structured output requires `reasoning_effort:"none"` — already handled in the client.
@@ -51,12 +52,11 @@ Resolve the **FULL** daemon session_id — sessions are keyed by the full stamp 
 `2026-06-17T10-10-36.393Z-5806dc`, **not** the short `5806dc` suffix. Query the daemon and match the
 suffix:
 ```bash
-.venv/bin/python - <<'PY'
-import sys; sys.path.insert(0, "src")
-from capture_mcp.daemon.client import DaemonClient
-d = DaemonClient.from_discovery()
-suffix = "5806dc"
-s = next(x for x in d.sessions()["sessions"] if suffix in x["session_id"])
+python3 - <<'PY'
+import sys; sys.path.insert(0, "tools")
+from capture_v1 import Daemon
+d = Daemon.discover()
+s = d.find_session("5806dc")
 print(s["session_id"]); print(s["dir"]); print("transcript_segments:", s.get("transcript_segments"))
 PY
 ```
@@ -68,7 +68,7 @@ cheap path will do — note it now and revisit your regime prediction.
 ### 2. Basic auto index
 Build with the built-in classifier via the daemon:
 ```bash
-.venv/bin/python .claude/skills/capture-index-eval/scripts/drive_index.py \
+python3 .claude/skills/capture-index-eval/scripts/drive_index.py \
   --session "$SID" --session-dir "$SDIR" --out basic/index.json \
   --endpoint "$CAPTURE_INDEX_URL" --model qwen/qwen3.5-9b --sample-rate 0.5 --preset auto
 ```
@@ -87,7 +87,7 @@ Craft a content-tuned `leaf_prompt` + `leaf_schema` — see `references/custom-p
 the closest of the four real examples. The schema MUST include a `summary` string; add a `surface` enum to
 route frames, plus content fields. Save the pair to `custom_prompt.json`, then build:
 ```bash
-.venv/bin/python .claude/skills/capture-index-eval/scripts/drive_index.py \
+python3 .claude/skills/capture-index-eval/scripts/drive_index.py \
   --session "$SID" --session-dir "$SDIR" --out custom/index.json \
   --endpoint "$CAPTURE_INDEX_URL" --model qwen/qwen3.5-9b --sample-rate 0.5 \
   --custom-json custom_prompt.json
@@ -98,7 +98,7 @@ corpus `capture-index-tuning` ingests). The cheap local model executes the schem
 ### 5. Text-only reconstruction + judge
 Distill the custom index to the lean reconstruction input:
 ```bash
-.venv/bin/python .claude/skills/capture-index-eval/scripts/distill_leaves.py \
+python3 .claude/skills/capture-index-eval/scripts/distill_leaves.py \
   --index custom/index.json --out custom/leaves.json --drop-empty
 ```
 Spawn the **reconstruction subagent** (template B) to rebuild the target from ONLY `custom/leaves.json`

@@ -9,6 +9,29 @@ imports an external runtime pack); the activation mechanism, runtime-aware catal
 sections mark **[done]** vs
 **[planned]**. Tracked in `features.json` (#58)._
 
+## v3 realization (#81, 2026-06-19)
+
+The v2 design above (originally for the frozen Python daemon) is now being realized for the **native Rust
+daemon** as **#81**. Landed in this slice (code + tests):
+- **Per-runtime install-dir seam** (`crates/asr/src/runtime.rs`): a runtime's engine cdylib resolves from
+  its installed **pack** at `~/.capture/runtimes/<id>/` (env `CAPTURE_ASR_RUNTIMES_DIR`) first, falling
+  back to the dev/legacy `engine_dir` (a `cargo run` target dir or a still-bundled build). `installed`/
+  `available`/`backend()` all key off this; `pack_install_path`/`pack_version`/`write_pack_version` manage it.
+- **Pack install/download** (`crates/daemon/src/routes/asr.rs`): `POST /v1/asr/runtimes/install {id, source?}`
+  streams the pack into the install dir (SSE `asr_runtime_install` → `_done`/`_error`), records the version,
+  and activates it. `source` (a URL or local path) overrides the default **GitHub-release** resolution
+  (`resolve_pack_url` — newest `pack-<id>-v<semver>` release asset matching this OS/arch, mirroring the app
+  updater's matching). Validated end-to-end: an engine-less daemon installs a whisper pack from a local
+  source and the engine flips to installed/`backend_available`.
+- **Pack-build tooling** (`scripts/build_asr_pack.sh`): builds the whisper cdylib into a release-ready
+  asset (`<id>-<os>-<arch>.dylib`) + the `gh release create pack-<id>-vX.Y.Z` command.
+- **Staged un-bundling**: `build_macos_dmg.sh` gained `CAPTURE_BUNDLE_ENGINE` (default `1`, transitional —
+  the app still ships whisper-metal so it transcribes out of the box). Set `=0` to ship engine-less.
+
+**Remaining for #81:** the owner **publishes the first pack** (`pack-whisper-metal-v…`) to GitHub, then
+flips `CAPTURE_BUNDLE_ENGINE=0`; then the **onboarding CTA (#83)** drives the download. Pack **auto-update**
+(re-fetch when a newer `pack-<id>` release appears) reuses `resolve_pack_url` + the `.version` sidecar.
+
 ## Purpose
 
 Voice recognition is **off by default** — the packaged daemon bundles **no ASR engine**. The user

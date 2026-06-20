@@ -83,9 +83,25 @@ native window chrome; real frame image in playback; runtime-driven model list) a
 - **Dashboard**: per-app **Start capture** in each Windows group header (enabled **iff** a window of that app
   is selected) replaces the per-app mic pill; **Refresh** → Windows header; **Import** → Sessions header.
 - **Settings**: long scroll → **left-nav pane + content panel**; brand/daemon/hotkey/status move into the nav.
-- **Voice recognition**: a runtime selector (CPU·whisper.cpp / Core ML / CUDA / Remote) drives a
-  **runtime-dependent** model manager (each runtime lists the models it actually supports; CUDA = installable
-  pack path / unavailable; Remote = endpoint config). Wires the existing ASR-model + runtime-pack (#58) APIs.
+- **Voice recognition** (#83 ASR onboarding): a **two-step picker**. **Step 1** = the speech-engine list —
+  one **row** per registry runtime (name + `requires` line) with a state-driven control: `✓ Active` +
+  `Configure` (open the active engine's config) · `Select` (a ready installed local engine — activate it +
+  open its config) · `Download` (pack install, #81, with the new `download` glyph) · `Unavailable` (dimmed,
+  when hardware is absent — e.g. CUDA on a Mac) · `Coming soon` (a chip under the description + a disabled
+  Select — the Remote backend isn't wired yet, #80) · or an in-flight thin bar + `downloading · NN%`. The active engine gets the §4 selected-row treatment. Once a runtime is active the
+  list **collapses** to a `✓ Engine: <label> · Change` summary (`asr_engine_expanded` re-expands it) and
+  **Step 2** appears. Step 2 follows an explicit `asr_engine_selected` (the engine being configured), not
+  the resolved-active flag — so selecting Remote shows Remote's endpoint card even though a local engine
+  stays resolved-active until Remote has an endpoint. **Step 2** = the model catalog **for the active runtime**: rows with
+  `active`+Remove · `downloaded`+Use+Remove · `Download` · or `download failed`+Retry (failures are kept in
+  `LiveState.asr_failed` so they're recoverable, never silent). A model **download in flight** becomes a
+  vertical block — name + `downloading` on top, a full-width `progress_bar`, then `656 MB / 1.6 GB · 41%`
+  (left) and `~2 min left · 9.4 MB/s` (right), derived from the real `downloaded`/`total` bytes in the
+  `asr_download` SSE + an EMA-smoothed rate (`LiveState.asr_dl`). Remote runtime → endpoint card (no local
+  list). Step banners ("Step 1 of 2") guide setup but never nag once an engine is active. **Nothing
+  auto-selects** — transcription is reported on only when a runtime AND a model are both active. Wires the
+  ASR-model + runtime-pack (#81) APIs (`/v1/asr/runtimes`, `/runtimes/install`, `/runtime`, `/models`,
+  `/models/download`, `/model`, `/models/delete`).
 - **Permissions**: explicit granted / not-granted rows; the **permission-denied dashboard** (blocking banner,
   Windows blocked empty state, mic/launch disabled, Sessions still usable) is a real state to wire to the
   `/v1/permissions` checks.

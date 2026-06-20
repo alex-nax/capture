@@ -59,17 +59,17 @@ Key options: `output_dir` (required), `screenshot_interval` (s, default 1.0),
 
 ## Install
 
+The app is a single Rust cargo workspace under `crates/` (no Python venv, no Swift helper —
+the daemon does ScreenCaptureKit + AVFoundation natively). You need [Rust](https://rustup.rs).
+
 ```bash
 cd /Users/alex/capture
-uv venv && source .venv/bin/activate
-uv pip install -e .                 # core server
-uv pip install -e '.[mlx]'          # + Apple-Silicon Whisper (recommended ASR)
-# or: uv pip install -e '.[whisper]'  # cross-platform faster-whisper
-# or: uv pip install -e '.[riva]'     # remote Nemotron-3.5 via NVIDIA Riva
-
-# Build the per-app audio helper (needs Xcode / command line tools):
-bash scripts/build_helper.sh
+./init.sh                           # cargo build --workspace + cargo test --workspace
 ```
+
+That builds every crate: `captured` (daemon), `capture-mcp` (MCP server), `capture-gui`
+(GPUI app), plus the `capture-asr*` / `capture-index` / `capture-platform` libraries. The
+whisper.cpp ASR engine is built in; model weights download on first use.
 
 ### Windows
 
@@ -93,28 +93,29 @@ Recording* — required for both screenshots and per-app audio.
 
 ## ASR backends
 
-The ASR layer is pluggable (`src/capture_mcp/core/asr/`):
+The ASR layer is pluggable. ASR engines are `dlopen`'d cdylibs behind an
+engine-agnostic C ABI, managed by the `capture-asr` crate:
 
-- **Local (default).** `mlx-whisper` (Apple-Silicon-native) or `faster-whisper`.
-  Runs entirely on this Mac; downloads model weights on first use.
-- **Nemotron-3.5 ASR (`nemotron`/`riva`).** The 600M NeMo model needs an NVIDIA
-  GPU, so it can't run on this Mac directly. The adapter talks to a **Riva**
-  server hosting it (self-hosted or NVIDIA-hosted). Configure with env vars:
-  `CAPTURE_RIVA_SERVER`, `CAPTURE_RIVA_API_KEY`, `CAPTURE_RIVA_LANG`,
-  `CAPTURE_RIVA_MODEL`.
+- **Local (default).** `capture-asr-whisper` — a whisper.cpp engine running
+  entirely on this Mac (Metal-accelerated). Downloads GGML model weights on first
+  use (e.g. `ggml-large-v3-turbo`).
+- **Remote (`nemotron`/openai-compatible).** A remote endpoint hosting a model
+  that can't run on this Mac directly (e.g. Nemotron-3.5 on an NVIDIA box).
+  Configure with env vars: `CAPTURE_RIVA_SERVER`, `CAPTURE_RIVA_API_KEY`,
+  `CAPTURE_RIVA_LANG`, `CAPTURE_RIVA_MODEL`.
 
-To add a backend, implement `ASRBackend.transcribe(pcm, sample_rate)` in a new
-module and register it in `asr/__init__.py:create`.
+To add a backend, implement the engine C ABI as a new cdylib crate and register it
+in the `capture-asr` runtime manager.
 
 ## Register with an MCP client
 
-Example `claude_desktop_config.json` / `.mcp.json` entry:
+Example `claude_desktop_config.json` / `.mcp.json` entry (point it at the built binary):
 
 ```json
 {
   "mcpServers": {
     "capture": {
-      "command": "/Users/alex/capture/.venv/bin/capture-mcp"
+      "command": "/Users/alex/capture/target/debug/capture-mcp"
     }
   }
 }
@@ -128,15 +129,15 @@ same capture engine and the same live session registry, so a capture started by 
 shows up in the others. (Design: [`docs/specs/product-architecture.md`](docs/specs/product-architecture.md);
 API: [`docs/specs/daemon.md`](docs/specs/daemon.md); GUI: [`docs/specs/gui.md`](docs/specs/gui.md).)
 
-After `uv pip install -e .` you get three console scripts: `capture-mcp` (MCP server),
-`captured` (daemon), `capture` (CLI). If your venv predates them, re-run the install —
-or use the `python -m capture_mcp.<daemon|cli|server>` forms shown below.
+After `./init.sh` (or `cargo build --workspace`) the binaries live under `target/debug/`:
+`capture-mcp` (MCP server), `captured` (daemon), `capture` (CLI). Run them with
+`cargo run -p <crate>` or directly from `target/debug/`.
 
 ### CLI (simplest)
 
 ```bash
 # start the local daemon (spawns it in the background; writes ~/.capture/daemon.json)
-capture daemon start                 # or: python -m capture_mcp.cli daemon start
+capture daemon start                 # or: cargo run -p capture-cli -- daemon start
 
 capture windows                      # list on-screen windows (app, pid, title)
 
@@ -153,15 +154,14 @@ capture daemon stop                  # shut the daemon down
 ```
 
 Output lands in `<out>/capture-<id>/` (layout above). The daemon keeps sessions alive
-across CLI calls; an MCP agent transparently uses the daemon when one is running
-(`CAPTURE_MCP_EMBEDDED=1` forces the in-process engine instead).
+across CLI calls; an MCP agent transparently uses the daemon when one is running.
 
 ### Daemon (run it in the foreground)
 
 `capture daemon start` spawns it for you; to run it yourself and watch its logs:
 
 ```bash
-captured                             # or: python -m capture_mcp.daemon
+cargo run -p capture-daemon          # or run target/debug/captured directly
 # serves http://127.0.0.1:<port>; endpoint + bearer token in ~/.capture/daemon.json (0600)
 ```
 
@@ -169,12 +169,12 @@ captured                             # or: python -m capture_mcp.daemon
 
 ```bash
 # build once (needs Rust — https://rustup.rs ; gpui's first compile is heavy)
-cargo build --manifest-path gui/Cargo.toml          # add --release for an optimized build
+cargo build -p capture-gui          # add --release for an optimized build
 # run it (a dev binary has no bundled daemon, so start one: `capture daemon start`)
-./gui/target/debug/capture-gui
+cargo run -p capture-gui            # or ./target/debug/capture-gui
 ```
 
-> The **packaged** `Capture.app` (below) bundles its own frozen daemon and auto-spawns it; this
+> The **packaged** `Capture.app` (below) bundles its own daemon binary and auto-spawns it; this
 > dev binary doesn't, so it needs a daemon already running.
 
 A window with a daemon-health header, a window picker, Start/Stop, a live session list,
@@ -194,14 +194,14 @@ prints `displays=0` / `no display available`, the launching process simply isn't
 ## Installing the macOS app (unsigned test build)
 
 Package the GUI as a double-clickable, **self-contained** `Capture.app` inside a `.dmg` — it
-bundles a frozen copy of the daemon, so there's no venv to set up and nothing to start by hand:
+bundles the daemon binary, so there's nothing to set up and nothing to start by hand:
 
 ```bash
-bash packaging/build_macos_dmg.sh        # -> dist/Capture-0.2.0.dmg  (needs Rust + Xcode CLT + ./init.sh venv)
+bash packaging/build_macos_dmg.sh        # -> dist/Capture-0.2.0.dmg  (needs Rust + Xcode CLT)
 ```
 
-The build PyInstaller-freezes the daemon into the app (`Contents/Resources/captured/`, with the
-signed `audiocap` helper beside it). Open the DMG and drag **Capture.app** to **Applications**.
+The build embeds the native `captured` daemon binary into the app
+(`Contents/Resources/captured/`). Open the DMG and drag **Capture.app** to **Applications**.
 
 > ✅ The **official release `.dmg`** (GitHub Releases) is **Developer-ID signed + notarized** —
 > just open it and drag to Applications, no Gatekeeper bypass needed. Set
@@ -231,20 +231,17 @@ signed `audiocap` helper beside it). Open the DMG and drag **Capture.app** to **
   (and your captures) running** — re-open from the menu-bar **Open Window**. Use the menu-bar
   **Quit Capture** to fully exit (it stops the daemon when idle, so the app isn't "in use" if you
   want to delete/replace it).
-- It is **self-contained** — the agent auto-spawns its **bundled** frozen daemon (detached) if one
-  isn't already running. No repo, no venv, no `capture daemon start`. (If a daemon is already
-  running — e.g. from the repo — it attaches to that one instead.)
-- **On-device transcription works out of the box** — the app bundles the mlx Whisper runtime.
+- It is **self-contained** — the agent auto-spawns its **bundled** daemon binary (detached) if one
+  isn't already running. No repo, nothing to set up, no `capture daemon start`. (If a daemon is
+  already running — e.g. from the repo — it attaches to that one instead.)
+- **On-device transcription works out of the box** — the daemon bundles the whisper.cpp ASR engine.
   Whisper **model weights** are *not* bundled (they're large); download them from the app's
   **Whisper models** panel (Download → pick a size; it shows live progress), then **Use** to make
-  one active. Weights cache in `~/.cache/huggingface` and are shared with the repo. The default
-  model is `whisper-large-v3-turbo`; `whisper-tiny`/`base` are great for quick tests. (You can still
-  point at a remote OpenAI-compatible ASR endpoint instead.)
-- Per-app audio still needs **Screen Recording** granted to the app (the daemon it launches is the
-  TCC-responsible process); the bundled `audiocap` helper keeps its stable signing identity so that
-  grant persists across rebuilds.
-- This makes the DMG large (~166 MB) — mlx's Metal kernel library is ~125 MB. That's the runtime,
-  not models; model weights are downloaded on demand.
+  one active. The default model is `ggml-large-v3-turbo`; `ggml-tiny`/`base` are great for quick
+  tests. (You can still point at a remote OpenAI-compatible ASR endpoint instead.)
+- Per-app audio still needs **Screen Recording** granted to the app — the daemon does
+  ScreenCaptureKit natively and is the TCC-responsible process. A stable signing identity keeps the
+  grant persistent across rebuilds.
 
 **Install the skill into your coding agent.** The app bundles the `capture` skill and can drop it
 into a coding agent's home so the agent can drive capture-mcp from any project. Each button shows
@@ -263,12 +260,12 @@ capture-gui --install-skill "Claude Code"  # install/update for the named agent
 
 ## How per-app audio works
 
-`helper/audiocap.swift` uses ScreenCaptureKit to capture audio from a single
-application (matched by PID or bundle id), converts it to 16 kHz mono PCM, and
-streams it on stdout. The Python side buffers it into windows, runs ASR, and
-timestamps each segment. If the helper isn't built (or `audio_source="mic"`),
-it falls back to capturing the default microphone via `ffmpeg`. The helper also
-supports `--system` for whole-display audio.
+The `captured` daemon uses ScreenCaptureKit natively (via the `screencapturekit`
+crate, in `capture-platform`) to capture audio from a single application (matched
+by PID or bundle id), converts it to 16 kHz mono PCM, buffers it into windows,
+runs ASR, and timestamps each segment. If app audio isn't available (or
+`audio_source="mic"`), it falls back to capturing the default microphone via
+AVFoundation. It can also capture whole-display ("system") audio.
 
 ### About SCStreamError -3805
 
@@ -279,23 +276,15 @@ connection to the capture server was interrupted (commonly right after
 *transient* interruption: `SCShareableContent` enumerates fine (so Screen
 Recording is granted), and the very next connection attempt usually succeeds.
 
-The helper handles this automatically: on `-3805` it **rebuilds the stream and
+The daemon handles this automatically: on `-3805` it **rebuilds the stream and
 reconnects** (with backoff), so background capture survives Space/window switches.
-You'll see `stream stopped … code=-3805` followed by `READY … (reconnect #1)` and
-`audio flowing` in the helper's stderr. Genuine permission errors
-(`-3801`/`-3803`) are *not* retried — they're reported instead.
+Genuine permission errors (`-3801`/`-3803`) are *not* retried — they're reported
+instead.
 
-**Make the Screen Recording grant persist (recommended, one-time):** an ad-hoc
-signature changes every rebuild, so macOS re-prompts. Give the helper a stable
-identity:
-
-```bash
-bash scripts/setup_codesign.sh        # creates a self-signed cert + signs the helper
-./helper/audiocap --system            # triggers the Screen Recording prompt
-# System Settings → Privacy & Security → Screen Recording → enable 'audiocap'
-# then rebuild with the same identity:
-CODESIGN_IDENTITY="capture-mcp-codesign" bash scripts/build_helper.sh
-```
+**Make the Screen Recording grant persist (recommended):** an ad-hoc signature
+changes every rebuild, so macOS re-prompts. Give the daemon binary a stable
+signing identity (a Developer ID, or a self-signed cert reused across rebuilds) so
+the grant keys to that identity and survives same-identity updates.
 
 **Workaround** needing only Microphone permission: `audio_source="mic"`.
 

@@ -24,22 +24,35 @@ the owner:
 
 ## Files
 
-**[current]** M0a (feature #25, 2026-06-10) split the package: the engine lives in
-`src/capture_mcp/core/` (`session.py`, `screenshots.py`, `audio.py`, `proc.py`,
-`platform/`, `asr/`, plus the new `registry.py` — `SessionRegistry` with disk-backed
-history, see [session-registry.md](session-registry.md)); `server.py` is a thin MCP
-frontend. `core/` imports no frontend code.
+**[current]** The v3 cutover (#67) retired the Python `src/capture_mcp` package: the whole
+app is now a single Rust **cargo workspace** under `crates/` (package names keep the
+`capture-` prefix). The capture engine, daemon, MCP server, ASR, index, and platform code
+are all Rust crates; the daemon does ScreenCaptureKit + AVFoundation natively (no Swift
+`audiocap` helper). The crates:
 
-**[planned]** Target layout (names indicative):
+- `capture-core` — the capture engine (sessions, screenshots, audio, proc), the
+  `SessionRegistry` with disk-backed history (see [session-registry.md](session-registry.md)),
+  and the EventBus + per-session `events.jsonl`.
+- `capture-platform` — OS capture backends (macOS uses the `screencapturekit` crate; window
+  discovery, screenshots, mics, permissions).
+- `capture-asr` — the ASR runtime manager; engines are `dlopen`'d cdylibs behind a C ABI.
+  `capture-asr-whisper` is the built-in whisper.cpp engine (Metal-accelerated).
+- `capture-index` — the multimodal index; the built-in prompt defaults are **data** in
+  `crates/index/src/prompts.toml`, executed by `crates/index/src/prompts.rs`.
+- `capture-engine` — shared engine glue tying the above together.
+- `capture-daemon` — `captured`: the HTTP `/v1` API on 127.0.0.1 + bearer token (see
+  [daemon.md](daemon.md)).
+- `capture-mcp` — the MCP server, daemon-first (proxies the daemon).
+- `capture-gui` — the GPUI app.
 
-- `capture_mcp/core/` — **[current]** engine + `registry.py` + `events.py` (EventBus +
-  per-session `events.jsonl`, M0b); **[planned]** `permissions.py` (preflight, M2).
-- `capture_mcp/daemon/` — **[current, #32 slice 1]** `captured`: stdlib HTTP `/v1` API on
-  127.0.0.1 + bearer token (see [daemon.md](daemon.md)). **[planned]** UDS + WebSocket events.
-- `capture_mcp/server.py` — thin MCP server, **[current, #32]** daemon-first with embedded fallback (`CAPTURE_MCP_EMBEDDED=1`).
-- `capture/cli/` — `capture` CLI (start/stop/status/tail/doctor/daemon install).
-- `gui/` — Rust GPUI app (separate cargo workspace in this repo).
-- `packaging/` — PyInstaller specs, signing/notarization, installer definitions.
+(Historical: M0a/M0b/#32 below describe how this was reached while the engine was still
+Python; the architecture they decided is now realized in the Rust crates above.)
+
+**[planned]** Remaining target pieces (names indicative):
+
+- a `capture` CLI (start/stop/status/tail/doctor/daemon install).
+- `packaging/` — signing/notarization + installer definitions. (Windows packaging is
+  deferred, #66, and still references the old Python flow.)
 
 ## Public contract
 
@@ -114,15 +127,16 @@ behind the stable `/v1` API.
 
 ## Invariants & constraints
 
-- **[current]** Capture logic is single-source Python. No capture/ASR logic may be
-  duplicated in Rust; the Rust side is UI + API client only. (A future Rust engine must
-  replace the daemon *behind the unchanged `/v1` API*, never fork it.)
-- **[current]** The helper contract (argv; 16 kHz mono s16le PCM on stdout; status on
-  stderr; `-3801`/`-3803` fatal vs `-3805` transient-reconnect) is frozen shared property.
-  Windows per-process loopback (#21 refinement) must be a **native helper binary**
-  speaking this same contract — async-COM `ActivateAudioInterfaceAsync` from Python
-  ctypes is impractical, and Chromium-family apps need process-**tree** loopback (window
-  PID ≠ audio-rendering PID).
+- **[current]** Capture logic is single-source in the Rust `capture-core`/`capture-engine`
+  crates, behind the stable `/v1` API. No capture/ASR logic may be duplicated in the GUI;
+  the GPUI app is a UI + `/v1` API client only. (The v3 cutover realized the
+  "contract-preserving Rust engine behind the unchanged `/v1` API" option below.)
+- **[current]** The audio capture/ASR contract (16 kHz mono s16le PCM; `-3801`/`-3803`
+  fatal vs `-3805` transient-reconnect) is frozen shared property — the daemon now
+  implements it natively (ScreenCaptureKit/AVFoundation in `capture-platform`), no Swift
+  helper. Windows per-process loopback (#21 refinement, deferred #66) must speak the same
+  contract — Chromium-family apps need process-**tree** loopback (window PID ≠
+  audio-rendering PID).
 - **[confirmed #30]** TCC persistence keys on the **code-signing identity + stable bundle
   identifier** (the designated requirement), not the cert serial or path — the spike confirmed
   the grant survives a same-identity rebuild and is lost on identity rotation. Cross-checked on
@@ -146,8 +160,9 @@ behind the stable `/v1` API.
 - **[planned]** The GUI must never be required: every capability lands in daemon/CLI/MCP
   first or simultaneously. Headless Linux engine must not link GPUI (no Vulkan requirement
   in the engine artifact).
-- **[current]** From-source dev path (`init.sh`, `setup_codesign.sh` self-signed identity)
-  remains supported alongside packaged installs.
+- **[current]** From-source dev path (`./init.sh` → `cargo build --workspace` + `cargo test
+  --workspace`; a stable signing identity for the daemon to persist the grant) remains
+  supported alongside packaged installs.
 
 ## Failure modes & handling
 
@@ -240,8 +255,8 @@ Live backlog for this scope (roadmap features #25–#35 in `features.json`):
 
 ## Tests
 
-**[current]** Hermetic smoke suite (`tests/smoke.py`, 20/20) covers the engine; nothing
-covers MCP-protocol or packaging.
+**[current]** The Rust workspace test suite (`cargo test --workspace`) covers the engine
+and crates; per-release packaged-bundle smoke and Windows packaging remain uncovered.
 
 **[planned]** `tests/contract/`: golden MCP `tools/list` schema dump; recorded StubASR
 session-dir fixture (`session.json` + `transcript.jsonl` + `events.jsonl` layout); PCM

@@ -1,5 +1,14 @@
 # Capture skill — invocation friction findings
 
+> **Resolved (#78, 2026-06-20).** Both halves fixed in v3: the signed app **bundles** a working
+> daemon-first `capture-mcp` at `Capture.app/Contents/Resources/captured/capture-mcp` (verified: it
+> answers `initialize` + `tools/list`), and the skill now **discovers before installing** —
+> `scripts/discover_mcp.py` resolves the command (app bundle → PATH → build dirs), verifies the MCP
+> handshake, and merges `.mcp.json`. **There is no clone+build onboarding** — app users get the bundled
+> binary, a dev's checkout exposes `target/release/capture-mcp`, and discovery finds either (the
+> `install.sh`/`install.ps1` source-build scripts were removed, 2026-06-20). The GUI also exposes a
+> **Copy MCP command** affordance (Settings → Skills). The recommendations below are kept for context.
+
 **Date:** 2026-06-18
 **Context:** `/capture` invoked on a Mac that already had **Capture.app 0.2.6** installed, in a
 fresh project (`/Users/alex/vibe-techno`, no `.mcp.json`). Goal was simply: register the `capture`

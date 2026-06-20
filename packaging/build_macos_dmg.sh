@@ -1,22 +1,25 @@
 #!/usr/bin/env bash
 # Build Capture.app and wrap it in a .dmg for macOS testing. The bundle is three
 # pieces: the native menu-bar **agent** (CaptureBar, the entry point), the GPUI
-# **window** (capture-gui), and the frozen **daemon** (captured) + ASR runtime.
+# **window** (capture-gui), and the native Rust **daemon** (captured) — v3 cutover
+# (#67): no Python, no PyInstaller, no embedded runtime.
 #
 # IMPORTANT: this build is **ad-hoc signed — NOT Developer-ID signed and NOT
 # notarized**. macOS Gatekeeper will warn on first launch; testers must bypass it
 # (see README → "Installing the macOS app (unsigned test build)").
 #
-# Self-contained: the .app bundles a PyInstaller-frozen daemon under
-# `Contents/Resources/captured/` (with the signed `audiocap` helper beside it) and
-# the on-device mlx ASR runtime. Launching the app runs the menu-bar agent, which
-# spawns the daemon and opens the window — no venv/`capture daemon start`.
+# Self-contained: the .app bundles the native Rust daemon under
+# `Contents/Resources/captured/` — the lean `captured` binary, its dlopen'd ASR
+# engine `libcapture_asr_whisper.dylib` (whisper.cpp/Metal), and the `capture-mcp`
+# stdio server. No `audiocap` helper (the daemon does ScreenCaptureKit + AVFoundation
+# natively). Launching the app runs the menu-bar agent, which spawns the daemon and
+# opens the window — no venv/`capture daemon start`. The GUI's model manager
+# downloads the ASR *weights* on demand (never bundled).
 #
 # Output: dist/Capture-<version>.dmg  (dist/ is gitignored)
 #
 # Env knobs:
 #   CAPTURE_GUI_VERSION       bundle version (default 0.2.5)
-#   CAPTURE_SKIP_FREEZE=1     reuse an existing freeze (fast GUI-only iteration)
 #   CAPTURE_SIGN_IDENTITY     "Developer ID Application: NAME (TEAMID)" — sign for
 #                             distribution (hardened runtime + entitlements + shared
 #                             Team ID so the daemon inherits the app's TCC grant, #31).
@@ -31,14 +34,20 @@ VERSION="${CAPTURE_GUI_VERSION:-0.2.6}"
 DIST="$ROOT/dist"
 APP="$DIST/$APP_NAME.app"
 DMG="$DIST/$APP_NAME-$VERSION.dmg"
-VENV_PY="$ROOT/.venv/bin/python"
-FREEZE_DIR="$ROOT/packaging/build/dist/captured"
+TARGET="$ROOT/target/release"
 
-echo "==> Building the GUI (release; gpui's first compile is heavy)…"
-# v3: gui is now a workspace member, so the binary lands in the shared workspace target.
-cargo build --release --manifest-path "$ROOT/gui/Cargo.toml"
-BIN="$ROOT/target/release/capture-gui"
-[ -x "$BIN" ] || { echo "build failed: $BIN missing" >&2; exit 1; }
+echo "==> Building the Rust workspace binaries (release; gpui's first compile is heavy)…"
+# One cargo build for the whole native app: the GUI window, the daemon, the MCP stdio
+# server, and the dlopen'd whisper.cpp ASR engine cdylib. All land in the shared target.
+cargo build --release \
+  -p capture-gui -p capture-daemon -p capture-mcp -p capture-asr-whisper
+BIN="$TARGET/capture-gui"
+DAEMON="$TARGET/captured"
+MCP="$TARGET/capture-mcp"
+ASR_DYLIB="$TARGET/libcapture_asr_whisper.dylib"
+for f in "$BIN" "$DAEMON" "$MCP" "$ASR_DYLIB"; do
+  [ -e "$f" ] || { echo "build failed: $f missing" >&2; exit 1; }
+done
 
 echo "==> Building the native menu-bar agent (CaptureBar.swift)…"
 command -v swiftc >/dev/null 2>&1 || { echo "swiftc not found (install Xcode CLT)" >&2; exit 1; }
@@ -46,54 +55,6 @@ mkdir -p "$ROOT/agent/build"
 AGENT="$ROOT/agent/build/CaptureBar"
 swiftc -O -o "$AGENT" "$ROOT/agent/macos/CaptureBar.swift"
 [ -x "$AGENT" ] || { echo "agent build failed: $AGENT missing" >&2; exit 1; }
-
-# --- Freeze the Python daemon (PyInstaller onedir) -------------------------------
-# Bundles the on-device ASR runtime (mlx-whisper) so the installed app transcribes
-# locally — the GUI's model manager downloads the *weights* on demand (never
-# bundled). torch/faster-whisper/riva (CUDA/cross-platform) are excluded.
-# NOTE: captured_main.py calls multiprocessing.freeze_support() — numba (a
-# mlx_whisper dep) uses multiprocessing, and without it a frozen child re-runs the
-# entry and starts a rogue second daemon.
-if [ "${CAPTURE_SKIP_FREEZE:-0}" = "1" ] && [ -x "$FREEZE_DIR/captured" ]; then
-  echo "==> CAPTURE_SKIP_FREEZE=1 — reusing existing freeze at $FREEZE_DIR"
-else
-  [ -x "$VENV_PY" ] || { echo "missing venv python: $VENV_PY (run ./init.sh)" >&2; exit 1; }
-  "$VENV_PY" -c "import PyInstaller" 2>/dev/null || {
-    echo "==> Installing PyInstaller into the venv…"
-    uv pip install --python "$VENV_PY" pyinstaller >/dev/null
-  }
-  echo "==> Freezing the daemon + mlx ASR runtime (PyInstaller onedir; ~390 MB)…"
-  "$VENV_PY" -m PyInstaller --noconfirm --onedir --name captured \
-    --distpath "$ROOT/packaging/build/dist" \
-    --workpath "$ROOT/packaging/build/work" \
-    --specpath "$ROOT/packaging/build" \
-    --hidden-import capture_mcp.core.platform.macos \
-    --hidden-import capture_mcp.core.import_media \
-    --hidden-import capture_mcp.core.vision_client \
-    --hidden-import capture_mcp.core.indexer \
-    --hidden-import capture_mcp.core.frames \
-    --hidden-import capture_mcp.core.asr.whisper_local \
-    --hidden-import capture_mcp.core.asr.openai_compat \
-    --collect-all Quartz \
-    --collect-all AVFoundation --collect-all CoreMedia \
-    --collect-all mlx --collect-all mlx_whisper --collect-all huggingface_hub \
-    --collect-all tiktoken --collect-all numba \
-    --exclude-module torch --exclude-module faster_whisper --exclude-module riva \
-    "$ROOT/packaging/captured_main.py"
-fi
-[ -x "$FREEZE_DIR/captured" ] || { echo "freeze failed: $FREEZE_DIR/captured missing" >&2; exit 1; }
-
-# Best-effort: prove the frozen mlx runtime works (Metal kernel + a whisper-tiny
-# transcription). Non-fatal — a cold cache needs network for the tiny model.
-# CAPTURE_ASR_SELFTEST=0 skips it.
-if [ "${CAPTURE_ASR_SELFTEST:-1}" = "1" ]; then
-  echo "==> Verifying the frozen ASR runtime (Metal + whisper-tiny; best-effort)…"
-  if "$FREEZE_DIR/captured" --asr-selftest; then
-    echo "   ASR self-test passed."
-  else
-    echo "   ⚠ ASR self-test did not pass (offline / first-run download?) — bundle still built." >&2
-  fi
-fi
 
 echo "==> Assembling $APP …"
 mkdir -p "$DIST"
@@ -122,19 +83,24 @@ cat > "$APP/Contents/Info.plist" <<EOF
 </dict></plist>
 EOF
 
-# Bundle the frozen daemon under Resources/captured (the GUI's bundled_daemon()
-# looks for Contents/Resources/captured/captured relative to the GUI binary).
-echo "==> Bundling the frozen daemon into Resources/captured …"
-rsync -a "$FREEZE_DIR/" "$APP/Contents/Resources/captured/"
-
-# Place the signed ScreenCaptureKit helper beside the frozen daemon — the engine's
-# helper_path() resolves `audiocap` next to sys.executable (the frozen binary).
-# cp preserves its embedded `com.local.audiocap` signature (stable TCC identity).
-if [ -x "$ROOT/helper/audiocap" ]; then
-  echo "==> Placing the signed audiocap helper beside the daemon …"
-  cp "$ROOT/helper/audiocap" "$APP/Contents/Resources/captured/audiocap"
+# Bundle the native Rust daemon under Resources/captured. The GUI's bundled_daemon()
+# and CaptureBar both spawn Contents/Resources/captured/captured; the daemon dlopens
+# its ASR engine from its own dir (engine_dir() = the binary's dir), so the cdylib
+# sits right beside it. capture-mcp ships here too for the agent's MCP wiring.
+echo "==> Bundling the native daemon + MCP into Resources/captured …"
+DAEMON_DIR="$APP/Contents/Resources/captured"
+mkdir -p "$DAEMON_DIR"
+cp "$DAEMON" "$DAEMON_DIR/captured"
+cp "$MCP" "$DAEMON_DIR/capture-mcp"
+# #81: the ASR engine ships as a downloadable runtime PACK (GitHub release), not in the bundle.
+# CAPTURE_BUNDLE_ENGINE=1 (default, transitional) still bundles whisper-metal so the app transcribes
+# out of the box; set =0 to ship engine-less once the pack is published (the onboarding #83 then
+# guides the download into ~/.capture/runtimes/whisper-metal/).
+if [ "${CAPTURE_BUNDLE_ENGINE:-1}" = "1" ]; then
+  echo "   bundling the whisper-metal engine (CAPTURE_BUNDLE_ENGINE=1, transitional)"
+  cp "$ASR_DYLIB" "$DAEMON_DIR/libcapture_asr_whisper.dylib"
 else
-  echo "   (no helper/audiocap — per-app audio will fall back to ffmpeg/mic)"
+  echo "   engine-less build (CAPTURE_BUNDLE_ENGINE=0) — runtimes download as packs (#81)"
 fi
 
 # Bundle the `capture` skill so the GUI's "Install skill →" buttons work from the
@@ -155,20 +121,15 @@ if [ -n "${CAPTURE_SIGN_IDENTITY:-}" ]; then
   echo "==> Signing with Developer ID (hardened runtime): $CAPTURE_SIGN_IDENTITY"
   SIGN=(codesign --force --options runtime --timestamp --entitlements "$ENT" --sign "$CAPTURE_SIGN_IDENTITY")
   SEAL=(codesign --force --options runtime --timestamp --entitlements "$ENT" --sign "$CAPTURE_SIGN_IDENTITY")
-  SIGN_HELPER=1
 else
   echo "==> Signing (ad-hoc — testing only; set CAPTURE_SIGN_IDENTITY for a real build)…"
   SIGN=(codesign --force --sign - --timestamp=none)
   SEAL=(codesign --force --sign -)
-  SIGN_HELPER=0  # leave the helper's stable com.local.audiocap signature intact
 fi
-# Nested Mach-Os first (inside-out), then each binary, the helper, then the bundle.
-find "$APP/Contents/Resources/captured" \
-  -type f \( -name '*.so' -o -name '*.dylib' \) -exec "${SIGN[@]}" {} +
-"${SIGN[@]}" "$APP/Contents/Resources/captured/captured"
-if [ "$SIGN_HELPER" = "1" ] && [ -f "$APP/Contents/Resources/captured/audiocap" ]; then
-  "${SIGN[@]}" "$APP/Contents/Resources/captured/audiocap"  # re-sign with the shared Team ID
-fi
+# Nested Mach-O first (the dlopen'd ASR engine, if bundled), then each binary, then seal the bundle.
+[ -f "$DAEMON_DIR/libcapture_asr_whisper.dylib" ] && "${SIGN[@]}" "$DAEMON_DIR/libcapture_asr_whisper.dylib"
+"${SIGN[@]}" "$DAEMON_DIR/captured"
+"${SIGN[@]}" "$DAEMON_DIR/capture-mcp"
 "${SIGN[@]}" "$APP/Contents/MacOS/capture-gui"
 "${SIGN[@]}" "$APP/Contents/MacOS/CaptureBar"
 "${SEAL[@]}" "$APP"   # seal the bundle last (NO --deep)

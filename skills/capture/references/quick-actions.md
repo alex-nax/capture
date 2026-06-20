@@ -46,12 +46,11 @@ macOS (Chrome shown; adapt the app name):
 
 ## 4. Change the default ASR model (and download it)
 ```bash
-python scripts/set_model.py --model mlx-community/whisper-large-v3-turbo \
-       --prefetch --python "<CAPTURE_MCP_PY>"
+python scripts/set_model.py --model ggml-large-v3-turbo --prefetch
 ```
-Or per-capture: pass `asr_backend="local"` (default) / `"nemotron"` (needs a Riva endpoint via
-`CAPTURE_RIVA_*` env). Valid models: `mlx-community/whisper-tiny`,
-`mlx-community/whisper-large-v3-turbo`. **`mlx-community/whisper-base` is NOT a real repo.**
+This sets the running daemon's active model over `/v1` (start a capture or the Capture app first so the
+daemon is up). Or per-capture: pass `asr_backend="local"` (default) / `"nemotron"` (needs a remote
+endpoint via `CAPTURE_RIVA_*` env). ASR models are GGML (whisper.cpp): `ggml-tiny`, `ggml-large-v3-turbo`.
 
 ## 5. Per-project / per-capture config
 - **Server-level env** (applies to every capture in the project): edit the `capture` entry's
@@ -108,16 +107,16 @@ re-capture.
    the background; watch `capture_status` `transcript_segments`. Needs `can_retranscribe` (audio still present
    — `capture_prune ... "audio"` removes it).
 3. Re-read `transcript.txt`. Still off? Try a stronger model — `capture_retranscribe(session_id,
-   model="mlx-community/whisper-large-v3-turbo", language=…)`.
+   model="ggml-large-v3-turbo", language=…)`.
 
 A silent mic that only ever produced "Thank you." was genuinely empty — gate/ignore it (newer builds default
 to 30 s chunks + a silence gate, so fresh captures rarely need this).
 
 ## Troubleshooting
 - **`audio_status: app-audio-failed ... -3805`** — `failedApplicationConnectionInterrupted`, a
-  *transient* connection blip (NOT a permission denial, which is `-3801`). The helper auto-reconnects;
-  if it persists, ensure audio is actually playing and that Screen Recording is granted. Run
-  `bash "<CAPTURE_HOME>/scripts/setup_codesign.sh"` once so the grant persists across rebuilds.
+  *transient* connection blip (NOT a permission denial, which is `-3801`). The daemon auto-reconnects;
+  if it persists, ensure audio is actually playing and that Screen Recording is granted. A stable signing
+  identity on the daemon keeps the grant persistent across rebuilds.
 - **No transcript / `asr-unavailable`** — install an ASR backend (the installer does this) and use a
   valid model name. First use downloads weights (prefetch to avoid the stall).
 - **Empty/black screenshots** — grant Screen Recording to the app that launches the MCP server.

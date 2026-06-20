@@ -49,6 +49,11 @@ on a Windows/NVIDIA box, which also enables the Whisper-vs-Nemotron benchmark (f
 ### `WindowFinder`
 - `find(pid=None, app_name=None) -> list[WindowRef]` — matching top-level windows, **largest
   area first** (possibly empty). Abstract.
+- **macOS on-screen scope (v3):** the primary list is **on-screen, normal-layer (layer 0)** windows
+  only (`SCShareableContent` with `with_on_screen_windows_only(true)`). Its default returns *all*
+  windows incl. an app's off-screen helper/renderer windows — e.g. Chrome surfaced ~24 CGWindow
+  objects for ~2 real windows, bloating the picker. A pid/app filter that matches nothing on-screen
+  falls back to the all-windows set (an app on another Space / fullscreen / minimized is still found).
 - `primary(pid=None, app_name=None) -> WindowRef | None` — concrete; returns `find(...)[0]` or
   `None`.
 

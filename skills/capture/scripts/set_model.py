@@ -1,64 +1,103 @@
 #!/usr/bin/env python3
-"""Change the default ASR model in .mcp.json (capture server env) and optionally
-pre-download it so the first capture doesn't stall on a model download.
+"""Set the capture daemon's active ASR model (and optionally pre-download it) over /v1.
 
-    python set_model.py --model mlx-community/whisper-large-v3-turbo \
-                        [--prefetch --python /path/to/.capture-mcp/.venv/bin/python] \
-                        [--project-dir .] [--name capture]
+This talks to the RUNNING capture daemon instead of editing any config file. It reads
+the daemon's discovery file (`$CAPTURE_DAEMON_JSON` else `~/.capture/daemon.json`) for
+`{endpoint, token}`, then:
+  - POST {endpoint}/v1/asr/model            {"repo": <model>}  -> set the active model
+  - POST {endpoint}/v1/asr/models/download  {"repo": <model>}  -> prefetch (with --prefetch)
 
-Valid examples: mlx-community/whisper-tiny, mlx-community/whisper-large-v3-turbo.
-NOTE: mlx-community/whisper-base does NOT exist (404).
+    python set_model.py --model ggml-large-v3-turbo [--prefetch]
+
+If no daemon is running this prints a clear message and exits non-zero — start a capture
+(or the Capture app) first so the daemon is up, then re-run.
+
+Pure stdlib: this skill is installed standalone and can NOT import repo modules.
 """
 from __future__ import annotations
 
 import argparse
 import json
-import subprocess
+import os
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 
+def daemon_json_path() -> Path:
+    """Discovery file: $CAPTURE_DAEMON_JSON (file or dir) else ~/.capture/daemon.json."""
+    env = os.environ.get("CAPTURE_DAEMON_JSON")
+    if env:
+        p = Path(env).expanduser()
+        return p / "daemon.json" if p.is_dir() else p
+    return Path.home() / ".capture" / "daemon.json"
+
+
+def read_daemon() -> tuple[str, str] | None:
+    """Return (endpoint, token) from the discovery file, or None if absent/unreadable."""
+    path = daemon_json_path()
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    endpoint = data.get("endpoint")
+    token = data.get("token")
+    if not isinstance(endpoint, str) or not endpoint:
+        return None
+    return endpoint, token if isinstance(token, str) else ""
+
+
+def post(endpoint: str, token: str, route: str, payload: dict) -> tuple[int, str]:
+    """POST JSON to {endpoint}{route} with a bearer token. Returns (status, body_text)."""
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        endpoint.rstrip("/") + route,
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    if token:
+        req.add_header("Authorization", "Bearer " + token)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status, resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace")
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Set + optionally prefetch the capture ASR model")
-    ap.add_argument("--model", required=True)
-    ap.add_argument("--project-dir", default=".")
-    ap.add_argument("--name", default="capture")
-    ap.add_argument("--prefetch", action="store_true", help="download the model now")
-    ap.add_argument("--python", default=None, help="capture-mcp venv python (needed for --prefetch)")
+    ap = argparse.ArgumentParser(description="Set + optionally prefetch the capture daemon's ASR model")
+    ap.add_argument("--model", required=True, help="model repo to make active (e.g. ggml-large-v3-turbo)")
+    ap.add_argument("--prefetch", action="store_true", help="also download the model now")
     a = ap.parse_args()
 
-    path = Path(a.project_dir).expanduser().resolve() / ".mcp.json"
-    data = json.loads(path.read_text() or "{}") if path.exists() else {}
-    if not isinstance(data, dict):
-        print(f"refusing to edit {path}: top level is not an object")
+    daemon = read_daemon()
+    if daemon is None:
+        print(
+            "No running capture daemon found "
+            f"({daemon_json_path()}). Start a capture (or the Capture app) so the "
+            "daemon is up, then re-run."
+        )
         return 1
-    entry = data.setdefault("mcpServers", {}).setdefault(a.name, {})
-    entry.setdefault("env", {})["CAPTURE_WHISPER_MODEL"] = a.model
-    path.write_text(json.dumps(data, indent=2) + "\n")
-    print(f"set CAPTURE_WHISPER_MODEL={a.model} in {path}")
+    endpoint, token = daemon
+
+    status, text = post(endpoint, token, "/v1/asr/model", {"repo": a.model})
+    if status >= 400:
+        print(f"failed to set model (HTTP {status}): {text.strip()}")
+        return 1
+    try:
+        active = json.loads(text).get("active", a.model)
+    except ValueError:
+        active = a.model
+    print(f"active ASR model -> {active}")
 
     if a.prefetch:
-        if not a.python:
-            print("  --prefetch needs --python <venv python>; skipping download "
-                  "(model will download on first capture).")
-            return 0
-        # Load the model once through the installed backend to trigger the download.
-        code = (
-            "import numpy as np;"
-            "from capture_mcp.core.asr.whisper_local import MlxWhisper, FasterWhisper;"
-            f"m={a.model!r};"
-            "be=None\n"
-            "try:\n"
-            "    be=MlxWhisper(model=m)\n"
-            "except Exception:\n"
-            "    be=FasterWhisper(model=m)\n"
-            "be.transcribe(np.zeros(16000, dtype='float32'), 16000)\n"
-            "print('prefetched', m)"
-        )
         print(f"  prefetching {a.model} (first download can take a while)...")
-        rc = subprocess.run([a.python, "-c", code]).returncode
-        if rc != 0:
-            print("  prefetch failed — check the model name is a real HF repo.")
-            return rc
+        status, text = post(endpoint, token, "/v1/asr/models/download", {"repo": a.model})
+        if status >= 400:
+            print(f"  prefetch failed (HTTP {status}): {text.strip()}")
+            return 1
+        print("  download started (runs in the background on the daemon).")
     return 0
 
 

@@ -4,8 +4,8 @@
 1. Run `pwd` to confirm you are in `/Users/alex/capture`.
 2. Read `claude-progress.md` for recent session history.
 3. Read `features.json` to find the next task (`"passes": false`, respecting `dependencies`).
-4. Run `./init.sh` to set up the venv, install deps, build the Swift helper, and run the smoke test.
-5. Verify basics work (`python tests/smoke.py` → `20/20 passed`) before starting new work.
+4. Run `./init.sh` to build the cargo workspace and run the tests (`cargo build --workspace` + `cargo test --workspace`).
+5. Verify basics work (`cargo test --workspace` → all green) before starting new work.
 6. Pick ONE feature marked `"passes": false` and implement it.
 7. Test end-to-end (not just imports) — see Testing below.
 8. Commit with a descriptive message.
@@ -16,9 +16,9 @@
 - Work on ONE feature per session; leave the tree working and committable.
 - Never delete or reword existing feature descriptions in `features.json`.
 - Fix regressions from a previous session BEFORE starting new work.
-- Keep `stdout` clean in `server.py` — it is the MCP transport; all logs go to `stderr`.
-- Don't block the asyncio event loop in tool handlers — offload blocking work with
-  `anyio.to_thread.run_sync` (see `docs/architecture.md`).
+- Keep `stdout` clean in the `capture-mcp` crate — it is the MCP transport; all logs go to `stderr`.
+- The app is a single Rust cargo workspace under `crates/` (package names keep the `capture-`
+  prefix): `core`, `platform`, `asr`, `asr-whisper`, `index`, `engine`, `daemon`, `mcp`, `gui`.
 
 ## 📋 SPECS ARE MANDATORY (documentation is a first-class step)
 Every scope has a spec in **`docs/specs/`** — these are the source of intent for the
@@ -38,23 +38,19 @@ This is what keeps the harness stable across sessions: a new agent reads the spe
 intent, then the code to know reality, and the two must agree.
 
 ## Environment gotchas (this machine)
-- The machine is **arm64**, but the system `python3` is **x86_64 miniconda under Rosetta**.
-  Always use the project venv (`uv venv --python 3.12 --python-preference only-managed`),
-  which is arm64 — required for `mlx-whisper`.
-- Per-app audio uses a Swift ScreenCaptureKit helper that needs **Screen Recording**
-  permission. A rebuilt ad-hoc binary loses the TCC grant → `startCapture` fails with
-  `-3805`. Build with a stable `CODESIGN_IDENTITY` for a persistent grant.
+- The whole app is a Rust cargo workspace — `./init.sh` just needs `cargo` (no Python venv,
+  no Swift helper). The dev/eval utilities under `tools/` and the eval skills are pure-stdlib
+  `python3` /v1 clients (any `python3`, no venv) that proxy the running daemon.
+- Per-app audio uses the daemon's native ScreenCaptureKit path (the `screencapturekit` crate in
+  `capture-platform`) and needs **Screen Recording** permission. A rebuilt ad-hoc binary loses the
+  TCC grant → capture fails with `-3805`. Sign the daemon with a stable identity for a persistent grant.
 
 ## Testing
-- **Hermetic suite (no permissions/GPU):** `python tests/smoke.py` — launch-mode logs +
-  screenshots, async MCP tools, audio chunking/offsets (stub ASR), `parse_resolution`.
+- **Workspace suite (no permissions/GPU):** `cargo test --workspace` — the hermetic unit/
+  integration tests across all crates. Run a single crate's tests with `cargo test -p <crate>`
+  (e.g. `cargo test -p capture-index`).
 - **Real ASR:** `say -o /tmp/s.aiff "hello world"; ffmpeg -i /tmp/s.aiff -ac 1 -ar 16000 -f s16le /tmp/s.s16le`
-  then run a chunk through `capture_mcp.core.asr.whisper_local.MlxWhisper(model="mlx-community/whisper-tiny")`.
-- **Contract tests**: `python tests/contract/run_contracts.py` — pins tools/list schemas,
-  session-dir layout, and PCM chunk math against `tests/contract/golden/`. Fails on drift;
-  after an INTENTIONAL interface change update the spec, then `--regen`.
-- **Swift helper:** `bash scripts/build_helper.sh` then `./helper/audiocap --system --rate 16000`
-  — expect a `READY ...` line on stderr and PCM bytes on stdout (needs Screen Recording).
+  then run a chunk through the whisper.cpp engine (`capture-asr-whisper`) with a small GGML model.
 - **End-to-end window+audio:** attach to a real app by `pid` and confirm screenshots land in
   `<out>/capture-*/screenshots/` and (if permission granted) `transcript.jsonl` fills.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bump (or set) the capture-mcp version across the FOUR places it lives, atomically.
+"""Bump (or set) the capture version across the THREE places it lives, atomically.
 
 Default bump is a PATCH/revision (x.y.Z+1). `minor` → x.(Y+1).0, `major` → (X+1).0.0.
 `--set X.Y.Z` writes an explicit version. Prints `OLD -> NEW`. Does NOT build/tag/commit —
@@ -17,14 +17,14 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve()
-while REPO != REPO.parent and not (REPO / "src" / "capture_mcp" / "__init__.py").exists():
+while REPO != REPO.parent and not (REPO / "crates" / "gui" / "Cargo.toml").exists():
     REPO = REPO.parent
 
-# (path, regex with a single capture group around the version, template to rewrite the line)
+# (path, regex with a single capture group around the version, template to rewrite the line).
+# v3: the Python package + pyproject are retired; the version now lives in the GUI crate manifest
+# (the bundle version) + the two platform packaging scripts.
 TARGETS = [
-    (REPO / "src/capture_mcp/__init__.py", r'__version__ = "([0-9]+\.[0-9]+\.[0-9]+)"', '__version__ = "{v}"'),
-    (REPO / "pyproject.toml",              r'^version = "([0-9]+\.[0-9]+\.[0-9]+)"', 'version = "{v}"'),
-    (REPO / "gui/Cargo.toml",              r'^version = "([0-9]+\.[0-9]+\.[0-9]+)"', 'version = "{v}"'),
+    (REPO / "crates/gui/Cargo.toml",       r'^version = "([0-9]+\.[0-9]+\.[0-9]+)"', 'version = "{v}"'),
     (REPO / "packaging/build_macos_dmg.sh", r'CAPTURE_GUI_VERSION:-([0-9]+\.[0-9]+\.[0-9]+)', 'CAPTURE_GUI_VERSION:-{v}'),
     (REPO / "packaging/build_windows.ps1", r'else \{ "([0-9]+\.[0-9]+\.[0-9]+)" \}', 'else {{ "{v}" }}'),
 ]
@@ -34,7 +34,7 @@ def current() -> str:
     txt = TARGETS[0][0].read_text()
     m = re.search(TARGETS[0][1], txt, re.M)
     if not m:
-        sys.exit("could not read current version from src/capture_mcp/__init__.py")
+        sys.exit("could not read current version from crates/gui/Cargo.toml")
     return m.group(1)
 
 

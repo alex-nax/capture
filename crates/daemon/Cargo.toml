@@ -1,0 +1,35 @@
+[package]
+name = "capture-daemon"
+version = "0.1.0"
+edition = "2021"
+description = "v3 capture daemon: the axum /v1 HTTP server (read-layer + index build) replacing the Python captured."
+
+[[bin]]
+name = "captured"
+path = "src/main.rs"
+
+[dependencies]
+capture-core = { path = "../core" }
+capture-index = { path = "../index" }
+# The ASR runtime manager + GGML model catalog (the daemon streams downloads; the engine cdylib it
+# dlopens is a separate, optional component — see capture-asr's runtime/dynamic modules).
+capture-asr = { path = "../asr" }
+# OS capture backends: window discovery, screenshots, audio, permissions (macOS ScreenCaptureKit).
+capture-platform = { path = "../platform" }
+# The capture session orchestration (lifecycle, screenshots timer, audio→ASR pump, session.json).
+capture-engine = { path = "../engine" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The async HTTP framework + runtime for the /v1 surface (SSE, bearer auth, graceful shutdown).
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "net", "time"] }
+# BroadcastStream adapts the SSE event bus (tokio::sync::broadcast) into an axum Sse stream.
+tokio-stream = { version = "0.1", features = ["sync"] }
+# The single-instance preflight (GET /v1/health on an existing daemon) — blocking, runs before the runtime.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+# OS randomness for the bearer token (24 bytes → hex).
+getrandom = "0.2"
+
+[dev-dependencies]
+# `oneshot` drives the router hermetically in tests (no bound port).
+tower = { version = "0.5", features = ["util"] }

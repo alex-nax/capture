@@ -12,23 +12,22 @@ and change nothing. Reach for this skill only when the user explicitly asks to r
 ## Version policy
 - **Default = PATCH** (revision): `x.y.Z` → `x.y.(Z+1)`.
 - `minor` (`x.(Y+1).0`) or `major` (`(X+1).0.0`) **only when the user explicitly asks** for one.
-- The version lives in FOUR files; `scripts/bump_version.py` edits all of them atomically so they can't
-  drift: `src/capture_mcp/__init__.py`, `pyproject.toml`, `gui/Cargo.toml`, `packaging/build_macos_dmg.sh`.
+- The version lives in THREE files; `scripts/bump_version.py` edits all of them atomically so they can't
+  drift: `crates/gui/Cargo.toml`, `packaging/build_macos_dmg.sh`, `packaging/build_windows.ps1`. (v3: the
+  Python package + pyproject are retired — the GUI crate manifest is the source-of-truth bundle version.)
 
 ## Steps
 
 ### 1. Pre-flight (don't release a broken tree)
 - Confirm with the user the bump level (patch unless they said minor/major) and that they want it **published
   to GitHub** (this skill is the publish path the standing "don't publish a release" rule otherwise forbids).
-- From the repo root with the venv: tests must be green —
-  `.venv/bin/python tests/smoke.py` (68/68), `tests/contract/run_contracts.py` (4/4),
-  `tests/indexing_hermetic.py`. Don't release on red.
+- From the repo root: the workspace must be green — `cargo test --workspace`. Don't release on red.
 - Working tree should be committed (or commit the pending batch first — release tags a real commit).
 - Check the baseline: `gh release list -L 3` and `scripts/bump_version.py --current`.
 
 ### 2. Bump the version
 ```bash
-.venv/bin/python .claude/skills/capture-release/scripts/bump_version.py            # patch (default)
+python3 .claude/skills/capture-release/scripts/bump_version.py                     # patch (default)
 # or: ... bump_version.py minor   |   ... bump_version.py major   |   ... bump_version.py --set X.Y.Z
 ```
 It prints `OLD -> NEW`. Note `NEW` for the rest of the flow.
@@ -36,8 +35,7 @@ It prints `OLD -> NEW`. Note `NEW` for the rest of the flow.
 ### 3. Build + notarize the signed DMG
 ```bash
 export CAPTURE_SIGN_IDENTITY="Developer ID Application: Alexander Dodonov (YH3QP44ST4)"
-export CAPTURE_ASR_SELFTEST=0
-bash packaging/build_macos_dmg.sh           # → dist/Capture-<NEW>.dmg  (re-freezes daemon + builds GUI)
+bash packaging/build_macos_dmg.sh           # → dist/Capture-<NEW>.dmg  (builds the Rust workspace + bundles the daemon)
 ```
 Notarize with **INLINE** creds (the `capture-notary` keychain profile is flaky — see the inline-creds note).
 NEVER echo the password; read it via `$(cat .notary-password)`:
@@ -50,7 +48,7 @@ spctl -a -t open --context context:primary-signature -v "dist/Capture-<NEW>.dmg"
 
 ### 4. Commit + tag
 ```bash
-git add src/capture_mcp/__init__.py pyproject.toml gui/Cargo.toml packaging/build_macos_dmg.sh
+git add crates/gui/Cargo.toml packaging/build_macos_dmg.sh packaging/build_windows.ps1
 git commit -m "release: vNEW"   # end with the project's Co-Authored-By trailer
 git tag vNEW
 ```

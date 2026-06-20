@@ -4,8 +4,8 @@
 Every `capture_index` run writes `<session>/index_prompts.json` (the prompts/schemas it used +
 the per-type content distribution + any frontier-model-crafted custom prompts) alongside
 `index.json` (the structured results). This script aggregates that corpus so an agent can decide
-how to improve the built-in classifier (`CLASSIFY_PROMPT` / `CONTENT_TYPES`) and per-type extractors
-(`CONTENT_PROMPTS`) in `src/capture_mcp/core/indexer.py`.
+how to improve the built-in classifier (`classify_prompt` / content types) and per-type extractors
+in the Rust index defaults (`crates/index/src/prompts.toml`, executed by `crates/index/src/prompts.rs`).
 
 It surfaces:
   • the content-type distribution (which types actually occur — are any missing/over-broad?),
@@ -33,15 +33,26 @@ def _repo_root() -> Path:
 
 
 def _load_defaults():
-    """Import the live indexer defaults (CONTENT_PROMPTS) for diffing against the customs."""
-    sys.path.insert(0, str(_repo_root() / "src"))
+    """Read the built-in extractor defaults from the Rust index's `prompts.toml` — the v3 home of
+    what used to be `capture_mcp.core.indexer.CONTENT_PROMPTS`. Returns (defaults, types) where
+    `defaults[type] = {"schema": {"properties": {field: {}}}}` (so the field-diff below is unchanged);
+    an empty pair if the toml can't be read (the report still works, just without the field-diff)."""
+    toml_path = _repo_root() / "crates" / "index" / "src" / "prompts.toml"
     try:
-        from capture_mcp.core import indexer
+        import tomllib  # stdlib (py3.11+)
 
-        return indexer.CONTENT_PROMPTS, indexer.CONTENT_TYPES
-    except Exception as e:  # the report still works without them
-        print(f"(note: could not import indexer defaults: {e})", file=sys.stderr)
+        data = tomllib.loads(toml_path.read_text())
+    except Exception as e:  # the report still works without the defaults
+        print(f"(note: could not read index defaults from {toml_path}: {e})", file=sys.stderr)
         return {}, []
+    defaults = {}
+    for c in data.get("content", []):
+        key = c.get("key")
+        if not key:
+            continue
+        fields = {f[0] for f in c.get("fields", []) if f} | {"summary"}
+        defaults[key] = {"schema": {"properties": {f: {} for f in fields}}}
+    return defaults, list(defaults)
 
 
 def _schema_fields(schema: dict) -> set[str]:
@@ -144,10 +155,10 @@ def main() -> int:
         for ex in exs:
             print(f"    {json.dumps(ex, ensure_ascii=False)[:200]}")
     print()
-    print("## Next: edit src/capture_mcp/core/indexer.py")
-    print("  • Add/refine CONTENT_PROMPTS[<type>] (prompt + schema) where customs or new fields show a better extractor.")
-    print("  • Add any ⚠ unknown content types to the enum / CLASSIFY_PROMPT, or fold over-broad ones together.")
-    print("  • Re-verify with tools/index_prompt_eval.py --compare and tests/indexing_hermetic.py.")
+    print("## Next: edit crates/index/src/prompts.toml (executed by crates/index/src/prompts.rs)")
+    print("  • Add/refine the [[content]] entry (prompt + fields) where customs or new fields show a better extractor.")
+    print("  • Add any ⚠ unknown content types as a new [[content]] key, or fold over-broad ones together.")
+    print("  • Re-verify with tools/index_prompt_eval.py --compare and `cargo test -p capture-index`.")
 
     if args.json:
         Path(args.json).write_text(json.dumps({

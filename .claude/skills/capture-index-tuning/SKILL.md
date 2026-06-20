@@ -1,6 +1,6 @@
 ---
 name: capture-index-tuning
-description: Improve capture-mcp's multimodal-index CLASSIFIER and per-type EXTRACTORS from real field data. USE THIS SKILL whenever you are tuning how the index understands screenshots — ingesting the saved index_prompts.json corpus from indexed sessions, folding frontier-model-crafted custom index prompts/schemas back into the built-in defaults, adding a new content type or extraction field, fixing mis-classification, or editing CONTENT_PROMPTS / CLASSIFY_PROMPT / CONTENT_TYPES in src/capture_mcp/core/indexer.py. Trigger it even if the user just says "the meeting index missed names", "add a coding extractor", "the classifier mislabels X", or "update the index prompts from what we collected".
+description: Improve capture-mcp's multimodal-index CLASSIFIER and per-type EXTRACTORS from real field data. USE THIS SKILL whenever you are tuning how the index understands screenshots — ingesting the saved index_prompts.json corpus from indexed sessions, folding frontier-model-crafted custom index prompts/schemas back into the built-in defaults, adding a new content type or extraction field, fixing mis-classification, or editing the content-type prompts / classifier prompt in crates/index/src/prompts.toml (data, executed by crates/index/src/prompts.rs). Trigger it even if the user just says "the meeting index missed names", "add a coding extractor", "the classifier mislabels X", or "update the index prompts from what we collected".
 ---
 
 # capture-index-tuning
@@ -30,9 +30,9 @@ verdict is your strongest signal for what to change here.
 ## Workflow
 
 ### 1. Ingest the corpus
-From the repo root, with the project venv:
+From the repo root, with any `python3` (the script is a pure-stdlib reader, no venv):
 ```bash
-.venv/bin/python .claude/skills/capture-index-tuning/scripts/ingest_index_prompts.py --json /tmp/index_corpus.json
+python3 .claude/skills/capture-index-tuning/scripts/ingest_index_prompts.py --json /tmp/index_corpus.json
 ```
 It scans `~/.capture/runs/*/index_prompts.json` + `index.json` and reports: the content-type
 distribution (flagging unknown/over-broad types), every **custom** `leaf_prompt`/`leaf_schema`/
@@ -40,28 +40,31 @@ distribution (flagging unknown/over-broad types), every **custom** `leaf_prompt`
 default** for that type, and sample extractions per type so you can judge quality.
 
 ### 2. Decide the changes (read the report, not your priors)
-- **Custom prompts that recur and read well** → fold their wording/fields into the matching default in
-  `CONTENT_PROMPTS`. Don't blindly paste — generalize: keep what makes them better (a clearer field, a
+- **Custom prompts that recur and read well** → fold their wording/fields into the matching default
+  `[[content]]` entry. Don't blindly paste — generalize: keep what makes them better (a clearer field, a
   sharper instruction), drop session-specific bits.
-- **New fields** the report surfaces → add to that type's `schema` (+ a line in its `prompt`).
-- **Unknown content types** (⚠ in the report) → add to the enum via a new `CONTENT_PROMPTS` entry, or
-  merge an over-broad/duplicate type. `CONTENT_TYPES` derives from `CONTENT_PROMPTS` automatically.
-- **Mis-classification** → sharpen `CLASSIFY_PROMPT`'s disambiguation hints (e.g. "meeting = a video
+- **New fields** the report surfaces → add to that type's `fields` (+ a line in its `prompt`).
+- **Unknown content types** (⚠ in the report) → add the enum via a new `[[content]]` entry, or
+  merge an over-broad/duplicate type. The classifier enum (`content_types()`) derives from the entries
+  automatically.
+- **Mis-classification** → sharpen `classify_prompt`'s disambiguation hints (e.g. "meeting = a video
   call; video = a media player").
 
-### 3. Edit `src/capture_mcp/core/indexer.py`
-The only file to change. Key structures (see also `references/indexer-map.md`):
-- `CONTENT_PROMPTS[type] = {label, prompt, schema, combine_focus}` — the per-type extractor. Every
-  `schema` MUST keep a `summary` string field (it feeds the tree); add type-specific fields beside it.
-- `CLASSIFY_PROMPT` + `_classify_schema()` — the classifier; `CONTENT_TYPES` is derived.
-Use the `_schema({...})` / `_STR` / `_STRS` helpers already in the file for consistency.
+### 3. Edit `crates/index/src/prompts.toml`
+The built-in defaults are **data** in `crates/index/src/prompts.toml`, executed by
+`crates/index/src/prompts.rs` — edit the TOML, not the Rust (see also `references/indexer-map.md`):
+- Each `[[content]]` entry = `{ key, label, prompt, combine_focus, fields }` — the per-type extractor.
+  The extraction schema is built from `fields` and **always prepends a `summary` string** (it feeds the
+  tree), so you only list the type-specific fields. Field types are `"str"` / `"strs"`.
+- `classify_prompt` (a top-level string) is the classifier; the classify enum + schema derive from the
+  entries' `key`s (every key except `general`, then `other`) in `prompts.rs`.
+- Prompts/combine_focus are single-line strings written as multi-line literals that `prompts.rs` trims;
+  keep the existing style. A verbatim-guard test in `prompts.rs` protects the eval-tuned strings.
 
 ### 4. Verify before claiming done
-- `.venv/bin/python tests/indexing_hermetic.py` → `ALL PASSED` (tree logic still holds).
-- `.venv/bin/python tests/smoke.py` and `tests/contract/run_contracts.py` → green (regenerate the
-  golden only if you changed the request/response contract: `... run_contracts.py --regen`).
+- `cargo test -p capture-index` → green (the schema/derivation + verbatim-guard tests still hold).
 - Empirically, against a real session + endpoint:
-  `.venv/bin/python tools/index_prompt_eval.py --session <dir> --preset <type> --n 8` (or `--compare`)
+  `python3 tools/index_prompt_eval.py --session <dir> --preset <type> --n 8` (or `--compare`)
   — confirm the new extractor pulls out what you intended. This is the real test; the unit tests only
   guard the plumbing.
 

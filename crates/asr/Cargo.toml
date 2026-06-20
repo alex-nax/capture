@@ -1,0 +1,15 @@
+[package]
+name = "capture-asr"
+version = "0.1.0"
+edition = "2021"
+description = "v3 ASR: the AsrBackend trait + the DynamicEngine dlopen loader + remote backends. Engines are dylibs."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# dlopen the engine cdylibs (capture-asr-whisper now; capture-asr-mlx etc. later) through one C-ABI seam.
+libloading = "0.8"
+
+# A standalone runner: dlopen an engine dylib + transcribe an s16le clip → print segments.
+[[example]]
+name = "transcribe"

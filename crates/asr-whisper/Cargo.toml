@@ -1,0 +1,23 @@
+[package]
+name = "capture-asr-whisper"
+version = "0.1.0"
+edition = "2021"
+description = "The whisper.cpp ASR engine as a dynamically-loaded cdylib (the capture-asr engine C ABI)."
+
+# A dynamic library the lean daemon dlopens at runtime via capture-asr's DynamicEngine loader. whisper.cpp
+# links statically INTO this dylib (so the daemon embeds no engine); a future capture-asr-mlx cdylib
+# implements the same C ABI (mlx-rs) and loads through the same seam.
+[lib]
+# cdylib = the dlopen'd engine; rlib = lets the internal helpers be unit-tested.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+capture-asr = { path = "../asr" } # the Segment type + resampler (shared serde shape across the ABI)
+serde_json = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies.whisper-rs]
+version = "0.16"
+features = ["metal"]
+
+[target.'cfg(not(target_os = "macos"))'.dependencies.whisper-rs]
+version = "0.16"

@@ -20,7 +20,9 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.error
 import urllib.parse
+import urllib.request
 from pathlib import Path
 
 REPO_DEFAULT = "alex-nax/capture"
@@ -43,19 +45,28 @@ def scrub(text: str) -> str:
     return text
 
 
-def capture_version(capture_home: str | None) -> str:
+def daemon_json_path() -> Path:
+    """Discovery file: $CAPTURE_DAEMON_JSON (file or dir) else ~/.capture/daemon.json."""
+    env = os.environ.get("CAPTURE_DAEMON_JSON")
+    if env:
+        p = Path(env).expanduser()
+        return p / "daemon.json" if p.is_dir() else p
+    return Path.home() / ".capture" / "daemon.json"
+
+
+def capture_version() -> str:
+    """Version from the running daemon's GET /v1/health, or 'unknown' if unreachable."""
     try:
-        import capture_mcp  # type: ignore
-        return getattr(capture_mcp, "__version__", "unknown")
-    except Exception:
-        pass
-    if capture_home:
-        pp = Path(capture_home) / "pyproject.toml"
-        if pp.exists():
-            for line in pp.read_text().splitlines():
-                if line.strip().startswith("version"):
-                    return line.split("=", 1)[-1].strip().strip('"')
-    return "unknown"
+        data = json.loads(daemon_json_path().read_text())
+        endpoint = data.get("endpoint")
+        if not isinstance(endpoint, str) or not endpoint:
+            return "unknown"
+        req = urllib.request.Request(endpoint.rstrip("/") + "/v1/health")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            health = json.loads(resp.read().decode("utf-8", "replace"))
+        return str(health.get("version", "unknown"))
+    except (OSError, ValueError, urllib.error.URLError):
+        return "unknown"
 
 
 def gh_ready() -> bool:
@@ -92,18 +103,14 @@ def mcp_configured(cwd: str = ".") -> str:
         return ".mcp.json present but unparseable"
 
 
-def build_body(summary: str, session: dict | None, capture_home: str | None,
-               project_dir: str = ".") -> str:
-    home = capture_home or os.environ.get("CAPTURE_HOME") or str(Path.home() / ".capture-mcp")
-    helper = Path(home) / "helper" / "audiocap"
+def build_body(summary: str, session: dict | None, project_dir: str = ".") -> str:
     diag = [
-        f"- capture-mcp version: {capture_version(capture_home)}",
+        f"- capture-mcp version: {capture_version()}",
         f"- OS: {platform.platform()}",
         f"- arch: {platform.machine()}",
         f"- python: {platform.python_version()}",
         f"- gh available+authed: {gh_ready()}",
         f"- .mcp.json: {mcp_configured(project_dir)}",
-        f"- audio helper built: {helper.exists()}",
     ]
     parts = [
         f"### What happened\n{summary or '(describe the problem)'}\n",
@@ -133,7 +140,6 @@ def main() -> int:
     ap.add_argument("--session-dir", default=None, help="a capture session dir (or its parent)")
     ap.add_argument("--project-dir", default=None,
                     help="dir containing the project's .mcp.json (default: session's cwd, else CWD)")
-    ap.add_argument("--capture-home", default=os.environ.get("CAPTURE_HOME"))
     ap.add_argument("--labels", default="bug")
     ap.add_argument("--create", action="store_true",
                     help="actually open the issue (publishes publicly; otherwise preview only)")
@@ -146,7 +152,7 @@ def main() -> int:
     project_dir = a.project_dir or (session or {}).get("config", {}).get("cwd") or "."
 
     title = scrub(a.title or (f"capture: {a.summary[:60]}" if a.summary else "capture: bug report"))
-    body = scrub(build_body(a.summary, session, a.capture_home, project_dir))
+    body = scrub(build_body(a.summary, session, project_dir))
 
     print("=== Issue title ===\n" + title)
     print("\n=== Issue body ===\n" + body + "\n")

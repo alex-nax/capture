@@ -1,58 +1,96 @@
-"""Offline re-transcribe a captured audio.s16le with faster-whisper (authoritative).
+"""Re-transcribe a captured audio file via the capture daemon (v3 ``/v1``).
 
-Live capture timestamps can drift if the loopback lags wall-clock; transcribing the
-saved PCM directly gives a clean, gap-free transcript indexed by audio offset.
+Live capture timestamps can drift if the loopback lags wall-clock; importing the
+saved audio gives a clean, gap-free transcript indexed by audio offset. Under v3 the
+ASR engine lives in the native ``captured`` daemon — this proxies it:
+``POST /v1/sessions/import`` extracts audio + runs ASR + writes a transcript, then
+returns the new session's summary (progress streams over ``/v1/events``).
 
-    python scripts/transcribe_audio.py <audio.s16le> [--model large-v3]
+Accepts either a normal media file (audio/video the daemon can demux) or a raw
+headerless ``audio.s16le`` (16 kHz mono signed-16 PCM, as written by the live
+capture); the raw form is wrapped into a temporary WAV so the daemon can ingest it.
+Pure stdlib — no venv, no deps; just needs a running daemon.
+
+    python3 scripts/transcribe_audio.py <audio.s16le|media-file> [--out-dir DIR] [--asr-backend auto]
 """
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import sys
+import tempfile
+import wave
 from pathlib import Path
 
-import numpy as np
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "tools"))
+import capture_v1  # noqa: E402
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from capture_mcp.core.asr.whisper_local import FasterWhisper  # noqa: E402
+# Raw-PCM layout written by the live audio capture (loopback resampled to this).
+_PCM_RATE = 16000
+_PCM_CHANNELS = 1
+_PCM_SAMPLE_WIDTH = 2  # signed 16-bit little-endian
 
 
-def fmt(t: float) -> str:
-    h = int(t // 3600); m = int((t % 3600) // 60); s = t % 60
-    return "%02d:%02d:%05.2f" % (h, m, s)
+def wrap_pcm_as_wav(pcm: Path, dst: Path) -> None:
+    """Wrap headerless 16 kHz mono s16le PCM into a WAV the daemon can demux."""
+    with wave.open(str(dst), "wb") as w:
+        w.setnchannels(_PCM_CHANNELS)
+        w.setsampwidth(_PCM_SAMPLE_WIDTH)
+        w.setframerate(_PCM_RATE)
+        w.writeframes(pcm.read_bytes())
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("audio")
-    ap.add_argument("--model", default="large-v3")
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("audio", help="path to audio.s16le (raw PCM) or any media file")
+    ap.add_argument("--out-dir", default=None,
+                    help="output dir for the imported session (default: daemon's runs dir)")
+    ap.add_argument("--asr-backend", default="auto",
+                    help="ASR backend for the daemon to use (default: auto)")
     args = ap.parse_args()
-    os.environ["CAPTURE_WHISPER_MODEL"] = args.model
 
-    data = np.fromfile(args.audio, dtype="<i2").astype(np.float32) / 32768.0
-    print("loaded %.1f min; loading %s on GPU..." % (data.size / 16000 / 60, args.model), flush=True)
-    fw = FasterWhisper(model=args.model)
-    print("device=%s compute=%s; transcribing..." % (fw.device, fw.compute_type), flush=True)
+    daemon = capture_v1.Daemon.discover()
+    if daemon is None or not daemon.available():
+        print("ERROR: no capture daemon reachable (start `captured`, or set "
+              "$CAPTURE_DAEMON_JSON).", file=sys.stderr)
+        return 2
 
-    segments, info = fw._model.transcribe(data, vad_filter=True, language="en",
-                                          beam_size=5, condition_on_previous_text=False)
-    base = Path(args.audio).with_suffix("")
-    txt = open(str(base) + ".full_transcript.txt", "w", encoding="utf-8")
-    jsonl = open(str(base) + ".full_transcript.jsonl", "w", encoding="utf-8")
-    n = 0
-    for s in segments:
-        t = s.text.strip()
-        if not t:
-            continue
-        txt.write("[%s] %s\n" % (fmt(s.start), t))
-        jsonl.write(json.dumps({"start": round(s.start, 2), "end": round(s.end, 2), "text": t}, ensure_ascii=False) + "\n")
-        n += 1
-        if n % 50 == 0:
-            print("  %d segments (at %s)..." % (n, fmt(s.start)), flush=True)
-    txt.close(); jsonl.close()
-    print("DONE: %d segments -> %s.full_transcript.{txt,jsonl}" % (n, base), flush=True)
+    src = Path(args.audio).expanduser()
+    if not src.is_file():
+        print("ERROR: file not found: %s" % src, file=sys.stderr)
+        return 2
+
+    tmp = None
+    import_path = src
+    if src.suffix == ".s16le":
+        # Daemon imports demuxable media; wrap the raw PCM into a WAV first.
+        tmp = Path(tempfile.mkdtemp(prefix="transcribe_")) / (src.stem + ".wav")
+        print("wrapping raw PCM -> %s ..." % tmp, flush=True)
+        wrap_pcm_as_wav(src, tmp)
+        import_path = tmp
+
+    body = {"path": str(import_path), "asr_backend": args.asr_backend}
+    if args.out_dir:
+        body["output_dir"] = str(Path(args.out_dir).expanduser())
+
+    print("importing via daemon (extract audio + ASR)...", flush=True)
+    try:
+        summary = daemon.post("/v1/sessions/import", body, timeout=3600)
+    except Exception as e:
+        print("ERROR: import failed: %r" % e, file=sys.stderr)
+        return 1
+    finally:
+        if tmp is not None:
+            try:
+                tmp.unlink()
+                tmp.parent.rmdir()
+            except Exception:
+                pass
+
+    sid = summary.get("session_id", "?")
+    segs = summary.get("transcript_segments")
+    sdir = summary.get("dir", "?")
+    print("DONE: session %s (segments=%s) -> %s" % (sid, segs, sdir), flush=True)
     return 0
 
 
