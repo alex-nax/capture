@@ -27,11 +27,26 @@ runtimes first (owner: CPU + CUDA packs; runtimes before the capture backend). T
   device:cpu, error:null`. Clean `/v1/admin/shutdown`.
 - Specs: `asr-runtimes.md` gained a **"Windows packs (v3)"** section + corrected the (now Rust) pack-build
   tooling note. features.json #81 + #58 carry the Windows-CPU progress.
-- **Next**: (1) **whisper-cuda** pack — install the CUDA toolkit, add a `cuda` cargo feature to
-  `capture-asr-whisper` + a `whisper-cuda` registry entry (Windows), and **archive-extract** install
-  support in `run_pack_install` (the CUDA pack is a `.tar.gz` with the cuBLAS/cudart DLLs). (2) Publish the
-  packs as `pack-whisper-{cpu,cuda}-v…` GitHub releases (owner-gated — outward-facing). (3) Then the **#66
-  `crates/platform` Windows backend** (Graphics.Capture + WASAPI loopback) to replace the stubs.
+
+### whisper-cuda pack (same session)
+- Installed the **CUDA 13.3** toolkit (winget). Note CUDA 13's runtime DLLs moved to `bin\x64` (not `bin`)
+  — `win-build-env.ps1` + the pack builder handle both. whisper.cpp (whisper-rs 0.16) compiles cleanly
+  against CUDA 13.3.
+- Code: a **`cuda` cargo feature** on `capture-asr-whisper` (`whisper-rs/cuda`); a **`whisper-cuda`**
+  registry entry on Windows (NVIDIA-first); **archive (`.tar.gz`) pack install** in the daemon
+  (`crates/daemon`: `flate2`+`tar`) — download → `.incoming` staging → **promote with the engine dylib
+  moved last** (so `installed` only flips when complete; interruption leaves the live dir untouched); and a
+  Windows **DLL-search fix** in `capture-asr`'s `DynamicEngine` (`LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR`) so the
+  pack's sibling cuBLAS/cudart DLLs resolve. +3 daemon unit tests (archive classify + single-file + archive
+  promote/cleanup); all daemon tests green.
+- **GPU-VERIFIED end-to-end**: `capture_asr_whisper.dll` (CUDA, 27 MB) + the pack (391 MB `.tar.gz` =
+  cdylib + cublas64/cublasLt64/cudart64) → daemon install from a local source (staging-promote confirmed:
+  engine never appeared before its siblings) → transcribe from the installed location on the **RTX 4070 Ti
+  SUPER** (`use gpu=1`, `using CUDA0 backend`, **~205× realtime** vs ~75× CPU).
+- **Next**: (1) Publish the packs as `pack-whisper-{cpu,cuda}-v…` GitHub releases (owner-gated —
+  outward-facing; the daemon's `resolve_pack_url` then finds them with no code change). (2) The **#66
+  `crates/platform` Windows backend** (Graphics.Capture + WASAPI loopback) to replace the stubs. (3)
+  `#85` updater hardening so pack releases don't confuse the app's `/releases/latest` check.
 
 ---
 

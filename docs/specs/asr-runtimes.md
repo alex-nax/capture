@@ -49,8 +49,18 @@ already matches `windows`/`x86_64`/`.dll`/`.tar.gz` assets, no daemon change nee
   CUDA backend links those dynamically. Prints the `gh release create pack-<id>-vX.Y.Z` command.
 - **Engine build (`crates/asr-whisper`):** default features = CPU whisper.cpp. A `cuda` cargo feature
   enables `whisper-rs/cuda` for the CUDA pack (needs the CUDA toolkit / `nvcc`).
-- **Archive packs:** a `.tar.gz`/`.zip` pack (CUDA, multi-DLL) is extracted into `~/.capture/runtimes/<id>/`
-  by the install route (single-`.dll` packs are copied as-is).
+- **Archive packs:** a `.tar.gz` pack (CUDA, multi-DLL) is downloaded + extracted into a `.incoming`
+  staging dir, then **promoted** into `~/.capture/runtimes/<id>/` with the engine dylib moved **last** —
+  so `installed` (which keys off the engine dylib) only flips true once every sibling DLL is in place,
+  and an interrupted install leaves the live pack dir untouched (no "installed-but-broken" state).
+  Single-`.dll` packs (CPU/Metal) stream straight to the engine path.
+
+**VERIFIED on the Windows box (2026-06-20):** `whisper-cpu` (single `.dll`) and `whisper-cuda` (391 MB
+`.tar.gz` = cdylib + cuBLAS/cudart) both build, install through `POST /v1/asr/runtimes/install` from a
+local source, and transcribe a real clip — CPU at ~75× realtime, **CUDA on the RTX 4070 Ti SUPER at ~205×
+realtime** (`use gpu = 1`, `using CUDA0 backend`). The CUDA engine's sibling DLLs resolve via the Windows
+`LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` load flag (`capture-asr`'s `DynamicEngine`). Built with CUDA 13.3 +
+whisper.cpp (whisper-rs 0.16).
 
 **Remaining for #81:** the owner **publishes the packs** (`pack-whisper-metal-v…`, `pack-whisper-cpu-v…`,
 `pack-whisper-cuda-v…`) to GitHub, then flips `CAPTURE_BUNDLE_ENGINE=0`; then the **onboarding CTA (#83)**

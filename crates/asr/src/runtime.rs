@@ -52,8 +52,9 @@ struct RuntimeDef {
     engine_stem: Option<&'static str>,
 }
 
-/// The platform runtime registry. macOS gets `whisper-metal`; other targets `whisper-cpu`; `remote`
-/// everywhere. (Future: `mlx` on macOS, `whisper-cuda` on Windows — new entries, no mechanism change.)
+/// The platform runtime registry. macOS gets `whisper-metal`; Windows gets `whisper-cuda` (NVIDIA) +
+/// `whisper-cpu`; other targets `whisper-cpu`; `remote` everywhere. (Future: `mlx` on macOS, AMD/Intel
+/// via whisper.cpp-Vulkan / ONNX-DirectML — new entries, no mechanism change.)
 fn registry() -> Vec<RuntimeDef> {
     let mut v = Vec::new();
     if cfg!(target_os = "macos") {
@@ -67,6 +68,20 @@ fn registry() -> Vec<RuntimeDef> {
             engine_stem: Some("whisper"),
         });
     } else {
+        // Windows lists the NVIDIA/CUDA runtime first (preferred on a GPU box; the GUI shows the
+        // detected-NVIDIA hint). Both whisper runtimes share the `whisper` engine stem but install into
+        // their own pack dir (`runtimes/<id>/`), so the CPU and CUDA DLLs never collide.
+        if cfg!(target_os = "windows") {
+            v.push(RuntimeDef {
+                id: "whisper-cuda",
+                label: "Whisper (NVIDIA CUDA GPU)",
+                kind: "local",
+                engine: "whisper.cpp",
+                device: Some("cuda"),
+                requires: "NVIDIA GPU + driver — runs on the GPU. Downloads the CUDA build (larger).",
+                engine_stem: Some("whisper"),
+            });
+        }
         v.push(RuntimeDef {
             id: "whisper-cpu",
             label: "Whisper (CPU)",

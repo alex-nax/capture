@@ -60,13 +60,18 @@ function Build-CudaPack {
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
     Copy-Item $dll $stage -Force
 
-    # Bundle the CUDA runtime DLLs whisper.cpp's cuBLAS backend needs at load time.
-    $cudaBin = Join-Path $env:CUDA_PATH 'bin'
+    # Bundle the CUDA runtime DLLs whisper.cpp's cuBLAS backend needs at load time. CUDA 13 keeps them in
+    # bin\x64; CUDA <=12 in bin\. Copy whichever exists.
+    $cudaDirs = @((Join-Path $env:CUDA_PATH 'bin\x64'), (Join-Path $env:CUDA_PATH 'bin'))
     foreach ($pat in 'cudart64_*.dll', 'cublas64_*.dll', 'cublasLt64_*.dll') {
-        Get-ChildItem (Join-Path $cudaBin $pat) -ErrorAction SilentlyContinue | ForEach-Object {
-            Copy-Item $_.FullName $stage -Force
+        foreach ($cudaBin in $cudaDirs) {
+            Get-ChildItem (Join-Path $cudaBin $pat) -ErrorAction SilentlyContinue | ForEach-Object {
+                Copy-Item $_.FullName $stage -Force
+            }
         }
     }
+    $bundled = (Get-ChildItem $stage -Filter '*.dll').Name -join ', '
+    Write-Host "    bundled DLLs: $bundled"
     $asset = Join-Path $outDir "whisper-cuda-windows-$arch.tar.gz"
     tar -czf $asset -C $stage .
     Write-Host ("==> Done: {0} ({1:N1} MB)" -f $asset, ((Get-Item $asset).Length / 1MB))

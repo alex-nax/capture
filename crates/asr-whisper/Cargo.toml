@@ -15,6 +15,12 @@ crate-type = ["cdylib", "rlib"]
 capture-asr = { path = "../asr" } # the Segment type + resampler (shared serde shape across the ABI)
 serde_json = "1"
 
+[features]
+# The CUDA (NVIDIA) build of the whisper.cpp engine — used for the `whisper-cuda` Windows runtime pack
+# (`build_runtime_packs.ps1 -Id whisper-cuda`). Off by default; the default build is CPU (Win/Linux) or
+# Metal (macOS, below). Needs the CUDA toolkit (nvcc) at build time.
+cuda = ["whisper-rs/cuda"]
+
 [target.'cfg(target_os = "macos")'.dependencies.whisper-rs]
 version = "0.16"
 features = ["metal"]

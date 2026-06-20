@@ -29,6 +29,9 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 # OS randomness for the bearer token (24 bytes → hex).
 getrandom = "0.2"
+# Extract `.tar.gz` runtime packs (the whisper-cuda pack ships the engine cdylib + the cuBLAS/cudart DLLs).
+flate2 = "1"
+tar = "0.4"
 
 [dev-dependencies]
 # `oneshot` drives the router hermetically in tests (no bound port).

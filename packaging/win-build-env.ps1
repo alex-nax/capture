@@ -37,4 +37,17 @@ if ($ninja) {
     Write-Warning "ninja.exe not found - install Ninja-build.Ninja via winget."
 }
 
-Write-Host "win-build-env ready: cl=$((Get-Command cl.exe).Source); libclang=$env:LIBCLANG_PATH; generator=$env:CMAKE_GENERATOR"
+# --- CUDA toolkit (only needed for the whisper-cuda pack; optional otherwise) ---
+$cudaRoot = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA'
+if (Test-Path $cudaRoot) {
+    $cuda = Get-ChildItem $cudaRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+    if ($cuda) {
+        $env:CUDA_PATH = $cuda.FullName
+        # nvcc lives in bin\; the runtime DLLs (cublas/cudart) in bin\x64 on CUDA 13, bin\ on <=12.
+        foreach ($d in (Join-Path $cuda.FullName 'bin'), (Join-Path $cuda.FullName 'bin\x64')) {
+            if ((Test-Path $d) -and (($env:PATH -split ';') -notcontains $d)) { $env:PATH = "$d;$env:PATH" }
+        }
+    }
+}
+
+Write-Host "win-build-env ready: cl=$((Get-Command cl.exe).Source); libclang=$env:LIBCLANG_PATH; generator=$env:CMAKE_GENERATOR; cuda=$env:CUDA_PATH"
