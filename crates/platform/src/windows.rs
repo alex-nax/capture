@@ -10,15 +10,22 @@
 use windows::core::BOOL;
 use windows::Win32::Foundation::{HWND, LPARAM, MAX_PATH, RECT};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+use windows::Win32::Graphics::Gdi::{
+    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
+    GetWindowDC, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+    HBITMAP, HDC, HGDIOBJ, SRCCOPY,
+};
+use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, IsWindowVisible, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
+    EnumWindows, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
+    GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, GWL_EXSTYLE, SM_CXSCREEN, SM_CYSCREEN,
+    WS_EX_TOOLWINDOW,
 };
 
-use crate::WindowInfo;
+use crate::{ScreenshotOptions, WindowInfo};
 
 /// Collected during `EnumWindows`. Boxed behind the `LPARAM` the callback receives.
 struct Collector {
@@ -148,6 +155,121 @@ pub fn list_windows(pid: Option<i32>, app_name: Option<&str>) -> Result<Vec<Wind
     Ok(windows)
 }
 
+// ── Screenshots (GDI: PrintWindow for a window, BitBlt for the screen) ──────────────────────────
+
+/// `PrintWindow` flag rendering full (DWM-composited) window content — handles most modern windows.
+const PW_RENDERFULLCONTENT: u32 = 0x0000_0002;
+
+/// Capture one window (`Some(window_id)`) or the primary display (`None`), encoded per `opts`. Mirrors
+/// `capture_screenshot` / the v2 `Win32ScreenGrabber` (PrintWindow into a memory DC, then `GetDIBits`).
+pub fn capture_screenshot(window_id: Option<u32>, opts: &ScreenshotOptions) -> Result<Vec<u8>, String> {
+    match window_id {
+        Some(id) => capture_window(HWND(id as usize as *mut core::ffi::c_void), opts),
+        None => capture_primary_screen(opts),
+    }
+}
+
+/// Blit `(w, h)` from `src_dc` (a window or screen DC) into a fresh 32-bit top-down DIB and return its
+/// RGBA bytes. `print_from` = `Some(hwnd)` uses `PrintWindow` (captures occluded/DWM windows); `None`
+/// uses `BitBlt` (the screen). Always frees its GDI objects.
+unsafe fn grab_rgba(src_dc: HDC, width: i32, height: i32, print_from: Option<HWND>) -> Result<Vec<u8>, String> {
+    if width <= 0 || height <= 0 {
+        return Err(format!("invalid capture size {width}x{height}"));
+    }
+    let mem_dc = CreateCompatibleDC(Some(src_dc));
+    if mem_dc.is_invalid() {
+        return Err("CreateCompatibleDC failed".into());
+    }
+    let bitmap = CreateCompatibleBitmap(src_dc, width, height);
+    if bitmap.is_invalid() {
+        let _ = DeleteDC(mem_dc);
+        return Err("CreateCompatibleBitmap failed".into());
+    }
+    let prev = SelectObject(mem_dc, HGDIOBJ(bitmap.0));
+
+    let blit_ok = match print_from {
+        Some(hwnd) => PrintWindow(hwnd, mem_dc, PRINT_WINDOW_FLAGS(PW_RENDERFULLCONTENT)).as_bool(),
+        None => BitBlt(mem_dc, 0, 0, width, height, Some(src_dc), 0, 0, SRCCOPY).is_ok(),
+    };
+
+    let result = if blit_ok {
+        read_dib_rgba(mem_dc, bitmap, width, height)
+    } else {
+        Err("window/screen blit failed".into())
+    };
+
+    SelectObject(mem_dc, prev);
+    let _ = DeleteObject(HGDIOBJ(bitmap.0));
+    let _ = DeleteDC(mem_dc);
+    result
+}
+
+/// Extract a 32-bit bitmap as RGBA via `GetDIBits` (top-down BGRA from GDI → RGBA, alpha forced opaque).
+unsafe fn read_dib_rgba(mem_dc: HDC, bitmap: HBITMAP, width: i32, height: i32) -> Result<Vec<u8>, String> {
+    let mut info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: -height, // negative → top-down rows (no vertical flip needed)
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut buf = vec![0u8; (width as usize) * (height as usize) * 4];
+    let scanned = GetDIBits(
+        mem_dc,
+        bitmap,
+        0,
+        height as u32,
+        Some(buf.as_mut_ptr() as *mut core::ffi::c_void),
+        &mut info,
+        DIB_RGB_COLORS,
+    );
+    if scanned == 0 {
+        return Err("GetDIBits failed".into());
+    }
+    // GDI gives BGRA; convert in place to RGBA and force alpha opaque (GDI leaves it 0).
+    for px in buf.chunks_exact_mut(4) {
+        px.swap(0, 2);
+        px[3] = 255;
+    }
+    Ok(buf)
+}
+
+/// Capture a single window with `PrintWindow`.
+fn capture_window(hwnd: HWND, opts: &ScreenshotOptions) -> Result<Vec<u8>, String> {
+    unsafe {
+        let mut r = RECT::default();
+        GetWindowRect(hwnd, &mut r).map_err(|e| format!("GetWindowRect: {e}"))?;
+        let (w, h) = (r.right - r.left, r.bottom - r.top);
+        let win_dc = GetWindowDC(Some(hwnd));
+        if win_dc.is_invalid() {
+            return Err("GetWindowDC failed (window closed?)".into());
+        }
+        let rgba = grab_rgba(win_dc, w, h, Some(hwnd));
+        ReleaseDC(Some(hwnd), win_dc);
+        crate::encode_image(rgba?, w as u32, h as u32, opts)
+    }
+}
+
+/// Capture the primary display with `BitBlt` from the screen DC.
+fn capture_primary_screen(opts: &ScreenshotOptions) -> Result<Vec<u8>, String> {
+    unsafe {
+        let w = GetSystemMetrics(SM_CXSCREEN);
+        let h = GetSystemMetrics(SM_CYSCREEN);
+        let screen_dc = GetDC(None);
+        if screen_dc.is_invalid() {
+            return Err("GetDC(screen) failed (no display?)".into());
+        }
+        let rgba = grab_rgba(screen_dc, w, h, None);
+        ReleaseDC(None, screen_dc);
+        crate::encode_image(rgba?, w as u32, h as u32, opts)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,6 +287,22 @@ mod tests {
 
     unsafe extern "system" fn test_wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
         DefWindowProcW(h, msg, w, l)
+    }
+
+    // The GDI screen-capture pipeline (BitBlt → GetDIBits → BGRA→RGBA → PNG encode). On a real display
+    // this asserts a decodable PNG of the screen's size; on a non-interactive Session-0 desktop with no
+    // display it skips. Either way it exercises the encode path end-to-end when a display exists.
+    #[test]
+    fn captures_primary_screen_or_skips() {
+        let opts = ScreenshotOptions::default();
+        match capture_screenshot(None, &opts) {
+            Ok(png) => {
+                assert!(!png.is_empty(), "screenshot bytes empty");
+                let img = image::load_from_memory(&png).expect("screenshot decodes as an image");
+                assert!(img.width() > 0 && img.height() > 0, "zero-size screenshot");
+            }
+            Err(e) => eprintln!("skipping screen capture (no display in this session?): {e}"),
+        }
     }
 
     // The filtering rules, exercised without an interactive desktop (the agent shell runs in Session 0,

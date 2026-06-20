@@ -160,7 +160,11 @@ pub fn capture_screenshot(window_id: Option<u32>, opts: &ScreenshotOptions) -> R
     {
         macos::capture_screenshot(window_id, opts)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        windows::capture_screenshot(window_id, opts)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (window_id, opts);
         Err("screenshots are not supported on this platform yet".to_string())
