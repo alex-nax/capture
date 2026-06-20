@@ -1,57 +1,87 @@
-<#
-.SYNOPSIS
-  Build the ASR **runtime packs** for the lean Windows daemon (feature #58). Each pack is the engine's
-  wheels installed for the frozen daemon's Python tag, zipped — published as GitHub release assets that
-  the daemon downloads on demand (it can't pip-install into a frozen bundle). See
-  docs/specs/asr-runtimes.md.
+# build_runtime_packs.ps1 - build Windows ASR runtime PACKS (#81) for capture v3.
+#
+# A "pack" is the dlopen'd whisper.cpp engine cdylib (capture_asr_whisper.dll), named as the
+# GitHub-release asset the daemon downloads. The app ships engine-less; POST /v1/asr/runtimes/install
+# fetches the newest `pack-<id>-v<semver>` release's asset matching this OS/arch into
+# ~\.capture\runtimes\<id>\ (the Windows sibling of scripts/build_asr_pack.sh on macOS).
+#
+#   .\packaging\build_runtime_packs.ps1                 # default: whisper-cpu
+#   .\packaging\build_runtime_packs.ps1 -Id whisper-cuda
+#   .\packaging\build_runtime_packs.ps1 -Id all
+#
+# Output:
+#   whisper-cpu  -> dist\packs\whisper-cpu-windows-x86_64.dll           (single cdylib; CUDA-free)
+#   whisper-cuda -> dist\packs\whisper-cuda-windows-x86_64.tar.gz       (cdylib + CUDA runtime DLLs)
+#
+# Prereqs: packaging\win-build-env.ps1 (MSVC + libclang + ninja). whisper-cuda also needs the CUDA
+# toolkit (nvcc) installed and the `cuda` feature on capture-asr-whisper.
+param(
+    [ValidateSet('whisper-cpu', 'whisper-cuda', 'all')]
+    [string]$Id = 'whisper-cpu'
+)
+$ErrorActionPreference = 'Stop'
+$root = Split-Path $PSScriptRoot -Parent
+. (Join-Path $PSScriptRoot 'win-build-env.ps1') | Out-Null
 
-.DESCRIPTION
-  For each LOCAL runtime in core/asr/runtimes.REGISTRY, runs `pip install --target` of its `pip` list
-  (using the venv's Python, whose tag matches the PyInstaller freeze), then zips it to
-  dist/runtime-<id>-<pytag>.zip. Host these as release assets under CAPTURE_ASR_PACK_BASE; the daemon's
-  POST /v1/asr/runtimes/install downloads + extracts them.
+$arch = 'x86_64'   # this workspace targets x86_64-pc-windows-msvc
+$outDir = Join-Path $root 'dist\packs'
+New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
-  Output: dist/packs/<id>/ (staging) + dist/runtime-<id>-<pytag>.zip
-
-  Env knobs:
-    CAPTURE_PACK_IDS   comma list to limit which runtimes to build (default: all local ones)
-#>
-[CmdletBinding()]
-param()
-$ErrorActionPreference = "Continue"   # pip logs to stderr; check $LASTEXITCODE explicitly
-
-$ROOT = (Resolve-Path "$PSScriptRoot\..").Path
-$VENVPY = Join-Path $ROOT ".venv\Scripts\python.exe"
-$DIST = Join-Path $ROOT "dist"
-if (-not (Test-Path $VENVPY)) { throw "missing venv python: $VENVPY (run init.ps1)" }
-
-$pytag = & $VENVPY -c "import sysconfig; v=sysconfig.get_python_version().replace('.',''); print(f'cp{v}-win_amd64')"
-$pytag = $pytag.Trim()
-Write-Output "==> Building ASR runtime packs for $pytag"
-
-# Single source of truth: the registry's local runtimes + their pip lists.
-$json = & $VENVPY -c "from capture_mcp.core.asr import runtimes as r; import json; print(json.dumps([{'id':x['id'],'pip':x['pip']} for x in r.REGISTRY if x['kind']=='local']))"
-$runtimes = $json | ConvertFrom-Json
-
-$only = if ($env:CAPTURE_PACK_IDS) { $env:CAPTURE_PACK_IDS.Split(",") | ForEach-Object { $_.Trim() } } else { $null }
-
-foreach ($rt in $runtimes) {
-    if ($only -and ($rt.id -notin $only)) { continue }
-    if (-not $rt.pip -or $rt.pip.Count -eq 0) { Write-Output "   skip $($rt.id) (no pip)"; continue }
-    $target = Join-Path $DIST "packs\$($rt.id)"
-    $zip = Join-Path $DIST "runtime-$($rt.id)-$pytag.zip"
-    Write-Output "==> Pack '$($rt.id)': pip install --target  [$($rt.pip -join ', ')]"
-    if (Test-Path $target) { Remove-Item -Recurse -Force $target }
-    New-Item -ItemType Directory -Force -Path $target | Out-Null
-    & $VENVPY -m pip install --disable-pip-version-check --target $target @($rt.pip)
-    if ($LASTEXITCODE -ne 0) { throw "pip install failed for runtime $($rt.id)" }
-    # strip caches to shrink the pack
-    Get-ChildItem -Recurse $target -Include "__pycache__" -Directory -ErrorAction SilentlyContinue |
-        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-    if (Test-Path $zip) { Remove-Item -Force $zip }
-    Write-Output "   zipping -> $zip"
-    Compress-Archive -Path (Join-Path $target "*") -DestinationPath $zip -CompressionLevel Optimal
-    $mb = "{0:N0} MB" -f ((Get-Item $zip).Length / 1MB)
-    Write-Output "   done: $zip ($mb)"
+function Build-CpuPack {
+    Write-Host "==> Building whisper-cpu (release; whisper.cpp links in statically, CUDA-free)..."
+    Push-Location $root
+    cargo build --release -p capture-asr-whisper
+    if ($LASTEXITCODE -ne 0) { Pop-Location; throw "cargo build (cpu) failed" }
+    Pop-Location
+    $dll = Join-Path $root 'target\release\capture_asr_whisper.dll'
+    if (-not (Test-Path $dll)) { throw "build ok but $dll missing" }
+    $asset = Join-Path $outDir "whisper-cpu-windows-$arch.dll"
+    Copy-Item $dll $asset -Force
+    Write-Host ("==> Done: {0} ({1:N1} MB)" -f $asset, ((Get-Item $asset).Length / 1MB))
+    return $asset
 }
-Write-Output "==> Runtime packs built in $DIST. Publish runtime-*-$pytag.zip as release assets; set CAPTURE_ASR_PACK_BASE to their base URL."
+
+function Build-CudaPack {
+    # The CUDA engine links cuBLAS/cudart dynamically, so the pack is an ARCHIVE: the cdylib plus the
+    # CUDA runtime DLLs the daemon's installer extracts into the runtime dir.
+    if (-not (Get-Command nvcc -ErrorAction SilentlyContinue)) {
+        throw "whisper-cuda needs the CUDA toolkit (nvcc) on PATH - install it, then re-run."
+    }
+    Write-Host "==> Building whisper-cuda (release; --features cuda)..."
+    Push-Location $root
+    cargo build --release -p capture-asr-whisper --features cuda
+    if ($LASTEXITCODE -ne 0) { Pop-Location; throw "cargo build (cuda) failed" }
+    Pop-Location
+    $dll = Join-Path $root 'target\release\capture_asr_whisper.dll'
+    if (-not (Test-Path $dll)) { throw "build ok but $dll missing" }
+
+    $stage = Join-Path $outDir "whisper-cuda-windows-$arch"
+    Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $stage | Out-Null
+    Copy-Item $dll $stage -Force
+
+    # Bundle the CUDA runtime DLLs whisper.cpp's cuBLAS backend needs at load time.
+    $cudaBin = Join-Path $env:CUDA_PATH 'bin'
+    foreach ($pat in 'cudart64_*.dll', 'cublas64_*.dll', 'cublasLt64_*.dll') {
+        Get-ChildItem (Join-Path $cudaBin $pat) -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item $_.FullName $stage -Force
+        }
+    }
+    $asset = Join-Path $outDir "whisper-cuda-windows-$arch.tar.gz"
+    tar -czf $asset -C $stage .
+    Write-Host ("==> Done: {0} ({1:N1} MB)" -f $asset, ((Get-Item $asset).Length / 1MB))
+    return $asset
+}
+
+$assets = @()
+if ($Id -in 'whisper-cpu', 'all') { $assets += Build-CpuPack }
+if ($Id -in 'whisper-cuda', 'all') { $assets += Build-CudaPack }
+
+Write-Host ""
+Write-Host "Publish each as a runtime-pack release (its own version line, auto-updated by the daemon):"
+foreach ($a in $assets) {
+    $name = Split-Path $a -Leaf
+    $packId = if ($name -like 'whisper-cuda*') { 'whisper-cuda' } else { 'whisper-cpu' }
+    Write-Host "  gh release create pack-$packId-vX.Y.Z `"$a`" --repo alex-nax/capture --prerelease ``"
+    Write-Host "    --title `"ASR pack: $packId X.Y.Z`" --notes `"whisper.cpp engine for windows-$arch`""
+}

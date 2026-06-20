@@ -1,5 +1,40 @@
 # Progress Log
 
+## Session 67 — 2026-06-20
+**Agent**: builder (**Windows box**, branch **v3-windows** off **v3**) — closing the v3 **Windows** gaps,
+runtimes first (owner: CPU + CUDA packs; runtimes before the capture backend). This slice = the
+**whisper-cpu runtime pack** building + verified end-to-end on Windows.
+- **Toolchain bring-up** (the v3 Rust workspace had never been built on Windows). Installed the missing
+  native build deps via winget: **LLVM** (`libclang.dll` for `whisper-rs-sys` bindgen) + **Ninja** (VS
+  2026 is **v18** and the bundled cmake 3.31 has no "Visual Studio 18 2026" generator, so whisper.cpp
+  builds with `CMAKE_GENERATOR=Ninja`). MSVC = VS Community 2026. Captured all of this in a reusable
+  **`packaging/win-build-env.ps1`** (dot-source before `cargo build`).
+- **Whole non-macOS workspace builds release-clean** on Windows (`captured`, `capture-mcp`,
+  `capture-asr-whisper`, core/index/asr + the `capture-platform` **stubs**) — confirms the cfg-gated
+  Windows-side compiles (the #66 platform backend is still stubs returning "not supported yet").
+- **whisper-cpu engine cdylib builds** → `capture_asr_whisper.dll` (1.3 MB release). Proven with the
+  `capture-asr --example transcribe` runner: dlopen'd the dll, loaded `ggml-tiny.en`, transcribed a real
+  19.6 s clip in **0.26 s (74.6× realtime)**.
+- **Pack-build tooling** = **`packaging/build_runtime_packs.ps1`** (rewrote the dead v2 pip-zip script for
+  the v3 Rust cdylib model): `-Id whisper-cpu|whisper-cuda|all` → `dist\packs\whisper-cpu-windows-x86_64.dll`
+  (CPU) / `…-cuda-…tar.gz` (CUDA, cdylib + cuBLAS/cudart DLLs). The Windows sibling of
+  `scripts/build_asr_pack.sh`.
+- **VERIFIED the #81 pack contract end-to-end via the real daemon** (isolated temp dirs so the empty
+  `CAPTURE_ASR_ENGINE_DIR` forces the pack path, not the legacy bundled-engine fallback): engine-less
+  daemon → `whisper-cpu installed:false` → `POST /v1/asr/runtimes/install {id:whisper-cpu, source:<local
+  .dll>}` → copies to `~/.capture/runtimes/whisper-cpu/capture_asr_whisper.dll`, `installed:true,
+  active:true` → set model `tiny.en` → `GET /v1/asr/backend` `available:true, engine:whisper.cpp,
+  device:cpu, error:null`. Clean `/v1/admin/shutdown`.
+- Specs: `asr-runtimes.md` gained a **"Windows packs (v3)"** section + corrected the (now Rust) pack-build
+  tooling note. features.json #81 + #58 carry the Windows-CPU progress.
+- **Next**: (1) **whisper-cuda** pack — install the CUDA toolkit, add a `cuda` cargo feature to
+  `capture-asr-whisper` + a `whisper-cuda` registry entry (Windows), and **archive-extract** install
+  support in `run_pack_install` (the CUDA pack is a `.tar.gz` with the cuBLAS/cudart DLLs). (2) Publish the
+  packs as `pack-whisper-{cpu,cuda}-v…` GitHub releases (owner-gated — outward-facing). (3) Then the **#66
+  `crates/platform` Windows backend** (Graphics.Capture + WASAPI loopback) to replace the stubs.
+
+---
+
 ## Session 66 — 2026-06-17
 **Agent**: builder (**Windows box**, branch **windows-support**) — **cross-platform in-app auto-update**
 (Phase 5 updater) + push, ahead of cutting a release.
