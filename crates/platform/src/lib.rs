@@ -14,6 +14,8 @@ use serde::Serialize;
 mod macos;
 #[cfg(target_os = "macos")]
 mod import;
+#[cfg(target_os = "windows")]
+mod windows;
 
 /// One on-screen top-level window, in the `/v1/windows` wire shape (mirrors `core.list_windows`).
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -227,7 +229,11 @@ pub fn list_windows(pid: Option<i32>, app_name: Option<&str>) -> Result<Vec<Wind
     {
         macos::list_windows(pid, app_name)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        windows::list_windows(pid, app_name)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (pid, app_name);
         Ok(Vec::new())

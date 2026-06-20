@@ -43,10 +43,30 @@ runtimes first (owner: CPU + CUDA packs; runtimes before the capture backend). T
   cdylib + cublas64/cublasLt64/cudart64) → daemon install from a local source (staging-promote confirmed:
   engine never appeared before its siblings) → transcribe from the installed location on the **RTX 4070 Ti
   SUPER** (`use gpu=1`, `using CUDA0 backend`, **~205× realtime** vs ~75× CPU).
-- **Next**: (1) Publish the packs as `pack-whisper-{cpu,cuda}-v…` GitHub releases (owner-gated —
-  outward-facing; the daemon's `resolve_pack_url` then finds them with no code change). (2) The **#66
-  `crates/platform` Windows backend** (Graphics.Capture + WASAPI loopback) to replace the stubs. (3)
-  `#85` updater hardening so pack releases don't confuse the app's `/releases/latest` check.
+- **Published both packs as GitHub PRE-releases** (owner: prerelease until the updater is hardened, #85 —
+  prereleases are excluded from `/releases/latest` so they won't hijack the app updater):
+  `pack-whisper-cpu-v0.1.0` (.dll) + `pack-whisper-cuda-v0.1.0` (391 MB .tar.gz). VERIFIED the daemon
+  installs `whisper-cpu` straight from the GitHub prerelease (`resolve_pack_url` → download in ~1 s,
+  `.version` sidecar = 0.1.0). **Runtimes phase complete.**
+
+### #66 Windows capture backend — slice A: window enumeration (same session)
+- `crates/platform` now builds **windows-rs 0.61** in the workspace. New `crates/platform/src/windows.rs`:
+  `list_windows` via `EnumWindows` (visible / non-tool-window / non-DWM-cloaked / titled / non-zero-size
+  filter; pid + app-name-from-`QueryFullProcessImageNameW` + title + size; largest-first) — a faithful
+  port of the v2 `Win32WindowFinder`. Wired into `lib.rs` behind `cfg(target_os="windows")`; the other
+  backends (screenshots/audio/devices) still fall back to the shared stubs.
+- Tests: the filter logic is extracted to a pure `should_include(...)` + unit-tested env-independently; a
+  created-window integration test exercises the full `EnumWindows`→filter→map path but **skips on a
+  non-interactive desktop**. All 7 platform tests green. Manual runner: `cargo run -p capture-platform
+  --example windows_list`.
+- **Environment caveat (important):** the dev/agent shell runs in **Windows Session 0** (a service
+  session with no interactive desktop) — `EnumWindows` returns 0 there and even a window we create reports
+  `IsWindowVisible=false`. So window listing, screenshots, and per-app audio **cannot be observed
+  headless from the agent shell**; they must be verified by running the app interactively (or via the
+  daemon in the user's session). The logic is unit-tested + ported from production-proven v2 code.
+- **Next**: [B] GDI `BitBlt`/`PrintWindow` screenshots → shared `encode_image`; [C] WASAPI per-process
+  loopback (fold in `helper/audiocap_win_rs`) + mic + device list; [D] wire into the capture session loop;
+  then `#85` updater hardening + the single-`.exe`/WiX installer.
 
 ---
 
