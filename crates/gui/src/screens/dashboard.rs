@@ -301,6 +301,9 @@ impl CaptureApp {
 
                 // The status line: a leading dot (live) / refresh glyph (indexing) + text, per state.
                 let status = if running {
+                    // A live capture may ALSO be indexing live (#84) — surface it so the user sees it
+                    // working, instead of the "live" state masking the auto-index entirely.
+                    let live_indexing = indexing.as_ref().map(|(p, _)| p == "live").unwrap_or(false);
                     div()
                         .flex()
                         .items_center()
@@ -309,10 +312,21 @@ impl CaptureApp {
                         .overflow_hidden()
                         .child(div().flex_none().size(px(6.0)).rounded_full().bg(rgb(theme::LIVE)))
                         .child(
-                            div().text_size(px(theme::TS_SMALL)).text_color(rgb(theme::LIVE)).child(
+                            div().flex_none().text_size(px(theme::TS_SMALL)).text_color(rgb(theme::LIVE)).child(
                                 format!("live · {}s · {} seg", s.screenshots, s.transcript_segments),
                             ),
                         )
+                        .when(live_indexing, |d| {
+                            d.child(
+                                div()
+                                    .flex()
+                                    .flex_none()
+                                    .items_center()
+                                    .gap(px(4.0))
+                                    .child(icon("list-tree", 11.0, theme::ACCENT_TEXT))
+                                    .child(div().text_size(px(theme::TS_SMALL)).text_color(rgb(theme::ACCENT_TEXT)).child("indexing")),
+                            )
+                        })
                 } else if let Some((phase, frac)) = &indexing {
                     // Live (auto) indexing is open-ended → "indexing…"; an on-demand build → "· NN%".
                     let label = if phase == "live" {

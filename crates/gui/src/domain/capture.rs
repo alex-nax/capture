@@ -126,9 +126,20 @@ impl CaptureApp {
             return;
         }
         let n = bodies.len();
+        // Live indexing (#84) keys off the daemon's `last_index`, set when GET /v1/index/status finds
+        // the endpoint reachable. The 8s status poll is racy right after a daemon (re)start, so probe
+        // it ourselves HERE, before starting, whenever an endpoint is configured — this guarantees
+        // `last_index` is fresh so the capture indexes live instead of silently skipping it.
+        let index_url = self.index_chat_url();
+        let index_model = self.index_model.clone();
         self.message = format!("starting {n} capture(s)…").into();
         cx.notify();
         cx.spawn(async move |this, cx| {
+            if !index_url.trim().is_empty() {
+                let d2 = d.clone();
+                let (u, m) = (index_url.clone(), index_model.clone());
+                let _ = cx.background_executor().spawn(async move { d2.index_status(&u, &m) }).await;
+            }
             let mut ok = 0usize;
             let mut last_id: Option<String> = None;
             let mut err: Option<String> = None;
