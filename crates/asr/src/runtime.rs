@@ -388,6 +388,13 @@ impl AsrRuntimeManager {
 }
 
 fn home() -> PathBuf {
+    // Windows: prefer %USERPROFILE% to match the GUI/agent's dirs::home_dir(). $HOME is unset when the
+    // app is launched outside a shell (Explorer/Start Menu/tray), and the old `.` fallback then wrote
+    // ~/.capture (models + runtime packs) into the cwd. See daemon::home for the full story.
+    #[cfg(windows)]
+    if let Some(p) = std::env::var_os("USERPROFILE") {
+        return PathBuf::from(p);
+    }
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
 }
 

@@ -20,6 +20,11 @@ pub(crate) fn rand_hex6() -> String {
 
 pub(crate) fn expand(p: &str) -> PathBuf {
     if let Some(rest) = p.strip_prefix("~/") {
+        // Windows: %USERPROFILE% (match dirs::home_dir()); $HOME is unset outside a shell.
+        #[cfg(windows)]
+        if let Some(home) = std::env::var_os("USERPROFILE") {
+            return PathBuf::from(home).join(rest);
+        }
         if let Some(home) = std::env::var_os("HOME") {
             return PathBuf::from(home).join(rest);
         }

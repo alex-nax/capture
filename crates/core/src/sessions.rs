@@ -54,8 +54,14 @@ pub fn sessions_index_path() -> PathBuf {
     }
 }
 
-/// `$HOME` (`Path::home()` equivalent). Falls back to `.` so callers never panic.
+/// The user's home dir (`Path.home()` equivalent). **Windows: `%USERPROFILE%`** to match the
+/// GUI/agent's `dirs::home_dir()` — `$HOME` is unset when launched outside a shell, and the old `.`
+/// fallback wrote `~/.capture` into the cwd. Falls back to `.` so callers never panic.
 fn home() -> PathBuf {
+    #[cfg(windows)]
+    if let Some(p) = std::env::var_os("USERPROFILE") {
+        return PathBuf::from(p);
+    }
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))

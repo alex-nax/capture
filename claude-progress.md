@@ -51,6 +51,22 @@ deserializes into `v1::AsrRuntimes` = 3 runtimes, and a faithful ureq repro retu
   lifecycle section; features.json #66). **Owner to reinstall + retest** (the audio-enum fix can only
   be confirmed with real devices present — the dev shell has none).
 
+### The real "GUI can't see the daemon" bug — HOME vs USERPROFILE (same session, 2026-06-22)
+After reinstalling the above, the owner reported the app/tray/GUI couldn't see the daemon at all — even a
+separately-run daemon. Root cause: a **home-dir resolution mismatch**. The daemon/core/asr/mcp/engine
+resolved `~/.capture` via `std::env::var_os("HOME")` with a `.`-cwd fallback, while the **GUI + tray
+agent use `dirs::home_dir()` == `%USERPROFILE%`** (which ignores `$HOME`). `$HOME` is set in a Git/dev
+shell — so **every headless test passed** — but is **unset when launched from Explorer/Start Menu/the
+tray**, so the daemon fell back to the cwd and wrote `daemon.json` **into the install dir** (proven:
+`...\Programs\Capture\.capture\daemon.json`) while the GUI/agent looked in `%USERPROFILE%\.capture` and
+never found it. Fixed all 7 resolvers to prefer `%USERPROFILE%` on Windows (daemon/lib.rs,
+core/sessions.rs, asr/config.rs, asr/runtime.rs, mcp/client.rs, engine/helpers.rs `expand`,
+daemon/routes/sessions.rs `expand_tilde`). **Verified headlessly**: with `HOME` removed from the env and
+a foreign cwd, the daemon writes `daemon.json` to `%USERPROFILE%\.capture` and serves discoverable
+`/v1/health`; no stray cwd `.capture`. Rebuilt the installer (8.6 MB). This was the actual blocker; the
+crash + tray-ownership fixes above stand. **Lesson:** never trust `$HOME` on Windows — it's a shell-ism;
+match `dirs::home_dir()`/`%USERPROFILE%`, and test from a non-shell launch.
+
 ## Session 67 — 2026-06-20
 **Agent**: builder (**Windows box**, branch **v3-windows** off **v3**) — closing the v3 **Windows** gaps,
 runtimes first (owner: CPU + CUDA packs; runtimes before the capture backend). This slice = the

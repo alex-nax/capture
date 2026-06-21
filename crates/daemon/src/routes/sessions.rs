@@ -219,6 +219,11 @@ fn maybe_start_live_index(state: &AppState, id: &str, summary: &Value) {
 /// Expand a leading `~/` to `$HOME` (the daemon validates the source path before importing).
 fn expand_tilde(p: &str) -> PathBuf {
     if let Some(rest) = p.strip_prefix("~/") {
+        // Windows: %USERPROFILE% (match dirs::home_dir()); $HOME is unset outside a shell.
+        #[cfg(windows)]
+        if let Some(home) = std::env::var_os("USERPROFILE") {
+            return PathBuf::from(home).join(rest);
+        }
         if let Some(home) = std::env::var_os("HOME") {
             return PathBuf::from(home).join(rest);
         }
