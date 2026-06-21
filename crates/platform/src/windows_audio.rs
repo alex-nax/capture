@@ -400,18 +400,34 @@ unsafe fn pwstr_to_string(p: *const u16) -> String {
     if p.is_null() {
         return String::new();
     }
+    // Bound the scan: a malformed / non-NUL-terminated buffer must never run off into unmapped memory
+    // and segfault the whole daemon. 32k wide chars is far beyond any real device name.
     let mut len = 0usize;
-    while *p.add(len) != 0 {
+    while len < 32_768 && *p.add(len) != 0 {
         len += 1;
     }
     String::from_utf16_lossy(std::slice::from_raw_parts(p, len))
 }
 
+/// VT_LPWSTR — the only PROPVARIANT type whose union member at offset 8 is a wide-string pointer.
+const VT_LPWSTR: u16 = 31;
+
+/// A property-store `PROPVARIANT` (e.g. PKEY_Device_FriendlyName) as a `String`.
+///
+/// PROPVARIANT layout: the variant type `vt` at offset 0, the value union at offset 8 (x64).
+/// **Checking `vt` first is the load-bearing safety**: the previous version unconditionally read
+/// offset 8 as a wide-string pointer and walked it unbounded, so a device whose FriendlyName came
+/// back as anything other than `VT_LPWSTR` (or absent) dereferenced a non-pointer union member and
+/// **crashed the whole daemon** — only reproducible with real audio devices present, never in a
+/// headless session, which is why it slipped through. Now: non-string → empty (caller falls back to
+/// the device id), and the walk itself is bounded ([`pwstr_to_string`]).
 fn propvariant_to_string(pv: &PROPVARIANT) -> String {
-    // PROPVARIANT for a string property holds a wide-string pointer; windows-rs has no safe getter, so
-    // read it via the documented layout (vt at offset 0, the union pointer at offset 8 on x64).
     unsafe {
         let bytes = pv as *const PROPVARIANT as *const u8;
+        let vt = *(bytes as *const u16);
+        if vt != VT_LPWSTR {
+            return String::new();
+        }
         let p = *(bytes.add(8) as *const *const u16);
         pwstr_to_string(p)
     }

@@ -30,6 +30,27 @@ Windows installer**, plus syncing v3 and clearing the box for a clean-room insta
   window/audio capture — the Session-0 dev shell can't observe these); then **code signing** for Smart
   App Control (#34 / windows-release.md §5) and **#85** updater hardening before non-prerelease packs.
 
+### First-interactive-run fixes (same session, 2026-06-22)
+Owner installed + ran it and reported: empty ASR runtime list, "maybe it just crashes", and the GUI
+window persists after quitting the tray. Diagnosed + fixed two real bugs (the runtime data path itself
+is provably correct — added `crates/core/tests/asr_runtimes_parse.rs`: the live daemon payload
+deserializes into `v1::AsrRuntimes` = 3 runtimes, and a faithful ureq repro returned 3 live):
+- **Daemon crash in Windows audio device enumeration** (the empty-list root cause). `propvariant_to_string`
+  read the `PROPVARIANT` union pointer at offset 8 with **no `vt` check** and walked it **unbounded**.
+  In Session 0 there are 0 mics so the per-device loop never ran — unit tests passed. On the owner's box
+  with real mics, a non-`VT_LPWSTR` FriendlyName dereferenced a non-pointer member → **segfault → the
+  whole daemon died** → every subsequent GUI poll found nothing → `d.available()` false → ALL data
+  (incl. runtimes) blanked. Fix: check `vt == VT_LPWSTR` before the deref + bound the wide walk to 32k
+  (`crates/platform/src/windows_audio.rs`).
+- **Tray ownership / teardown** (agent #36). The agent now creates a **kill-on-close job object** and
+  assigns the daemon + GUI to it (they die with the agent however it exits — no orphaned daemon + stale
+  `daemon.json`, which is exactly what wedged the single-instance daemon and blocked restarts), and
+  **Quit (`shutdown_all`) tears down BOTH children** instead of leaving the GUI open + only stopping an
+  idle daemon. `agent/windows` gained `Win32_System_JobObjects/_Security/_System_Threading`.
+- Rebuilt `CaptureSetup-0.2.6-x64.exe` (8.7 MB) with both fixes. Specs updated (agent-windows.md
+  lifecycle section; features.json #66). **Owner to reinstall + retest** (the audio-enum fix can only
+  be confirmed with real devices present — the dev shell has none).
+
 ## Session 67 — 2026-06-20
 **Agent**: builder (**Windows box**, branch **v3-windows** off **v3**) — closing the v3 **Windows** gaps,
 runtimes first (owner: CPU + CUDA packs; runtimes before the capture backend). This slice = the

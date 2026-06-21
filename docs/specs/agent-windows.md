@@ -81,14 +81,20 @@ Mirrors `CaptureBar` ([agent.md](agent.md)) route-for-route:
   (toggles on state), **Quit Capture**.
 - **Daemon lifecycle:** `ensure_daemon()` spawns `captured\captured.exe` **detached** with
   `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP` and stdio set to null (no console flash, no
-  whole-screen-capture pollution, survives an agent force-quit). It first checks `/v1/health` so it
-  never double-starts (a CLI- or previously-started daemon is adopted) and **debounces** (~6 s) so a
-  slow startup doesn't trigger a second spawn. **Auto-respawn:** the 2 s poll re-spawns the daemon
-  whenever it's down **unless the user explicitly stopped it** (`user_stopped_daemon`, set by "Stop
-  Daemon", cleared by "Start Daemon") — crash recovery, and what makes the GUI's "Restart daemon"
-  work. **Quit** gracefully stops the daemon (`/v1/admin/shutdown`) **iff it's idle** (no running
-  captures) — freeing the install for update/uninstall while letting an in-progress capture survive an
-  accidental Quit — then exits.
+  whole-screen-capture pollution). It first checks `/v1/health` so it never double-starts (a CLI- or
+  previously-started daemon is adopted) and **debounces** (~6 s) so a slow startup doesn't trigger a
+  second spawn. **Auto-respawn:** the 2 s poll re-spawns the daemon whenever it's down **unless the
+  user explicitly stopped it** (`user_stopped_daemon`, set by "Stop Daemon", cleared by "Start Daemon")
+  — crash recovery, and what makes the GUI's "Restart daemon" work.
+- **The agent OWNS both children — `Quit` tears down everything (corrected 2026-06-22).** The tray
+  agent is the single entry point and owner of the daemon **and** the GUI window. On startup it creates
+  a **kill-on-close job object** (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) and assigns every spawned
+  `captured` and `capture-gui` to it, so they are terminated when the agent exits **by any means**
+  (clean Quit, crash, or Task-Manager kill) — no orphaned daemon (the earlier model let a wedged daemon
+  + stale `daemon.json` survive a tray Quit, which blocked the single-instance daemon from restarting).
+  `shutdown_all()` on **Quit** asks the daemon to flush (`/v1/admin/shutdown`), then force-stops the
+  GUI child and the daemon child; the job is the backstop. (Superseded: the prior "stop the daemon only
+  iff idle, leave the GUI running" behavior — quitting the tray now always leaves nothing behind.)
 - **Autostart (decided + implemented):** a **Task Scheduler interactive logon task** registered by
   `packaging/register_logon_task.ps1` (`-AtLogOn`, `LogonType Interactive`, no execution-time limit) runs
   `Capture.exe` in the WinSta0 desktop at login — satisfying the window-discovery requirement. Verified

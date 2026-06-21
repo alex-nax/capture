@@ -20,7 +20,13 @@ use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use serde::Deserialize;
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
-use windows::core::BOOL;
+use windows::core::{BOOL, PCWSTR};
+use windows::Win32::Foundation::HANDLE;
+use windows::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
+    JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, PostQuitMessage, SetTimer, TranslateMessage, MSG, WM_TIMER,
 };
@@ -138,18 +144,47 @@ fn gui_bin() -> Option<PathBuf> {
     c.exists().then_some(c)
 }
 
-/// Spawn the daemon detached + windowless (no console flash; survives the agent).
-fn spawn_daemon() -> bool {
+/// Spawn the daemon detached + windowless (no console flash; survives the agent). Returns the child
+/// so the agent can assign it to its job object and force-stop it on Quit.
+fn spawn_daemon() -> Option<Child> {
     use std::os::windows::process::CommandExt;
-    match daemon_bin() {
-        Some(bin) => Command::new(bin)
-            .creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .is_ok(),
-        None => false,
+    let bin = daemon_bin()?;
+    Command::new(bin)
+        .creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()
+}
+
+/// A kill-on-close job object: every process assigned to it is terminated when the LAST handle to the
+/// job closes — i.e. when this agent process exits or is killed (the handle auto-closes). This is how
+/// the tray agent guarantees the daemon + GUI never outlive it (the orphaned-daemon bug). None if the
+/// OS call fails (then teardown falls back to the explicit kills in `shutdown_all`).
+fn create_kill_on_close_job() -> Option<HANDLE> {
+    unsafe {
+        let job = CreateJobObjectW(None, PCWSTR::null()).ok()?;
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const core::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+        .ok()?;
+        Some(job)
+    }
+}
+
+/// Assign a spawned child to the kill-on-close job so it dies with the agent. Best-effort.
+fn assign_to_job(job: Option<HANDLE>, child: &Child) {
+    use std::os::windows::io::AsRawHandle;
+    if let Some(job) = job {
+        unsafe {
+            let _ = AssignProcessToJobObject(job, HANDLE(child.as_raw_handle()));
+        }
     }
 }
 
@@ -184,6 +219,11 @@ struct Agent {
     toggle: MenuItem,
     quit: MenuItem,
     gui: Option<Child>,
+    /// The daemon process the agent spawned (None if it adopted an already-running one) — kept so Quit
+    /// can force-stop it.
+    daemon_child: Option<Child>,
+    /// Kill-on-close job both children are assigned to: they die with this agent no matter how it exits.
+    job: Option<HANDLE>,
     user_stopped: bool,
     last_spawn: Option<Instant>,
     recording: bool,
@@ -207,10 +247,14 @@ impl Agent {
                 .creation_flags(CREATE_NEW_PROCESS_GROUP)
                 .spawn()
                 .ok();
+            if let Some(child) = &self.gui {
+                assign_to_job(self.job, child); // dies with the agent
+            }
         }
     }
 
-    /// Spawn the daemon if it's down and the user didn't stop it (debounced).
+    /// Spawn the daemon if it's down and the user didn't stop it (debounced). Tracks the child + adds
+    /// it to the kill-on-close job so it can never outlive the agent.
     fn ensure_daemon(&mut self, up: bool) {
         if up || self.user_stopped {
             return;
@@ -218,8 +262,27 @@ impl Agent {
         if self.last_spawn.map(|t| t.elapsed() < SPAWN_DEBOUNCE).unwrap_or(false) {
             return;
         }
-        if spawn_daemon() {
+        if let Some(child) = spawn_daemon() {
+            assign_to_job(self.job, &child);
+            self.daemon_child = Some(child);
             self.last_spawn = Some(Instant::now());
+        }
+    }
+
+    /// Tear down everything the agent owns — the GUI window and the daemon. The agent is the single
+    /// entry point/owner, so quitting it must leave nothing behind. Graceful first (the daemon flushes
+    /// via `/v1/admin/shutdown`), then force-stop both children; the kill-on-close job is the backstop.
+    fn shutdown_all(&mut self) {
+        if let Some(d) = Daemon::discover() {
+            if d.healthy() {
+                d.shutdown();
+            }
+        }
+        if let Some(mut gui) = self.gui.take() {
+            let _ = gui.kill();
+        }
+        if let Some(mut daemon) = self.daemon_child.take() {
+            let _ = daemon.kill();
         }
     }
 
@@ -277,12 +340,9 @@ impl Agent {
                 }
             }
         } else if id == self.quit.id() {
-            // Stop the daemon only if idle, so an accidental Quit doesn't kill a live capture.
-            if let Some(d) = Daemon::discover() {
-                if d.healthy() && d.running().is_empty() {
-                    d.shutdown();
-                }
-            }
+            // The agent owns the daemon AND the GUI: Quit tears down everything (the user expects no
+            // orphaned GUI window or daemon after quitting the tray — that left a wedged daemon before).
+            self.shutdown_all();
             unsafe { PostQuitMessage(0) };
         }
     }
@@ -315,6 +375,8 @@ fn main() {
         toggle,
         quit,
         gui: None,
+        daemon_child: None,
+        job: create_kill_on_close_job(),
         user_stopped: false,
         last_spawn: None,
         recording: false,

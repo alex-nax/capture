@@ -33,4 +33,10 @@ version = "0.61"
 features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
+    # Kill-on-close job object: the daemon + GUI children are assigned to it so they ALWAYS die with
+    # the tray agent (no orphaned daemon, even if the agent is force-killed). The agent owns both.
+    # JobObjects pulls in Win32_Security (SECURITY_ATTRIBUTES) + Win32_System_Threading (the limit struct).
+    "Win32_System_JobObjects",
+    "Win32_Security",
+    "Win32_System_Threading",
 ]
