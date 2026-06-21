@@ -105,7 +105,14 @@ native window chrome; real frame image in playback; runtime-driven model list) a
 - **Permissions**: explicit granted / not-granted rows; the **permission-denied dashboard** (blocking banner,
   Windows blocked empty state, mic/launch disabled, Sessions still usable) is a real state to wire to the
   `/v1/permissions` checks.
-- **Live playback**: REC badge + streaming transcript + Stop/elapsed/level/segments + live mic & language.
+- **Playback (#75, done)**: shared layout branching on session state. **Saved** — framed screenshot,
+  the time-aligned subtitle, a 6px scrubber + ghost transport (skip/rewind, round accent play, ff/skip,
+  volume, mono time), a **Manage** card (screenshots/audio status chips · language · Re-transcribe /
+  Halve frames / Delete frames / Remove audio / Build index, with in-flight progress + disabled states),
+  and the **Index summary** card. **Live** — a **REC** badge on the frame, the streaming transcript with
+  a caret, **Stop capture** (red) + a real elapsed timer (from `started_at`), and live mic + language
+  rows. The language dropdown opens **upward** here (the panel sits low). Stopping reloads the session
+  in place as the saved view. (The locked design's live bar shows Stop + elapsed only — no level meter.)
 
 ## Implementation features (order = dependency order)
 `#68` decompose → `#69` theme → `#70` components+icons → then the screens (`#71` settings shell, `#72`

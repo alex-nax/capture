@@ -304,7 +304,7 @@ impl CaptureApp {
                 .flex()
                 .flex_col()
                 .gap(px(13.0))
-                .child(self.language_field(asr_lang_focused, cx))
+                .child(self.language_field(asr_lang_focused, false, cx))
                 .child(self.chunk_chips(cx)),
         )
         .into_any_element()
@@ -1474,7 +1474,7 @@ impl CaptureApp {
     /// The transcription-language control (#45): an editable ISO-code field + the active
     /// value. Shown in Settings and the playback pane (change it on the fly during a live
     /// capture; the next chunk uses it). `focused` is the field's focus state.
-    pub(crate) fn language_field(&self, focused: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn language_field(&self, focused: bool, open_up: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.asr.language.clone().unwrap_or_default();
         let active_name = LANGUAGES
             .iter()
@@ -1537,7 +1537,10 @@ impl CaptureApp {
             // row below instead of pushing it down.
             let mut list = div()
                 .absolute()
-                .top(relative(1.0))
+                // Open downward by default; upward (anchored to the field's top) when the field sits
+                // low on screen (the playback panel) so the menu isn't clipped below the fold.
+                .when(open_up, |d| d.bottom(relative(1.0)))
+                .when(!open_up, |d| d.top(relative(1.0)))
                 .left(px(132.0))
                 .flex()
                 .flex_col()

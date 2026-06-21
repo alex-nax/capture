@@ -1,26 +1,30 @@
-//! The session playback screen: the screenshot at the playhead, time-synced subtitles,
-//! the scrubber + transport, the live mic/language switchers, and the Manage panel.
-//! Relocated verbatim from `app.rs` (#68). `render_playback` is dispatched from `render()`.
+//! The session playback screen (redesign): the framed screenshot at the playhead, the
+//! time-synced subtitle / live transcript, the scrubber + transport (saved) or the live
+//! control bar + mic/language switchers (live), the Manage card, and the index summary.
+//! Matches `design/screens/playback.html` + `playback-live.html`.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
-use gpui::{div, img, prelude::*, px, relative, rgb, App, ClickEvent, Context, MouseButton, MouseDownEvent, Pixels, Timer, Window};
+use gpui::{div, img, prelude::*, px, relative, rgb, rgba, App, ClickEvent, Context, MouseButton, MouseDownEvent, Pixels, Timer, Window};
 
 use crate::app::CaptureApp;
-use crate::components::{chip, icon};
+use crate::components::{card, chip, eyebrow, icon, icon_button, ButtonVariant};
 use crate::state::{fmt_dur, short_id, truncate, ConfirmKind};
 use crate::theme;
 
 impl CaptureApp {
-    /// The full playback screen: the screenshot at the playhead (or live latest),
-    /// time-synced subtitles, and (for finished captures) a scrubber + transport.
+    /// The full playback screen: the screenshot at the playhead (or live latest), the active
+    /// subtitle / live transcript, and (saved) a scrubber + transport + Manage, or (live) the
+    /// REC frame + Stop + mic/language switchers.
     pub(crate) fn render_playback(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let asr_lang_focused = self.asr_language_focus.is_focused(window);
         let Some(pb) = self.playback.as_ref() else {
             return div().into_any_element();
         };
         let finished = pb.finished;
+
+        // Resolve the frame at the playhead + the active subtitle text(s) / live transcript.
         let (shot, subs): (Option<String>, Vec<(String, bool)>) = if finished {
             let frame = pb
                 .frames
@@ -47,49 +51,116 @@ impl CaptureApp {
             (st.last_shot.clone(), lines)
         };
 
-        let mut root = div().flex().flex_col().gap_2().flex_shrink_0();
-        root = root.child(div().text_color(rgb(theme::TEXT_SECONDARY)).child(format!(
-            "{} · {}",
-            short_id(&pb.sid),
-            if finished { "saved capture" } else { "● live" }
-        )));
-        root = match shot {
-            Some(p) => root.child(img(PathBuf::from(p)).w_full().h(px(360.0)).rounded_md()),
-            None => root.child(
-                div()
-                    .w_full()
-                    .h(px(360.0))
-                    .rounded_md()
-                    .bg(rgb(theme::BG))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(div().text_color(rgb(theme::TEXT_MUTED)).child(if finished {
-                        "no screenshots"
-                    } else {
-                        "waiting for first frame…"
-                    })),
-            ),
-        };
-        let mut subbox = div().flex().flex_col().gap_1().p_2().rounded_md().bg(rgb(theme::BG));
-        if subs.is_empty() {
-            subbox = subbox.child(div().text_color(rgb(theme::TEXT_MUTED)).child("…"));
-        } else {
-            for (txt, is_mic) in subs {
-                subbox = subbox.child(if is_mic {
+        let sb = gpui::FontWeight(theme::FW_SEMIBOLD as f32);
+        let mut root = div().flex().flex_col().gap(px(18.0)).flex_shrink_0();
+
+        // ── Session line: mono id · dot · state ──────────────────────────────
+        let (dot, state_label) = if finished { (theme::SUCCESS, "saved capture") } else { (theme::LIVE, "live") };
+        root = root.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .child(
+                    div()
+                        .text_size(px(theme::TS_BODY))
+                        .font_weight(sb)
+                        .text_color(rgb(theme::TEXT_PRIMARY))
+                        .child(short_id(&pb.sid).to_string()),
+                )
+                .child(div().text_size(px(theme::TS_SMALL)).text_color(rgb(theme::TEXT_MUTED)).child("·"))
+                .child(
                     div()
                         .flex()
-                        .gap_1()
                         .items_center()
-                        .child(icon("mic", 12.0, theme::SUCCESS))
-                        .child(div().text_color(rgb(theme::SUCCESS)).child(txt))
-                } else {
-                    div().child(div().text_color(rgb(theme::TEXT_PRIMARY)).child(txt))
-                });
+                        .gap(px(6.0))
+                        .text_size(px(theme::TS_SMALL))
+                        .text_color(rgb(dot))
+                        .child(div().flex_none().size(px(if finished { 6.0 } else { 7.0 })).rounded_full().bg(rgb(dot)))
+                        .child(state_label),
+                ),
+        );
+
+        // ── Frame: bordered 380px; the shot if present, else a placeholder. REC badge when live. ──
+        let mut frame = div()
+            .relative()
+            .w_full()
+            .h(px(380.0))
+            .rounded(px(theme::RADIUS_LG))
+            .overflow_hidden()
+            .border_1()
+            .border_color(rgb(theme::CARD_BORDER))
+            .bg(rgb(theme::BG))
+            .flex()
+            .items_center()
+            .justify_center();
+        match &shot {
+            Some(p) => frame = frame.child(img(PathBuf::from(p.clone())).w_full().h(px(380.0))),
+            None => {
+                frame = frame.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .text_color(rgb(theme::TEXT_DISABLED))
+                        .child(icon("image", 16.0, theme::TEXT_DISABLED))
+                        .child(div().text_size(px(theme::TS_SMALL)).child(if finished {
+                            "no screenshots"
+                        } else {
+                            "waiting for first frame…"
+                        })),
+                )
             }
         }
-        root = root.child(subbox);
+        if !finished {
+            frame = frame.child(
+                div()
+                    .absolute()
+                    .top(px(12.0))
+                    .left(px(12.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(7.0))
+                    .px(px(10.0))
+                    .py(px(4.0))
+                    .rounded(px(theme::RADIUS_SM))
+                    .bg(rgb(theme::ERROR_SUBTLE))
+                    .border_1()
+                    .border_color(rgb(theme::ERROR_BORDER))
+                    .child(div().flex_none().size(px(7.0)).rounded_full().bg(rgb(theme::LIVE)))
+                    .child(div().text_size(px(theme::TS_EYEBROW)).font_weight(sb).text_color(rgb(theme::LIVE)).child("REC")),
+            );
+        }
+        root = root.child(frame);
 
+        // ── Subtitle (saved) / live transcript with cursor ──────────────────
+        if subs.is_empty() {
+            root = root.child(
+                div()
+                    .text_size(px(15.0))
+                    .text_color(rgb(theme::TEXT_MUTED))
+                    .child(if finished { "—" } else { "…" }),
+            );
+        } else {
+            let mut tx = div().flex().flex_col().gap(px(4.0));
+            let n = subs.len();
+            for (i, (txt, is_mic)) in subs.into_iter().enumerate() {
+                let color = if is_mic { theme::SUCCESS } else { theme::TEXT_PRIMARY };
+                let mut line = div().flex().items_center().gap(px(6.0)).text_size(px(15.0)).line_height(px(23.0)).text_color(rgb(color));
+                if is_mic {
+                    line = line.child(icon("mic", 13.0, theme::SUCCESS));
+                }
+                line = line.child(div().child(txt));
+                // Live caret after the last line.
+                if !finished && i + 1 == n {
+                    line = line.child(div().flex_none().w(px(2.0)).h(px(15.0)).bg(rgb(theme::ACCENT)));
+                }
+                tx = tx.child(line);
+            }
+            root = root.child(tx);
+        }
+
+        // ── Saved: scrubber + transport ─────────────────────────────────────
         if finished && pb.loaded && pb.t1 > pb.t0 {
             let dur = pb.t1 - pb.t0;
             let frac = (((pb.pos - pb.t0) / dur) as f32).clamp(0.0, 1.0);
@@ -97,20 +168,12 @@ impl CaptureApp {
                 .id("pb-track")
                 .relative()
                 .w_full()
-                .h(px(10.0))
-                .rounded_full()
+                .h(px(6.0))
+                .rounded(px(3.0))
                 .bg(rgb(theme::ELEVATED))
+                .overflow_hidden()
                 .cursor_pointer()
-                .child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .h(px(10.0))
-                        .w(relative(frac))
-                        .rounded_full()
-                        .bg(rgb(theme::ACCENT)),
-                )
+                .child(div().absolute().left_0().top_0().h(px(6.0)).w(relative(frac)).rounded(px(3.0)).bg(rgb(theme::ACCENT)))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, ev: &MouseDownEvent, window, cx| {
@@ -119,267 +182,298 @@ impl CaptureApp {
                     }),
                 );
             let playing = pb.playing;
-            let controls = div()
+            let play = div()
+                .id("pb-play")
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .size(px(38.0))
+                .rounded_full()
+                .bg(rgb(theme::ACCENT))
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(theme::ACCENT_HOVER)))
+                .child(icon(if playing { "pause" } else { "play" }, 16.0, theme::ON_ACCENT))
+                .on_click(cx.listener(|this, _, _, cx| this.pb_toggle_play(cx)));
+            let transport = div()
                 .flex()
                 .items_center()
-                .gap_2()
-                .child(self.pb_ctrl("pb-start", "skip-back", cx.listener(|this, _, _, cx| this.pb_step(f64::NEG_INFINITY, cx))))
-                .child(self.pb_ctrl("pb-rew", "rewind", cx.listener(|this, _, _, cx| this.pb_step(-5.0, cx))))
-                .child(self.pb_ctrl("pb-play", if playing { "pause" } else { "play" }, cx.listener(|this, _, _, cx| this.pb_toggle_play(cx))))
-                .child(self.pb_ctrl("pb-ff", "fast-forward", cx.listener(|this, _, _, cx| this.pb_step(5.0, cx))))
-                .child(self.pb_ctrl("pb-end", "skip-forward", cx.listener(|this, _, _, cx| this.pb_step(f64::INFINITY, cx))))
-                .child(div().text_color(rgb(theme::TEXT_SECONDARY)).child(format!("{} / {}", fmt_dur(pb.pos - pb.t0), fmt_dur(dur))));
-            root = root.child(div().flex().flex_col().gap_2().child(track).child(controls));
+                .gap(px(8.0))
+                .child(self.pb_ghost("pb-start", "skip-back", cx.listener(|this, _, _, cx| this.pb_step(f64::NEG_INFINITY, cx))))
+                .child(self.pb_ghost("pb-rew", "rewind", cx.listener(|this, _, _, cx| this.pb_step(-5.0, cx))))
+                .child(play)
+                .child(self.pb_ghost("pb-ff", "fast-forward", cx.listener(|this, _, _, cx| this.pb_step(5.0, cx))))
+                .child(self.pb_ghost("pb-end", "skip-forward", cx.listener(|this, _, _, cx| this.pb_step(f64::INFINITY, cx))))
+                .child(div().ml(px(6.0)).flex().child(icon("volume", 16.0, theme::TEXT_MUTED)))
+                .child(div().flex_1())
+                .child(div().text_size(px(theme::TS_BODY)).text_color(rgb(theme::TEXT_SECONDARY)).child(format!("{} / {}", fmt_dur(pb.pos - pb.t0), fmt_dur(dur))));
+            root = root.child(div().flex().flex_col().gap(px(14.0)).child(track).child(transport));
         } else if finished && !pb.loaded {
-            root = root.child(div().text_color(rgb(theme::TEXT_MUTED)).child("loading…"));
+            root = root.child(div().text_size(px(theme::TS_SMALL)).text_color(rgb(theme::TEXT_MUTED)).child("loading…"));
         }
 
-        // Live mic switcher (#46): on a running capture, change the input device (or turn
-        // it off) without restarting — appends to the mic track.
+        // ── Live: control bar (Stop + elapsed) + mic + language ─────────────
         if !finished {
             let sid = pb.sid.clone();
-            let active = self.sessions.iter().find(|s| s.session_id == sid).and_then(|s| s.mic_device.clone());
-            let mut row = div()
+            // Real elapsed from the session's started_at (re-derived each render/poll — no fake ticker).
+            let elapsed = self
+                .sessions
+                .iter()
+                .find(|s| s.session_id == sid)
+                .and_then(|s| s.started_at.as_deref())
+                .and_then(crate::state::parse_iso_epoch)
+                .map(|t0| (capture_core::time::now() - t0).max(0.0));
+            let stop_sid = sid.clone();
+            let stop = div()
+                .id("pb-stop")
                 .flex()
-                .gap_2()
+                .flex_none()
                 .items_center()
-                .flex_wrap()
-                .child(div().min_w(px(40.0)).text_color(rgb(theme::TEXT_SECONDARY)).child("Mic"));
+                .gap(px(8.0))
+                .h(px(34.0))
+                .px(px(15.0))
+                .rounded(px(theme::RADIUS_SM))
+                .bg(rgb(theme::ERROR))
+                .text_color(rgb(theme::ON_ACCENT))
+                .font_weight(sb)
+                .text_size(px(theme::TS_BODY))
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(theme::LIVE)))
+                .child(icon("stop", 14.0, theme::ON_ACCENT))
+                .child("Stop capture")
+                .on_click(cx.listener(move |this, _, _, cx| this.stop_capture(stop_sid.clone(), cx)));
+            let bar = div()
+                .flex()
+                .items_center()
+                .gap(px(theme::SP_3))
+                .child(stop)
+                .child(div().flex_1())
+                .when_some(elapsed, |d, e| {
+                    d.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(div().flex_none().size(px(8.0)).rounded_full().bg(rgb(theme::LIVE)))
+                            .child(div().text_size(px(theme::TS_BODY)).text_color(rgb(theme::TEXT_PRIMARY)).child(fmt_dur(e))),
+                    )
+                });
+            root = root.child(bar);
+
+            // Mic switcher (#46): live-switch the input device (or off) without restarting.
+            let active = self.sessions.iter().find(|s| s.session_id == sid).and_then(|s| s.mic_device.clone());
+            let mut mics = div().flex().gap(px(theme::SP_2)).items_center().flex_wrap();
             let s_off = sid.clone();
-            row = row.child(chip(
-                "live-mic-off",
-                "Off",
-                active.is_none(),
-                cx.listener(move |this, _, _, cx| this.switch_mic(s_off.clone(), None, cx)),
-            ));
+            mics = mics.child(chip("live-mic-off", "Off", active.is_none(), cx.listener(move |this, _, _, cx| this.switch_mic(s_off.clone(), None, cx))));
             for dev in &self.mics {
-                let label = truncate(&dev.name, 18);
                 let id = dev.id.clone();
                 let s = sid.clone();
-                row = row.child(chip(
+                mics = mics.child(chip(
                     &format!("live-mic-{}", dev.id),
-                    &label,
+                    &truncate(&dev.name, 22),
                     active.as_deref() == Some(dev.id.as_str()),
                     cx.listener(move |this, _, _, cx| this.switch_mic(s.clone(), Some(id.clone()), cx)),
                 ));
             }
             if self.mics.is_empty() {
-                row = row.child(div().text_color(rgb(theme::TEXT_MUTED)).child("(Refresh windows to load devices)"));
+                mics = mics.child(div().text_size(px(theme::TS_SMALL)).text_color(rgb(theme::TEXT_MUTED)).child("(Refresh windows to load devices)"));
             }
-            root = root.child(row);
-            // Live transcription-language toggle: the same searchable dropdown as Settings,
-            // surfaced here so the language can be switched DURING a live capture (especially
-            // meetings). Picking applies it immediately via daemon `asr_set_language` (the
-            // next chunk transcribes in it), the way the Mic row above live-switches devices.
-            root = root.child(self.language_field(asr_lang_focused, cx));
+            root = root.child(div().flex().items_center().gap(px(14.0)).child(self.pb_label("Mic")).child(mics));
+            // Live language switch (the next chunk transcribes in it). Opens UPWARD here (low on screen).
+            root = root.child(self.language_field(asr_lang_focused, true, cx));
         }
 
-        // Manage: capability status + prune + re-transcribe (finished sessions only).
+        // ── Saved: Manage card + index summary card ─────────────────────────
         if finished {
             let sess = self.sessions.iter().find(|s| s.session_id == pb.sid);
             let has_shots = sess.map_or(true, |s| s.has_screenshots);
             let has_audio = sess.map_or(true, |s| s.has_audio);
             let can_retr = sess.map_or(true, |s| s.can_retranscribe);
+            let can_index = sess.map_or(false, |s| s.can_index);
             let retr_frac = self.live.lock().unwrap().retranscribe.get(&pb.sid).copied();
+            let idx_prog = self.live.lock().unwrap().index_progress.get(&pb.sid).cloned();
             let sid = pb.sid.clone();
 
             let status = div()
                 .flex()
                 .items_center()
-                .gap_3()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(icon("image", 13.0, if has_shots { theme::SUCCESS } else { theme::TEXT_DISABLED }))
-                        .child(div().text_xs().text_color(rgb(if has_shots { theme::TEXT_SECONDARY } else { theme::TEXT_DISABLED })).child(
-                            if has_shots { "screenshots" } else { "screenshots pruned" },
-                        )),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(icon(if has_audio { "volume" } else { "volume-x" }, 13.0, if has_audio { theme::SUCCESS } else { theme::TEXT_DISABLED }))
-                        .child(div().text_xs().text_color(rgb(if has_audio { theme::TEXT_SECONDARY } else { theme::TEXT_DISABLED })).child(
-                            if has_audio { "audio" } else { "audio removed" },
-                        )),
-                );
+                .gap(px(10.0))
+                .flex_wrap()
+                .child(self.pb_status_chip("image", if has_shots { "screenshots" } else { "screenshots pruned" }, has_shots))
+                .child(self.pb_status_chip(if has_audio { "volume" } else { "volume-x" }, if has_audio { "audio" } else { "audio removed" }, has_audio));
 
-            let mut actions = div().flex().items_center().gap_2().flex_wrap();
+            let mut actions = div().flex().items_center().gap(px(10.0)).flex_wrap();
+            // Re-transcribe (or its in-flight progress).
             if let Some(frac) = retr_frac {
-                actions = actions.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .px_2()
-                        .py_1()
-                        .child(icon("refresh", 13.0, theme::SUCCESS))
-                        .child(div().text_xs().text_color(rgb(theme::SUCCESS)).child(format!(
-                            "re-transcribing {:.0}%",
-                            (frac * 100.0).clamp(0.0, 100.0)
-                        ))),
-                );
-            } else if can_retr {
-                let s = sid.clone();
-                actions = actions.child(self.mng_btn(
-                    "mng-retr", "refresh", "Re-transcribe", theme::TEXT_SECONDARY, theme::CHIP_IDLE,
-                    cx.listener(move |this, _, _, cx| this.retranscribe(s.clone(), cx)),
-                ));
+                actions = actions.child(self.pb_progress("refresh", &format!("re-transcribing {:.0}%", (frac * 100.0).clamp(0.0, 100.0)), theme::SUCCESS));
             } else {
-                actions = actions.child(self.mng_btn("mng-retr", "refresh", "Re-transcribe", theme::TEXT_DISABLED, theme::ELEVATED, |_, _, _| {}));
+                let s = sid.clone();
+                actions = actions.child(self.pb_action("refresh", "Re-transcribe", ButtonVariant::Secondary, can_retr, cx.listener(move |this, _, _, cx| this.retranscribe(s.clone(), cx))));
             }
             if has_shots {
                 let s = sid.clone();
-                actions = actions.child(self.mng_btn(
-                    "mng-halve", "scissors", "Halve frames", theme::TEXT_SECONDARY, theme::CHIP_IDLE,
-                    cx.listener(move |this, _, _, cx| this.prune(s.clone(), vec!["screenshots_halve"], cx)),
-                ));
+                actions = actions.child(self.pb_action("scissors", "Halve frames", ButtonVariant::Secondary, true, cx.listener(move |this, _, _, cx| this.prune(s.clone(), vec!["screenshots_halve"], cx))));
                 let s = sid.clone();
-                actions = actions.child(self.mng_btn(
-                    "mng-delshots", "image", "Delete frames", theme::ERROR, theme::ERROR_SUBTLE,
+                actions = actions.child(self.pb_action(
+                    "trash",
+                    "Delete frames",
+                    ButtonVariant::Destructive,
+                    true,
                     cx.listener(move |this, _, _, cx| {
-                        this.confirm = Some(ConfirmKind::Prune(
-                            s.clone(),
-                            vec!["screenshots"],
-                            "Delete all screenshots? The transcript and audio stay.".into(),
-                        ));
+                        this.confirm = Some(ConfirmKind::Prune(s.clone(), vec!["screenshots"], "Delete all screenshots? The transcript and audio stay.".into()));
                         cx.notify();
                     }),
                 ));
             }
             if has_audio {
                 let s = sid.clone();
-                actions = actions.child(self.mng_btn(
-                    "mng-delaudio", "volume-x", "Remove audio", theme::ERROR, theme::ERROR_SUBTLE,
+                actions = actions.child(self.pb_action(
+                    "volume-x",
+                    "Remove audio",
+                    ButtonVariant::Destructive,
+                    true,
                     cx.listener(move |this, _, _, cx| {
                         this.confirm = Some(ConfirmKind::Prune(
                             s.clone(),
                             vec!["audio"],
-                            "Remove the audio stream? Frees the most disk but disables re-transcribe (the transcript stays)."
-                                .into(),
+                            "Remove the audio stream? Frees the most disk but disables re-transcribe (the transcript stays).".into(),
                         ));
                         cx.notify();
                     }),
                 ));
             }
-            // Build index (#44): caption frames with the remote vision LLM → a tree summary.
-            // Off unless the session has frames AND the configured endpoint is reachable.
-            let can_index = sess.map_or(false, |s| s.can_index);
-            let idx_prog = self.live.lock().unwrap().index_progress.get(&pb.sid).cloned();
+            // Build index (#44): off unless frames present AND the configured endpoint is reachable.
             if let Some((phase, frac)) = idx_prog {
-                actions = actions.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .px_2()
-                        .py_1()
-                        .child(icon("list-tree", 13.0, theme::ACCENT_TEXT))
-                        .child(div().text_xs().text_color(rgb(theme::ACCENT_TEXT)).child(format!(
-                            "indexing {} {:.0}%",
-                            phase,
-                            (frac * 100.0).clamp(0.0, 100.0)
-                        ))),
-                );
-            } else if can_index && self.index_status.available {
-                let s = sid.clone();
-                actions = actions.child(self.mng_btn(
-                    "mng-index", "list-tree", "Build index", theme::TEXT_SECONDARY, theme::CHIP_IDLE,
-                    cx.listener(move |this, _, _, cx| this.index_session(s.clone(), cx)),
-                ));
+                actions = actions.child(self.pb_progress("list-tree", &format!("indexing {} {:.0}%", phase, (frac * 100.0).clamp(0.0, 100.0)), theme::ACCENT_TEXT));
             } else {
-                // Disabled: dim it; the Settings → Index endpoint dot says why.
-                actions = actions.child(self.mng_btn(
-                    "mng-index", "list-tree", "Build index", theme::TEXT_DISABLED, theme::ELEVATED, |_, _, _| {},
-                ));
+                let s = sid.clone();
+                let enabled = can_index && self.index_status.available;
+                actions = actions.child(self.pb_action("list-tree", "Build index", ButtonVariant::Primary, enabled, cx.listener(move |this, _, _, cx| this.index_session(s.clone(), cx))));
             }
-            let mut manage = div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .pt_2()
-                .child(div().text_color(rgb(theme::TEXT_PRIMARY)).child("Manage"))
-                .child(status)
-                // Change the language on the fly (a running capture's next chunk uses it);
-                // then Re-transcribe to fix the part already done with the wrong language.
-                .child(self.language_field(asr_lang_focused, cx))
-                .child(actions);
-            // Show the index's root summary once built (#44).
+
+            let manage = card(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(div().mb(px(14.0)).child(eyebrow("Manage")))
+                    .child(status)
+                    // Change the language on the fly, then Re-transcribe to fix what was done wrong.
+                    .child(div().mt(px(14.0)).child(self.language_field(asr_lang_focused, true, cx)))
+                    .child(div().mt(px(16.0)).child(actions)),
+            );
+            root = root.child(manage);
+
+            // Index root summary, once built (#44).
             if let Some(summary) = pb.index_summary.clone() {
                 let nodes = pb.index_nodes.unwrap_or(0);
-                manage = manage.child(
+                root = root.child(card(
                     div()
                         .flex()
                         .flex_col()
-                        .gap_1()
-                        .p_2()
-                        .rounded_md()
-                        .bg(rgb(theme::PANEL))
-                        .border_1()
-                        .border_color(rgb(theme::BORDER))
                         .child(
                             div()
                                 .flex()
                                 .items_center()
-                                .gap_1()
-                                .child(icon("list-tree", 13.0, theme::ACCENT_TEXT))
-                                .child(div().text_xs().text_color(rgb(theme::ACCENT_TEXT)).child(format!("Index summary · {nodes} nodes"))),
+                                .gap(px(8.0))
+                                .mb(px(12.0))
+                                .child(icon("list-tree", 14.0, theme::ACCENT_TEXT))
+                                .child(div().text_size(px(theme::TS_BODY)).font_weight(sb).text_color(rgb(theme::TEXT_PRIMARY)).child("Index summary"))
+                                .child(div().text_size(px(theme::TS_SMALL)).text_color(rgb(theme::TEXT_MUTED)).child(format!("· {nodes} nodes"))),
                         )
-                        .child(div().text_sm().text_color(rgb(theme::TEXT_SECONDARY)).child(summary)),
-                );
+                        .child(div().text_size(px(theme::TS_BODY)).line_height(px(22.0)).text_color(rgb(theme::TEXT_SECONDARY)).child(summary)),
+                ));
             }
-            root = root.child(manage);
         }
+
         root.into_any_element()
     }
 
-    /// A labeled icon button for the playback "Manage" actions (prune / re-transcribe).
-    pub(crate) fn mng_btn(
-        &self,
-        id: &'static str,
-        name: &'static str,
-        label: &'static str,
-        tint: u32,
-        bg: u32,
-        on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    ) -> impl IntoElement {
+    /// An 80–118px left-hand label for a playback row (Mic / Language), matching the field label.
+    fn pb_label(&self, text: &'static str) -> impl IntoElement {
         div()
-            .id(id)
-            .flex()
-            .items_center()
-            .gap_1()
-            .px_2()
-            .py_1()
-            .rounded_md()
-            .cursor_pointer()
-            .bg(rgb(bg))
-            .child(icon(name, 13.0, tint))
-            .child(div().text_xs().text_color(rgb(tint)).child(label))
-            .on_click(on_click)
+            .w(px(118.0))
+            .flex_none()
+            .text_size(px(theme::TS_BODY))
+            .text_color(rgb(theme::TEXT_MUTED))
+            .child(text)
     }
 
-    /// A small transport-control icon button.
-    pub(crate) fn pb_ctrl(
+    /// A Manage action button (design `.btnS`/`.btnD`/`.btnP` with a leading icon). When disabled it
+    /// renders dimmed + non-interactive (the kit's `icon_button` has no disabled state).
+    fn pb_action(
         &self,
-        id: &'static str,
-        name: &'static str,
+        icon_name: &'static str,
+        label: &'static str,
+        variant: ButtonVariant,
+        enabled: bool,
         on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    ) -> impl IntoElement {
+    ) -> gpui::AnyElement {
+        if enabled {
+            icon_button(icon_name, label, variant, on_click).into_any_element()
+        } else {
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(7.0))
+                .h(px(32.0))
+                .px(px(14.0))
+                .rounded(px(theme::RADIUS_SM))
+                .bg(rgb(theme::ELEVATED))
+                .text_size(px(theme::TS_BODY))
+                .font_weight(gpui::FontWeight(theme::FW_MEDIUM as f32))
+                .text_color(rgb(theme::TEXT_DISABLED))
+                .child(icon(icon_name, 15.0, theme::TEXT_DISABLED))
+                .child(label.to_string())
+                .into_any_element()
+        }
+    }
+
+    /// A non-interactive in-flight indicator (re-transcribe / index), tinted to `color`.
+    fn pb_progress(&self, icon_name: &'static str, label: &str, color: u32) -> impl IntoElement {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(7.0))
+            .h(px(32.0))
+            .px(px(11.0))
+            .text_size(px(theme::TS_SMALL))
+            .text_color(rgb(color))
+            .child(icon(icon_name, 14.0, color))
+            .child(label.to_string())
+    }
+
+    /// A Manage status chip (screenshots / audio) — bordered, dimmed when the artifact is gone.
+    fn pb_status_chip(&self, icon_name: &'static str, label: &'static str, ok: bool) -> impl IntoElement {
+        let fg = if ok { theme::TEXT_SECONDARY } else { theme::TEXT_DISABLED };
+        div()
+            .flex()
+            .items_center()
+            .gap(px(7.0))
+            .px(px(11.0))
+            .py(px(6.0))
+            .rounded(px(theme::RADIUS_SM))
+            .bg(rgb(if ok { theme::CHIP_IDLE } else { theme::ELEVATED }))
+            .border_1()
+            .border_color(rgb(theme::BORDER))
+            .text_size(px(theme::TS_BODY))
+            .text_color(rgb(fg))
+            .child(icon(icon_name, 13.0, if ok { theme::SUCCESS } else { theme::TEXT_DISABLED }))
+            .child(label)
+    }
+
+    /// A ghost transport-control icon button (skip / rewind / fast-forward).
+    fn pb_ghost(&self, id: &'static str, name: &'static str, on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> impl IntoElement {
         div()
             .id(id)
             .flex()
             .items_center()
             .justify_center()
-            .w(px(36.0))
-            .h(px(28.0))
-            .rounded_md()
+            .p(px(6.0))
+            .rounded(px(4.0))
             .cursor_pointer()
-            .bg(rgb(theme::CHIP_IDLE))
-            .child(icon(name, 14.0, theme::TEXT_SECONDARY))
+            .hover(|s| s.bg(rgba(theme::GHOST_HOVER)))
+            .child(icon(name, 17.0, theme::TEXT_SECONDARY))
             .on_click(on_click)
     }
 

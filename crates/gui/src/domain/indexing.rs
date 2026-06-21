@@ -15,10 +15,10 @@ impl CaptureApp {
     pub(crate) fn start_index_status_poll(&self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| loop {
             Timer::after(Duration::from_millis(8000)).await;
-            let Ok(url) = this.update(cx, |v, _| v.index_chat_url()) else { break };
+            let Ok((url, model)) = this.update(cx, |v, _| (v.index_chat_url(), v.index_model.clone())) else { break };
             let status = cx
                 .background_executor()
-                .spawn(async move { daemon::discover().and_then(|d| d.index_status(&url).ok()) })
+                .spawn(async move { daemon::discover().and_then(|d| d.index_status(&url, &model).ok()) })
                 .await;
             if this
                 .update(cx, |v, cx| {
@@ -309,12 +309,13 @@ impl CaptureApp {
     pub(crate) fn probe_index_status(&mut self, cx: &mut Context<Self>) {
         self.save_settings();
         let url = self.index_chat_url();
+        let model = self.index_model.clone();
         self.message = "checking index endpoint…".into();
         cx.notify();
         cx.spawn(async move |this, cx| {
             let status = cx
                 .background_executor()
-                .spawn(async move { daemon::discover().and_then(|d| d.index_status(&url).ok()) })
+                .spawn(async move { daemon::discover().and_then(|d| d.index_status(&url, &model).ok()) })
                 .await;
             let _ = this.update(cx, |v, cx| {
                 if let Some(s) = status {

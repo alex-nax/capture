@@ -365,12 +365,18 @@ impl Daemon {
     }
 
     /// Whether indexing is available against `url` (configured + a reachable preflight).
-    pub fn index_status(&self, url: &str) -> Result<IndexStatus, String> {
+    pub fn index_status(&self, url: &str, model: &str) -> Result<IndexStatus, String> {
         let mut req = Self::agent()
             .get(&format!("{}/v1/index/status", self.endpoint))
             .set("Authorization", &self.auth());
         if !url.trim().is_empty() {
             req = req.query("url", url.trim());
+        }
+        // Pass the MODEL too: the daemon remembers (url, model) as `last_index` for LIVE indexing
+        // (#84). Without it the live worker falls back to "local", which most servers reject — so the
+        // auto-index silently produces nothing even though the endpoint is reachable.
+        if !model.trim().is_empty() {
+            req = req.query("model", model.trim());
         }
         req.call().map_err(|e| e.to_string())?.into_json().map_err(|e| e.to_string())
     }
