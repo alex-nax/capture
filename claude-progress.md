@@ -1,5 +1,35 @@
 # Progress Log
 
+## Session 68 — 2026-06-22
+**Agent**: builder (**Windows box**, branch **v3-windows**) — the last #66 piece: the **v3 all-Rust
+Windows installer**, plus syncing v3 and clearing the box for a clean-room install.
+- **Synced v3**: merged `origin/v3` into `v3-windows` (the 2 new GUI commits #84 live-indexing + #75
+  playback redesign) — clean merge, only `crates/gui/**` touched, zero conflict with the platform/asr
+  Windows work. v3-windows = latest v3 + all Windows work.
+- **Uninstalled the stale v2 bundle** ("Capture 0.2.6", the PyInstaller Inno build): silent
+  `unins000.exe`, unregistered the `CaptureAgent` logon task, and wiped all user data
+  (`~/.capture` + `%LOCALAPPDATA%\Capture`) for a pristine clean room.
+- **Built the four v3 release binaries** green on Windows: `captured` (11.2 MB), `capture-gui`
+  (14.9 MB, gpui ~5 min), `capture-mcp` (4.5 MB) from the workspace, and the standalone tray agent
+  `Capture.exe` (2.4 MB) from `agent\windows`. Made the agent **its own workspace** (empty
+  `[workspace]` table) so it builds standalone (it sits under the repo-root workspace but isn't a
+  member). Headless smoke: `capture-gui --skill-status` runs; `captured.exe` serves `/v1/health`
+  (version 0.2.6, platform win32).
+- **Rewrote `packaging/build_windows.ps1` for v3** (dropped PyInstaller/venv/audiocap-helper): cargo
+  build the 3 workspace bins + the agent, stage the tree (4 exe + `captured\captured.exe` + `skill\`
+  from `skills/capture` + `register_logon_task.ps1`), optional signtool hook, Inno-compile. Flags
+  `-NoBuild`/`-StageOnly`/`-Version`. Refreshed `capture.iss` comments to the Rust tree (structure
+  unchanged — `recursesubdirs` Files + logon-task Run/UninstallRun are tree-agnostic).
+- **`CaptureSetup-0.2.6-x64.exe` (9.6 MB) built + clean-room verified end-to-end**: `/VERYSILENT`
+  install → full tree + `Capture 0.2.6` uninstall entry + `CaptureAgent` logon task; installed
+  `captured.exe` serves `/v1/health`; silent uninstall removes app dir + task + registry entry. Then
+  re-wiped user data so the box is pristine for the owner's own clean install.
+- Specs: `windows-release.md` §Public-contract + §Files + §2 updated to v3 (all-Rust, no freeze) with
+  a 2026-06-22 status note. features.json #66 carries the installer-landed note.
+- **NEXT**: owner runs the clean install + interactive verification (tray icon, GUI window, a real
+  window/audio capture — the Session-0 dev shell can't observe these); then **code signing** for Smart
+  App Control (#34 / windows-release.md §5) and **#85** updater hardening before non-prerelease packs.
+
 ## Session 67 — 2026-06-20
 **Agent**: builder (**Windows box**, branch **v3-windows** off **v3**) — closing the v3 **Windows** gaps,
 runtimes first (owner: CPU + CUDA packs; runtimes before the capture backend). This slice = the

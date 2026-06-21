@@ -9,6 +9,11 @@ description = "Capture — Windows system-tray agent (#36): persistent tray + da
 name = "Capture"
 path = "src/main.rs"
 
+# Self-contained: this crate sits under the repo root (which is a cargo workspace) but is deliberately
+# NOT a workspace member — an empty [workspace] table makes it its own workspace so `cargo build
+# --manifest-path agent/windows/Cargo.toml` works standalone (its own Cargo.lock + agent/windows/target).
+[workspace]
+
 [profile.release]
 opt-level = 2
 strip = true

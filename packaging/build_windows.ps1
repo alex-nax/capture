@@ -1,105 +1,95 @@
-<#
-.SYNOPSIS
-  Build the Capture Windows installer: cargo (GUI + tray agent + native audio helper) + a
-  PyInstaller-frozen daemon, staged and wrapped by Inno Setup into CaptureSetup-<ver>-x64.exe.
-  The Windows analogue of packaging/build_macos_dmg.sh. See docs/specs/windows-release.md.
+# build_windows.ps1 - build + stage + package the v3 (all-Rust) Capture installer for Windows.
+#
+# The parallel of build_macos_dmg.sh. Produces dist\CaptureSetup-<version>-x64.exe (per-user, no UAC).
+# v3 is a single cargo workspace: the daemon (captured), the GPUI window (capture-gui), and the MCP
+# server (capture-mcp) are workspace members; the tray agent (Capture.exe) is the standalone
+# agent\windows crate (its own workspace, parity with macOS CaptureBar being the bundle entry point).
+# NO PyInstaller, NO bundled ASR engine (#58): the ASR runtime arrives as a pack the daemon installs
+# on demand (see build_runtime_packs.ps1 / docs/specs/asr-runtimes.md).
+#
+# Usage (from the repo root):
+#   . .\packaging\win-build-env.ps1            # MSVC dev shell (once per shell)
+#   .\packaging\build_windows.ps1              # build everything + stage + compile the installer
+#   .\packaging\build_windows.ps1 -NoBuild     # re-stage + recompile using existing target\ binaries
+#   .\packaging\build_windows.ps1 -StageOnly   # stage the tree but skip the Inno compile
+#
+# Signing hook (optional): if CAPTURE_WIN_SIGN_THUMBPRINT is set, every staged .exe and the installer
+# are signtool-signed (see docs/specs/windows-release.md section 5). Unset = unsigned build.
 
-.DESCRIPTION
-  Output: dist\CaptureSetup-<version>-x64.exe  (dist\ is gitignored)
-
-  Env knobs:
-    CAPTURE_GUI_VERSION    bundle version (default 0.2.5)
-    CAPTURE_WIN_DEBUG=1    reuse/build DEBUG binaries (fast iteration) instead of release
-    CAPTURE_SKIP_FREEZE=1  reuse an existing daemon freeze (skip PyInstaller)
-    CAPTURE_SKIP_CARGO=1   reuse existing cargo binaries (skip cargo build)
-    CAPTURE_ISCC           path to ISCC.exe (else common winget/Program Files locations)
-    CAPTURE_WIN_SIGN_THUMBPRINT / CAPTURE_WIN_SIGN_CERT (+ _PASSWORD) / CAPTURE_WIN_SIGN_TIMESTAMP_URL
-                           if set, Authenticode-sign every .exe + the installer via signtool.
-
-  NOTE: CUDA runtime DLLs (nvidia-*-cu12) are NOT bundled - the frozen daemon does CPU faster-whisper
-  out of the box and uses CUDA only if the user installed the nvidia wheels (see asr.md).
-#>
 [CmdletBinding()]
-param()
-# NOTE: native tools (cargo, PyInstaller, ISCC) log to stderr; under 'Stop' PowerShell 5.1 turns
-# their first stderr line into a terminating error even on success. So keep 'Continue' and check
-# $LASTEXITCODE after each native call; cmdlets that must abort use -ErrorAction Stop.
-$ErrorActionPreference = "Continue"
+param(
+    [string]$Version,
+    [switch]$NoBuild,
+    [switch]$StageOnly
+)
 
-$ROOT = (Resolve-Path "$PSScriptRoot\..").Path
-$VERSION = if ($env:CAPTURE_GUI_VERSION) { $env:CAPTURE_GUI_VERSION } else { "0.2.6" }
-$PROFILE_ = if ($env:CAPTURE_WIN_DEBUG -eq "1") { "debug" } else { "release" }
-$TARGET = Join-Path $ROOT "gui\target"
-$BIN = Join-Path $TARGET $PROFILE_
-$DIST = Join-Path $ROOT "dist"
-$STAGE = Join-Path $DIST "Capture"
-$FREEZE = Join-Path $ROOT "packaging\build\dist\captured"
-$VENVPY = Join-Path $ROOT ".venv\Scripts\python.exe"
+# Native tools (cargo, ISCC) log to stderr; under 'Stop', PowerShell 5.1 turns their first stderr line
+# into a terminating error even on success. Keep 'Continue' and check $LASTEXITCODE after native calls;
+# cmdlets that must abort pass -ErrorAction Stop explicitly.
+$ErrorActionPreference = 'Continue'
+$repo = (Resolve-Path "$PSScriptRoot\..").Path
+$dist = Join-Path $repo 'dist'
+$stage = Join-Path $dist 'Capture'
 
-Write-Output "==> Capture Windows build  version=$VERSION  profile=$PROFILE_"
-if (-not (Test-Path $VENVPY)) { throw "missing venv python: $VENVPY (run init.ps1)" }
+# --- version: explicit -Version wins, else CAPTURE_GUI_VERSION, else the gui crate's Cargo.toml ---
+if (-not $Version) { $Version = $env:CAPTURE_GUI_VERSION }
+if (-not $Version) {
+    $line = Select-String -Path (Join-Path $repo 'crates\gui\Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"' |
+        Select-Object -First 1
+    if ($line) { $Version = $line.Matches[0].Groups[1].Value }
+}
+if (-not $Version) { throw "could not determine version (pass -Version or set CAPTURE_GUI_VERSION)" }
+Write-Output "==> building Capture $Version (Windows x64)"
 
-# Build into the GUI's target dir so already-built (Smart-App-Control-cleared) build-script
-# artifacts are reused - fresh build-script probes get blocked by SAC on this box.
-$env:CARGO_TARGET_DIR = $TARGET
-$relFlag = if ($PROFILE_ -eq "release") { "--release" } else { $null }
-
-if ($env:CAPTURE_SKIP_CARGO -ne "1") {
-    Write-Output "==> cargo build ($PROFILE_): GUI + tray agent + native audio helper (gpui release is heavy)..."
-    foreach ($mani in @("gui\Cargo.toml", "agent\windows\Cargo.toml", "helper\audiocap_win_rs\Cargo.toml")) {
-        $args = @("build", "--manifest-path", (Join-Path $ROOT $mani))
-        if ($relFlag) { $args += $relFlag }
-        & cargo @args
-        if ($LASTEXITCODE -ne 0) { throw "cargo build failed for $mani" }
+# --- 1. build the four release binaries -------------------------------------------------------------
+function Invoke-Cargo([string]$cargoArgs, [string]$log) {
+    # cmd /c keeps cargo's stderr as plain text (no PowerShell ErrorRecord wrapping).
+    $env:CARGO_TERM_COLOR = 'never'
+    cmd /c "cargo $cargoArgs > `"$log`" 2>&1"
+    if ($LASTEXITCODE -ne 0) {
+        Get-Content $log -Tail 30 | Write-Output
+        throw "cargo $cargoArgs failed (exit $LASTEXITCODE); full log: $log"
     }
 }
-foreach ($b in @("capture-gui.exe", "Capture.exe", "audiocap_win.exe")) {
-    if (-not (Test-Path (Join-Path $BIN $b))) { throw "missing built binary: $BIN\$b" }
+
+New-Item -ItemType Directory -Force -Path $dist -ErrorAction Stop | Out-Null
+if (-not $NoBuild) {
+    Write-Output "==> cargo build --release (daemon + gui + mcp; gpui release is heavy, ~5 min)"
+    Invoke-Cargo "build --release -p capture-daemon -p capture-gui -p capture-mcp" (Join-Path $dist 'build-workspace.log')
+    Write-Output "==> cargo build --release (tray agent)"
+    Invoke-Cargo "build --release --manifest-path `"$repo\agent\windows\Cargo.toml`"" (Join-Path $dist 'build-agent.log')
 }
 
-# --- Freeze the daemon (PyInstaller onedir) --------------------------------------
-# LEAN by default (#58): NO ASR engine bundled — the user installs a runtime pack later
-# (docs/specs/asr-runtimes.md). Keeps huggingface_hub (model downloads) + the runtime activator.
-# Excludes faster-whisper/ctranslate2/mlx; the engine arrives via a pack on sys.path.
-if ($env:CAPTURE_SKIP_FREEZE -eq "1" -and (Test-Path (Join-Path $FREEZE "captured.exe"))) {
-    Write-Output "==> CAPTURE_SKIP_FREEZE=1 - reusing freeze at $FREEZE"
-} else {
-    Write-Output "==> Freezing the daemon (PyInstaller onedir; LEAN - no ASR engine bundled)..."
-    & $VENVPY -m PyInstaller --noconfirm --onedir --name captured `
-        --distpath (Join-Path $ROOT "packaging\build\dist") `
-        --workpath (Join-Path $ROOT "packaging\build\work") `
-        --specpath (Join-Path $ROOT "packaging\build") `
-        --hidden-import capture_mcp.core.platform.windows `
-        --hidden-import capture_mcp.core.import_media `
-        --hidden-import capture_mcp.core.vision_client `
-        --hidden-import capture_mcp.core.indexer `
-        --hidden-import capture_mcp.core.frames `
-        --hidden-import capture_mcp.core.asr.whisper_local `
-        --hidden-import capture_mcp.core.asr.openai_compat `
-        --hidden-import capture_mcp.core.asr.runtimes `
-        --collect-all huggingface_hub `
-        --exclude-module faster_whisper --exclude-module ctranslate2 `
-        --exclude-module mlx --exclude-module mlx_whisper --exclude-module torch `
-        (Join-Path $ROOT "packaging\captured_main.py")
-    if ($LASTEXITCODE -ne 0) { throw "PyInstaller freeze failed" }
+# --- 2. stage the install tree (see docs/specs/windows-release.md Public contract) ------------------
+#   Capture\
+#     Capture.exe                 tray agent (entry point + logon task)
+#     capture-gui.exe             GPUI window (CAPTURE_AGENT=1)
+#     capture-mcp.exe             MCP stdio server (the capture tool surface)
+#     captured\captured.exe       Rust daemon (agent resolves it at sibling captured\captured.exe)
+#     skill\                      bundled capture skill (skill.rs reads skill\ beside the exe)
+#     register_logon_task.ps1     interactive logon-task registrar (run post-install)
+$wsRel = Join-Path $repo 'target\release'
+$agentRel = Join-Path $repo 'agent\windows\target\release'
+$srcMap = [ordered]@{
+    "$wsRel\capture-gui.exe" = "$stage\capture-gui.exe"
+    "$wsRel\capture-mcp.exe" = "$stage\capture-mcp.exe"
+    "$wsRel\captured.exe"    = "$stage\captured\captured.exe"
+    "$agentRel\Capture.exe"  = "$stage\Capture.exe"
 }
-if (-not (Test-Path (Join-Path $FREEZE "captured.exe"))) { throw "freeze missing: $FREEZE\captured.exe" }
 
-# --- Stage the install tree ------------------------------------------------------
-Write-Output "==> Staging install tree at $STAGE ..."
-if (Test-Path $STAGE) { Remove-Item -Recurse -Force $STAGE -ErrorAction Stop }
-New-Item -ItemType Directory -Force -Path $STAGE -ErrorAction Stop | Out-Null
-Copy-Item (Join-Path $BIN "Capture.exe")     (Join-Path $STAGE "Capture.exe") -ErrorAction Stop
-Copy-Item (Join-Path $BIN "capture-gui.exe") (Join-Path $STAGE "capture-gui.exe") -ErrorAction Stop
-Copy-Item -Recurse $FREEZE (Join-Path $STAGE "captured") -ErrorAction Stop
-Copy-Item (Join-Path $BIN "audiocap_win.exe") (Join-Path $STAGE "captured\audiocap_win.exe") -ErrorAction Stop
-Copy-Item (Join-Path $ROOT "packaging\register_logon_task.ps1") (Join-Path $STAGE "register_logon_task.ps1") -ErrorAction Stop
-New-Item -ItemType Directory -Force -Path (Join-Path $STAGE "skill") -ErrorAction Stop | Out-Null
-Copy-Item -Recurse -Force (Join-Path $ROOT "skills\capture\*") (Join-Path $STAGE "skill") -Exclude "__pycache__", "*.pyc" -ErrorAction Stop
+Write-Output "==> staging into $stage"
+if (Test-Path $stage) { Remove-Item $stage -Recurse -Force -ErrorAction Stop }
+New-Item -ItemType Directory -Force -Path $stage, "$stage\captured", "$stage\skill" -ErrorAction Stop | Out-Null
+foreach ($src in $srcMap.Keys) {
+    if (-not (Test-Path $src)) { throw "missing build artifact: $src (build first, or drop -NoBuild)" }
+    Copy-Item $src $srcMap[$src] -Force -ErrorAction Stop
+}
+# bundled skill: skills\capture\* -> skill\ (drop any Python bytecode cruft)
+Copy-Item (Join-Path $repo 'skills\capture\*') "$stage\skill" -Recurse -Force -Exclude '__pycache__', '*.pyc' -ErrorAction Stop
+# logon-task registrar
+Copy-Item (Join-Path $repo 'packaging\register_logon_task.ps1') "$stage\register_logon_task.ps1" -Force -ErrorAction Stop
 
-# --- Optional Authenticode signing (signtool hook) -------------------------------
-$signThumb = $env:CAPTURE_WIN_SIGN_THUMBPRINT
-$signCert = $env:CAPTURE_WIN_SIGN_CERT
+# --- 3. optional code signing (signtool hook) ------------------------------------------------------
 function Find-SignTool {
     $c = Get-Command signtool.exe -ErrorAction SilentlyContinue
     if ($c) { return $c.Source }
@@ -109,45 +99,46 @@ function Find-SignTool {
     return $null
 }
 function Invoke-Sign($path) {
-    if (-not ($signThumb -or $signCert)) { return }
+    if (-not $env:CAPTURE_WIN_SIGN_THUMBPRINT) { return }
     $st = Find-SignTool
     if (-not $st) { Write-Warning "signtool not found - leaving $path unsigned"; return }
-    $ts = if ($env:CAPTURE_WIN_SIGN_TIMESTAMP_URL) { $env:CAPTURE_WIN_SIGN_TIMESTAMP_URL } else { "http://timestamp.digicert.com" }
-    if ($signThumb) {
-        & $st sign /fd sha256 /tr $ts /td sha256 /sha1 $signThumb $path
-    } else {
-        & $st sign /fd sha256 /tr $ts /td sha256 /f $signCert /p $env:CAPTURE_WIN_SIGN_PASSWORD $path
-    }
+    $ts = if ($env:CAPTURE_WIN_SIGN_TIMESTAMP_URL) { $env:CAPTURE_WIN_SIGN_TIMESTAMP_URL } else { 'http://timestamp.digicert.com' }
+    & $st sign /fd sha256 /tr $ts /td sha256 /sha1 $env:CAPTURE_WIN_SIGN_THUMBPRINT $path
+    if ($LASTEXITCODE -ne 0) { throw "signtool failed on $path" }
 }
-if ($signThumb -or $signCert) {
-    Write-Output "==> Signing staged binaries (signtool)..."
-    Get-ChildItem -Recurse $STAGE -Include *.exe, *.dll | ForEach-Object { Invoke-Sign $_.FullName }
+if ($env:CAPTURE_WIN_SIGN_THUMBPRINT) {
+    Write-Output "==> signing staged binaries (thumbprint $($env:CAPTURE_WIN_SIGN_THUMBPRINT))"
+    Get-ChildItem $stage -Recurse -Include *.exe, *.dll | ForEach-Object { Invoke-Sign $_.FullName }
 } else {
-    Write-Output "==> (unsigned build - set CAPTURE_WIN_SIGN_THUMBPRINT/_CERT to Authenticode-sign; SmartScreen will warn)"
+    Write-Output "==> unsigned build (set CAPTURE_WIN_SIGN_THUMBPRINT to Authenticode-sign; SmartScreen will warn once)"
 }
 
-# --- Compile the installer (Inno Setup) ------------------------------------------
-$ISCC = $env:CAPTURE_ISCC
-if (-not $ISCC) {
-    foreach ($p in @(
-            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
-            "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
-            "C:\Program Files\Inno Setup 6\ISCC.exe")) {
-        if (Test-Path $p) { $ISCC = $p; break }
-    }
+if ($StageOnly) {
+    Write-Output "==> staged at $stage (skipping installer compile per -StageOnly)"
+    return
 }
-if (-not $ISCC) { throw "ISCC.exe not found - install Inno Setup (winget install JRSoftware.InnoSetup) or set CAPTURE_ISCC" }
 
-Write-Output "==> Compiling installer with $ISCC ..."
-& $ISCC "/DMyAppVersion=$VERSION" "/DStageDir=$STAGE" "/DOutDir=$DIST" (Join-Path $ROOT "packaging\capture.iss")
-if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+# --- 4. compile the Inno Setup installer -----------------------------------------------------------
+$iscc = $env:CAPTURE_ISCC
+if (-not $iscc) {
+    $iscc = @(
+        "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
+        "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+        "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+}
+if (-not $iscc) { throw "ISCC.exe not found - install Inno Setup 6 (winget install JRSoftware.InnoSetup) or set CAPTURE_ISCC" }
 
-$installer = Join-Path $DIST "CaptureSetup-$VERSION-x64.exe"
-if (-not (Test-Path $installer)) { throw "installer not produced: $installer" }
-Invoke-Sign $installer
+Write-Output "==> compiling installer with $iscc"
+& $iscc "/DMyAppVersion=$Version" "/DStageDir=$stage" "/DOutDir=$dist" (Join-Path $repo 'packaging\capture.iss')
+if ($LASTEXITCODE -ne 0) { throw "ISCC failed (exit $LASTEXITCODE)" }
 
-$size = "{0:N1} MB" -f ((Get-Item $installer).Length / 1MB)
-Write-Output "==> Done: $installer ($size)"
-if (-not ($signThumb -or $signCert)) {
+$out = Join-Path $dist "CaptureSetup-$Version-x64.exe"
+if (-not (Test-Path $out)) { throw "installer not produced: $out" }
+Invoke-Sign $out
+
+Write-Output ""
+Write-Output "==> DONE: $out  ($([math]::Round((Get-Item $out).Length/1MB,1)) MB)"
+if (-not $env:CAPTURE_WIN_SIGN_THUMBPRINT) {
     Write-Output "    Unsigned - first run shows a SmartScreen warning (More info -> Run anyway). Captures never trigger it."
 }

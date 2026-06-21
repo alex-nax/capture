@@ -3,10 +3,11 @@
 ; Driven by packaging/build_windows.ps1, which stages the install tree and passes the
 ; version/paths via /D defines. See docs/specs/windows-release.md.
 ;
-; Stage tree (StageDir) laid out by build_windows.ps1:
+; Stage tree (StageDir) laid out by build_windows.ps1 (v3, all-Rust):
 ;   Capture.exe                  the tray agent (entry point + logon task)
 ;   capture-gui.exe              the GPUI window (CAPTURE_AGENT=1)
-;   captured\captured.exe        PyInstaller-frozen daemon (+ audiocap_win.exe beside it)
+;   capture-mcp.exe              the MCP stdio server (the capture tool surface)
+;   captured\captured.exe        the Rust daemon (WASAPI/GDI in-process; no PyInstaller, no helper exe)
 ;   skill\                       the bundled capture skill
 ;   register_logon_task.ps1      logon-task registrar (run post-install)
 
