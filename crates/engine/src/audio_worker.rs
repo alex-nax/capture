@@ -68,46 +68,30 @@ pub(crate) fn audio_worker(w: AudioWorker) {
     let mut txt = open(&txt_name);
 
     let threshold = silence_rms16();
-    let mut local: Vec<i16> = Vec::new();
     let mut rate = TARGET_SAMPLE_RATE;
-    let mut samples_out: u64 = 0; // total 16 kHz samples handed downstream (for offsets)
+    let mut tx16: Vec<f32> = Vec::new(); // resampled 16 kHz samples awaiting transcription
+    let mut transcribed: u64 = 0; // 16 kHz samples already transcribed (the offset base)
     let mut epoch: Option<f64> = None;
+    let chunk16 = (w.chunk_seconds * TARGET_SAMPLE_RATE as f64) as usize; // transcription window, in 16 kHz samples
 
-    let mut process = |chunk: &[i16], rate: u32, samples_out: &mut u64, epoch: f64| {
-        // Resample to 16 kHz (identity when already 16 kHz, e.g. app audio).
-        let f32_src: Vec<f32> = chunk.iter().map(|&s| s as f32 / 32768.0).collect();
-        let pcm16 = if rate == TARGET_SAMPLE_RATE {
-            f32_src
-        } else {
-            resample_linear(&f32_src, rate, TARGET_SAMPLE_RATE)
-        };
-        let n_out = pcm16.len();
-        if n_out == 0 {
-            return;
-        }
-        if let Some(f) = raw.as_mut() {
-            let mut bytes = Vec::with_capacity(n_out * BYTES_PER_SAMPLE);
-            for &s in &pcm16 {
-                bytes.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
-            }
-            let _ = f.write_all(&bytes);
-        }
-        let chunk_offset = *samples_out as f64 / TARGET_SAMPLE_RATE as f64;
-        *samples_out += n_out as u64;
-
+    // Transcribe one 16 kHz window: silence-gate, ASR, then append + emit each segment. `offset` is the
+    // window's start (seconds) on the 16 kHz timeline; segment stamps are `epoch + offset + seg`. ASR
+    // wants a full chunk (≥~24 s) to avoid short-chunk hallucination — that's why TRANSCRIPTION is
+    // windowed even though the raw audio is written continuously below.
+    let mut transcribe = |pcm16: &[f32], offset: f64, epoch: f64| {
         let Ok(ref be) = backend else { return };
-        if is_silent(&pcm16, threshold) {
-            return; // offset already advanced — the timeline still holds
+        if is_silent(pcm16, threshold) {
+            return; // the caller still advances the offset, so the timeline holds through silence
         }
-        match be.transcribe(&pcm16, TARGET_SAMPLE_RATE) {
+        match be.transcribe(pcm16, TARGET_SAMPLE_RATE) {
             Ok(segments) => {
                 for seg in segments {
-                    let start = iso(Some(epoch + chunk_offset + seg.start));
-                    let end = iso(Some(epoch + chunk_offset + seg.end));
+                    let start = iso(Some(epoch + offset + seg.start));
+                    let end = iso(Some(epoch + offset + seg.end));
                     let rec = json!({
                         "start": start, "end": end,
-                        "start_offset": round3(chunk_offset + seg.start),
-                        "end_offset": round3(chunk_offset + seg.end),
+                        "start_offset": round3(offset + seg.start),
+                        "end_offset": round3(offset + seg.end),
                         "text": seg.text,
                     });
                     if let Some(f) = jsonl.as_mut() {
@@ -116,12 +100,12 @@ pub(crate) fn audio_worker(w: AudioWorker) {
                     if let Some(f) = txt.as_mut() {
                         let _ = writeln!(f, "[{start}] {}", seg.text);
                     }
-                    let seg = if w.track == "audio" {
+                    let counter = if w.track == "audio" {
                         &w.counters.transcript_segments
                     } else {
                         &w.counters.mic_segments
                     };
-                    let n = seg.fetch_add(1, Ordering::Relaxed) + 1;
+                    let n = counter.fetch_add(1, Ordering::Relaxed) + 1;
                     let mut ev = rec.clone();
                     if let Value::Object(ref mut m) = ev {
                         m.insert("type".into(), json!("transcript_segment"));
@@ -140,33 +124,56 @@ pub(crate) fn audio_worker(w: AudioWorker) {
 
     loop {
         let stopping = w.stop.load(Ordering::Relaxed);
-        {
+        // Drain the SCK hand-off buffer.
+        let batch: Vec<i16> = {
             let mut b = w.shared.lock().unwrap();
-            if !b.0.is_empty() {
-                if epoch.is_none() {
-                    epoch = Some(now());
-                }
-                local.append(&mut b.0);
+            if !b.0.is_empty() && epoch.is_none() {
+                epoch = Some(now());
             }
             if b.1 != 0 {
                 rate = b.1;
             }
-        }
+            std::mem::take(&mut b.0)
+        };
         let ep = epoch.unwrap_or(w.t0);
-        let chunk_src = (w.chunk_seconds * rate as f64) as usize;
-        while chunk_src > 0 && local.len() >= chunk_src {
-            let chunk: Vec<i16> = local.drain(..chunk_src).collect();
-            process(&chunk, rate, &mut samples_out, ep);
+        // Resample to 16 kHz and write the raw PCM in REAL TIME — each ~0.1 s drain, not batched into the
+        // transcription window. So audio.s16le tracks the capture live (the scrubber/observability follow
+        // it) and a crash/stall loses ~0.1 s instead of up to a whole chunk. The same samples accumulate
+        // for transcription below.
+        if !batch.is_empty() {
+            let f32_src: Vec<f32> = batch.iter().map(|&s| s as f32 / 32768.0).collect();
+            let pcm16 = if rate == TARGET_SAMPLE_RATE {
+                f32_src
+            } else {
+                resample_linear(&f32_src, rate, TARGET_SAMPLE_RATE)
+            };
+            if let Some(f) = raw.as_mut() {
+                let mut bytes = Vec::with_capacity(pcm16.len() * BYTES_PER_SAMPLE);
+                for &s in &pcm16 {
+                    bytes.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+                }
+                let _ = f.write_all(&bytes);
+            }
+            tx16.extend_from_slice(&pcm16);
+        }
+        // Transcribe whenever a full `chunk_seconds` window of 16 kHz audio is available.
+        while chunk16 > 0 && tx16.len() >= chunk16 {
+            let chunk: Vec<f32> = tx16.drain(..chunk16).collect();
+            let offset = transcribed as f64 / TARGET_SAMPLE_RATE as f64;
+            transcribe(&chunk, offset, ep);
+            transcribed += chunk16 as u64;
         }
         if stopping {
-            // Final tail (>= 0.1 s of audio), mirroring MIN_TAIL_BYTES.
-            let min_tail = (0.1 * rate as f64) as usize;
-            if local.len() >= min_tail {
-                process(&local, rate, &mut samples_out, ep);
+            // Final tail (>= 0.1 s), mirroring MIN_TAIL_BYTES.
+            let min_tail = (0.1 * TARGET_SAMPLE_RATE as f64) as usize;
+            if tx16.len() >= min_tail {
+                let offset = transcribed as f64 / TARGET_SAMPLE_RATE as f64;
+                transcribe(&tx16, offset, ep);
             }
             break;
         }
         sleep_interruptible(0.1, &w.stop);
     }
-    // `process` (holding &mut on the files) is dropped here; the files then close on scope exit.
+    // `transcribe` (holding &mut on the transcript files) is dropped here; the files (incl. raw) then
+    // close on scope exit.
 }
