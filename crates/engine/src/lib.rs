@@ -10,7 +10,7 @@
 //! Import is a follow-up.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -115,6 +115,11 @@ pub struct CaptureSession {
     // running seamlessly. Mirrors the Python's two AudioCapture tracks, but from ONE stream.
     main_buf: Arc<Mutex<(Vec<i16>, u32)>>,
     mic_buf: Arc<Mutex<(Vec<i16>, u32)>>,
+    // Last time (epoch millis) each output delivered audio — stamped by its sink. The audio watchdog
+    // (#86) compares against `now()` to detect a SILENTLY stalled SCStream and rebuild it; the buffers
+    // persist across the rebuild so the workers keep draining.
+    main_last_audio: Arc<AtomicU64>,
+    mic_last_audio: Arc<AtomicU64>,
     stop_flag: Arc<AtomicBool>,
     // The session's events.jsonl writer (the lifecycle log). `None` until `start()` opens it.
     events: Mutex<Option<Arc<EventsLog>>>,
@@ -136,6 +141,8 @@ impl CaptureSession {
             mic: Arc::new(Mutex::new(("off".into(), "off".into()))),
             main_buf: Arc::new(Mutex::new((Vec::new(), TARGET_SAMPLE_RATE))),
             mic_buf: Arc::new(Mutex::new((Vec::new(), TARGET_SAMPLE_RATE))),
+            main_last_audio: Arc::new(AtomicU64::new(0)),
+            mic_last_audio: Arc::new(AtomicU64::new(0)),
             stop_flag: Arc::new(AtomicBool::new(false)),
             events: Mutex::new(None),
             inner: Mutex::new(Inner {
@@ -252,7 +259,15 @@ impl CaptureSession {
         // Build the ONE dual SCStream (app + mic) feeding the worker buffers.
         if self.config.capture_audio || self.config.audio_source == "mic" {
             match self.build_audio_stream() {
-                Ok(cap) => self.inner.lock().unwrap().audio_capture = Some(cap),
+                Ok(cap) => {
+                    // Start the delivery clocks NOW so the watchdog gives the fresh stream a grace
+                    // window before checking for a stall.
+                    let nowms = (now() * 1000.0) as u64;
+                    self.main_last_audio.store(nowms, Ordering::Relaxed);
+                    self.mic_last_audio.store(nowms, Ordering::Relaxed);
+                    self.inner.lock().unwrap().audio_capture = Some(cap);
+                    self.spawn_audio_watchdog(); // self-heal a silently stalled SCStream (#86)
+                }
                 Err(e) => {
                     *self.audio.lock().unwrap() = ("none".into(), format!("audio-start-failed: {e}"));
                     self.inner.lock().unwrap().notes.push(format!("audio: {e}"));
@@ -539,8 +554,11 @@ impl CaptureSession {
 
         // Route each output to its buffer: Audio → main_buf; Microphone → main_buf if it's the main
         // track (source=mic), else the separate mic_buf.
-        let on_audio = sink_into(self.main_buf.clone());
-        let on_mic = sink_into(if source_is_mic { self.main_buf.clone() } else { self.mic_buf.clone() });
+        let on_audio = sink_into(self.main_buf.clone(), self.main_last_audio.clone());
+        let on_mic = sink_into(
+            if source_is_mic { self.main_buf.clone() } else { self.mic_buf.clone() },
+            if source_is_mic { self.main_last_audio.clone() } else { self.mic_last_audio.clone() },
+        );
 
         capture_platform::start_audio_capture_dual(
             app_target.as_ref(),
@@ -548,6 +566,75 @@ impl CaptureSession {
             on_audio,
             on_mic,
         )
+    }
+
+    /// Audio watchdog (#86): a macOS audio SCStream can SILENTLY stop delivering sample buffers (no
+    /// error), which starves the ASR worker and freezes the live transcript. Every couple of seconds,
+    /// check whether each ACTIVE output has gone quiet longer than a live stream ever would; if so,
+    /// rebuild the dual stream (the worker buffers persist, so transcription resumes) and note it. The
+    /// stalled stream is dropped FIRST — macOS won't run two concurrent audio streams in a process.
+    /// Exits on `stop_flag`; rebuilds are rate-limited so a persistently-failing endpoint can't spin.
+    fn spawn_audio_watchdog(self: &Arc<Self>) {
+        const STALL_SECS: f64 = 8.0;
+        let sess = self.clone();
+        let stop = self.stop_flag.clone();
+        std::thread::Builder::new()
+            .name("audio-watchdog".into())
+            .spawn(move || {
+                let mut last_rebuild_ms: u64 = 0;
+                loop {
+                    sleep_interruptible(2.0, &stop);
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let now_ms = (now() * 1000.0) as u64;
+                    let app_active = sess.config.capture_audio && sess.config.audio_source != "mic";
+                    let mic_active =
+                        sess.config.audio_source == "mic" || sess.inner.lock().unwrap().mic_device.is_some();
+                    let stale = |last: &AtomicU64| {
+                        now_ms.saturating_sub(last.load(Ordering::Relaxed)) as f64 / 1000.0 > STALL_SECS
+                    };
+                    let main_stale = app_active && stale(&sess.main_last_audio);
+                    let mic_stale = mic_active && stale(&sess.mic_last_audio);
+                    if !(main_stale || mic_stale) {
+                        continue;
+                    }
+                    // At most one rebuild per stall window, so a dead endpoint can't spin.
+                    if now_ms.saturating_sub(last_rebuild_ms) as f64 / 1000.0 < STALL_SECS {
+                        continue;
+                    }
+                    last_rebuild_ms = now_ms;
+                    // Drop the stalled stream BEFORE building the replacement (no two concurrent streams).
+                    {
+                        let mut inner = sess.inner.lock().unwrap();
+                        if stop.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        inner.audio_capture = None;
+                    }
+                    match sess.build_audio_stream() {
+                        Ok(cap) => {
+                            let which = if main_stale { "app audio" } else { "mic" };
+                            {
+                                let mut inner = sess.inner.lock().unwrap();
+                                if stop.load(Ordering::Relaxed) {
+                                    drop(cap);
+                                    break;
+                                }
+                                inner.audio_capture = Some(cap);
+                                inner.notes.push(format!("audio reconnected ({which} stream had stalled)"));
+                            }
+                            let nowms = (now() * 1000.0) as u64;
+                            sess.main_last_audio.store(nowms, Ordering::Relaxed);
+                            sess.mic_last_audio.store(nowms, Ordering::Relaxed);
+                            (sess.emit)(json!({ "type": "audio_reconnect", "session_id": sess.id, "track": which }));
+                        }
+                        // The old stream is already gone; the next tick retries the rebuild.
+                        Err(e) => eprintln!("captured: audio watchdog rebuild failed: {e}"),
+                    }
+                }
+            })
+            .expect("spawn audio watchdog");
     }
 
     // -- reporting -----------------------------------------------------------

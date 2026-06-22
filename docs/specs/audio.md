@@ -92,6 +92,15 @@ silent and behaves exactly as before. See [events.md](events.md).
 - Platform: the source command is OS-specific and selected by `platform.current().audio_source` (macOS: ScreenCaptureKit helper / avfoundation; Windows: ffmpeg dshow, with per-app WASAPI loopback still TODO). The chunking/ASR/transcript logic in this scope is OS-neutral. macOS arm64 venv is required for mlx-whisper (the ASR side).
 
 ## Failure modes & handling
+- **Silent audio-stream stall → watchdog reconnect (v3, #86).** A macOS audio SCStream can silently stop
+  delivering sample buffers mid-capture (no error, not even `-3805`), starving the ASR worker and
+  freezing the live transcript while screenshots keep flowing. Each audio sink stamps a per-output
+  last-delivery time (`main_last_audio` / `mic_last_audio`); a per-session `audio-watchdog` thread checks
+  every ~2 s and, when an ACTIVE output has been quiet >8 s (a live stream delivers continuous buffers
+  even during silence, so a gap == a stall), rebuilds the dual SCStream via `build_audio_stream` —
+  reusing the persistent worker buffers so transcription resumes seamlessly. The stalled stream is
+  dropped FIRST (macOS won't run two concurrent audio streams in a process); rebuilds are rate-limited to
+  one per stall window; emits an `audio_reconnect` event + a session note.
 - No source available (no helper, or `source="app"` unsatisfiable): `status = "no-audio-source"`, no files/process created (`audio.py`).
 - File-open or Popen failure during `start()`: `status = "audio-start-failed: <exception>"`; proc torn down, files closed; `start()` returns (`audio.py:111-116`).
 - ASR backend fails to load: `_asr = None`, capture continues; `status = "running (asr-unavailable: <err>)"`; transcripts will have no segments but `audio.s16le` is still written (`audio.py:90-95, 122`).

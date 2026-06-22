@@ -1,7 +1,7 @@
 //! The audio → ASR worker (runs on its own thread) plus the SCK-callback sink that feeds it.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
@@ -13,9 +13,11 @@ use crate::helpers::{round3, sleep_interruptible, BYTES_PER_SAMPLE};
 use crate::{Counters, EventSink};
 
 /// An [`capture_platform::AudioCallback`] that appends each sample batch (+ its rate) into `buf` — the
-/// lock-free hand-off from the SCK callback thread to a worker.
-pub(crate) fn sink_into(buf: Arc<Mutex<(Vec<i16>, u32)>>) -> capture_platform::AudioCallback {
+/// lock-free hand-off from the SCK callback thread to a worker — and stamps `last` (epoch millis) with
+/// the delivery time so the audio watchdog can tell a live stream from one that has silently stalled.
+pub(crate) fn sink_into(buf: Arc<Mutex<(Vec<i16>, u32)>>, last: Arc<AtomicU64>) -> capture_platform::AudioCallback {
     Box::new(move |batch: &[i16], hz: u32| {
+        last.store((now() * 1000.0) as u64, Ordering::Relaxed);
         let mut b = buf.lock().unwrap();
         b.1 = hz;
         b.0.extend_from_slice(batch);

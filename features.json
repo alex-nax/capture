@@ -1187,6 +1187,16 @@
         81
       ],
       "description": "Harden the in-app updater against non-app release tags. `gui/src/update.rs::check()` reads GitHub `/releases/latest` and runs `parse_semver(tag_name)`; with runtime PACKS (#81) now published as releases tagged `pack-<id>-v<semver>`, a pack release that is NOT a prerelease would become GitHub's `latest`, `parse_semver` would fail on the `pack-...` tag, `check()` would return None, and the app would silently STOP offering real app updates (a downgrade/suppression hazard). Currently mitigated only by a WORKAROUND \u2014 publishing packs as prereleases so `/releases/latest` (newest non-prerelease) skips them. Real fix: make the updater app-tag-aware \u2014 iterate `/releases` (like the daemon's resolve_pack_url) and pick the newest release whose tag matches the APP version namespace (`v<semver>`, explicitly excluding `pack-*` and any future tag prefixes) AND carries an OS-matching asset (.dmg / CaptureSetup*.exe), instead of trusting `/releases/latest`. Then pack releases can be normal (non-prerelease) without affecting app updates; the prerelease workaround becomes belt-and-suspenders. Keep existing installed apps working (server-side tags are the lever they already consume). Owner decision 2026-06-19."
+    },
+    {
+      "id": 86,
+      "category": "capture",
+      "priority": "high",
+      "passes": true,
+      "dependencies": [
+        65
+      ],
+      "description": "Audio-stream stall watchdog + auto-reconnect. A macOS audio SCStream can SILENTLY stop delivering sample buffers (no error, no -3805 in the log) mid-capture; v3's audio stream (start_audio_capture_dual) had no delegate and no reconnect, so the first stall was permanent — the ASR worker starved and the live transcript froze while screenshots kept flowing (observed 2026-06-22 on a live capture: audio.s16le frozen at 90s, mic.s16le at 33s, audio_status a stale 'running'). The v2 Swift helper auto-reconnected through these interruptions; the Rust port dropped that. FIX (capture-engine): each audio sink stamps a per-output last-delivery epoch (main_last_audio / mic_last_audio); a per-session 'audio-watchdog' thread checks every ~2s whether an ACTIVE output has been quiet >8s (a live stream delivers continuous buffers even during silence, so a gap == a stall) and, if so, rebuilds the dual SCStream via build_audio_stream — reusing the persistent worker buffers so transcription resumes seamlessly. The stalled stream is dropped FIRST (macOS won't run two concurrent audio streams in a process); rebuilds are rate-limited to one per stall window so a persistently-failing endpoint can't spin; emits an `audio_reconnect` SSE event + a session note. Surfaced 2026-06-22."
     }
   ]
 }
