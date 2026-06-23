@@ -1,5 +1,161 @@
 # Progress Log
 
+## Session 68 — 2026-06-22
+**Agent**: builder (**Windows box**, branch **v3-windows**) — the last #66 piece: the **v3 all-Rust
+Windows installer**, plus syncing v3 and clearing the box for a clean-room install.
+- **Synced v3**: merged `origin/v3` into `v3-windows` (the 2 new GUI commits #84 live-indexing + #75
+  playback redesign) — clean merge, only `crates/gui/**` touched, zero conflict with the platform/asr
+  Windows work. v3-windows = latest v3 + all Windows work.
+- **Uninstalled the stale v2 bundle** ("Capture 0.2.6", the PyInstaller Inno build): silent
+  `unins000.exe`, unregistered the `CaptureAgent` logon task, and wiped all user data
+  (`~/.capture` + `%LOCALAPPDATA%\Capture`) for a pristine clean room.
+- **Built the four v3 release binaries** green on Windows: `captured` (11.2 MB), `capture-gui`
+  (14.9 MB, gpui ~5 min), `capture-mcp` (4.5 MB) from the workspace, and the standalone tray agent
+  `Capture.exe` (2.4 MB) from `agent\windows`. Made the agent **its own workspace** (empty
+  `[workspace]` table) so it builds standalone (it sits under the repo-root workspace but isn't a
+  member). Headless smoke: `capture-gui --skill-status` runs; `captured.exe` serves `/v1/health`
+  (version 0.2.6, platform win32).
+- **Rewrote `packaging/build_windows.ps1` for v3** (dropped PyInstaller/venv/audiocap-helper): cargo
+  build the 3 workspace bins + the agent, stage the tree (4 exe + `captured\captured.exe` + `skill\`
+  from `skills/capture` + `register_logon_task.ps1`), optional signtool hook, Inno-compile. Flags
+  `-NoBuild`/`-StageOnly`/`-Version`. Refreshed `capture.iss` comments to the Rust tree (structure
+  unchanged — `recursesubdirs` Files + logon-task Run/UninstallRun are tree-agnostic).
+- **`CaptureSetup-0.2.6-x64.exe` (9.6 MB) built + clean-room verified end-to-end**: `/VERYSILENT`
+  install → full tree + `Capture 0.2.6` uninstall entry + `CaptureAgent` logon task; installed
+  `captured.exe` serves `/v1/health`; silent uninstall removes app dir + task + registry entry. Then
+  re-wiped user data so the box is pristine for the owner's own clean install.
+- Specs: `windows-release.md` §Public-contract + §Files + §2 updated to v3 (all-Rust, no freeze) with
+  a 2026-06-22 status note. features.json #66 carries the installer-landed note.
+- **NEXT**: owner runs the clean install + interactive verification (tray icon, GUI window, a real
+  window/audio capture — the Session-0 dev shell can't observe these); then **code signing** for Smart
+  App Control (#34 / windows-release.md §5) and **#85** updater hardening before non-prerelease packs.
+
+### First-interactive-run fixes (same session, 2026-06-22)
+Owner installed + ran it and reported: empty ASR runtime list, "maybe it just crashes", and the GUI
+window persists after quitting the tray. Diagnosed + fixed two real bugs (the runtime data path itself
+is provably correct — added `crates/core/tests/asr_runtimes_parse.rs`: the live daemon payload
+deserializes into `v1::AsrRuntimes` = 3 runtimes, and a faithful ureq repro returned 3 live):
+- **Daemon crash in Windows audio device enumeration** (the empty-list root cause). `propvariant_to_string`
+  read the `PROPVARIANT` union pointer at offset 8 with **no `vt` check** and walked it **unbounded**.
+  In Session 0 there are 0 mics so the per-device loop never ran — unit tests passed. On the owner's box
+  with real mics, a non-`VT_LPWSTR` FriendlyName dereferenced a non-pointer member → **segfault → the
+  whole daemon died** → every subsequent GUI poll found nothing → `d.available()` false → ALL data
+  (incl. runtimes) blanked. Fix: check `vt == VT_LPWSTR` before the deref + bound the wide walk to 32k
+  (`crates/platform/src/windows_audio.rs`).
+- **Tray ownership / teardown** (agent #36). The agent now creates a **kill-on-close job object** and
+  assigns the daemon + GUI to it (they die with the agent however it exits — no orphaned daemon + stale
+  `daemon.json`, which is exactly what wedged the single-instance daemon and blocked restarts), and
+  **Quit (`shutdown_all`) tears down BOTH children** instead of leaving the GUI open + only stopping an
+  idle daemon. `agent/windows` gained `Win32_System_JobObjects/_Security/_System_Threading`.
+- Rebuilt `CaptureSetup-0.2.6-x64.exe` (8.7 MB) with both fixes. Specs updated (agent-windows.md
+  lifecycle section; features.json #66). **Owner to reinstall + retest** (the audio-enum fix can only
+  be confirmed with real devices present — the dev shell has none).
+
+### The real "GUI can't see the daemon" bug — HOME vs USERPROFILE (same session, 2026-06-22)
+After reinstalling the above, the owner reported the app/tray/GUI couldn't see the daemon at all — even a
+separately-run daemon. Root cause: a **home-dir resolution mismatch**. The daemon/core/asr/mcp/engine
+resolved `~/.capture` via `std::env::var_os("HOME")` with a `.`-cwd fallback, while the **GUI + tray
+agent use `dirs::home_dir()` == `%USERPROFILE%`** (which ignores `$HOME`). `$HOME` is set in a Git/dev
+shell — so **every headless test passed** — but is **unset when launched from Explorer/Start Menu/the
+tray**, so the daemon fell back to the cwd and wrote `daemon.json` **into the install dir** (proven:
+`...\Programs\Capture\.capture\daemon.json`) while the GUI/agent looked in `%USERPROFILE%\.capture` and
+never found it. Fixed all 7 resolvers to prefer `%USERPROFILE%` on Windows (daemon/lib.rs,
+core/sessions.rs, asr/config.rs, asr/runtime.rs, mcp/client.rs, engine/helpers.rs `expand`,
+daemon/routes/sessions.rs `expand_tilde`). **Verified headlessly**: with `HOME` removed from the env and
+a foreign cwd, the daemon writes `daemon.json` to `%USERPROFILE%\.capture` and serves discoverable
+`/v1/health`; no stray cwd `.capture`. Rebuilt the installer (8.6 MB). This was the actual blocker; the
+crash + tray-ownership fixes above stand. **Lesson:** never trust `$HOME` on Windows — it's a shell-ism;
+match `dirs::home_dir()`/`%USERPROFILE%`, and test from a non-shell launch.
+
+## Session 67 — 2026-06-20
+**Agent**: builder (**Windows box**, branch **v3-windows** off **v3**) — closing the v3 **Windows** gaps,
+runtimes first (owner: CPU + CUDA packs; runtimes before the capture backend). This slice = the
+**whisper-cpu runtime pack** building + verified end-to-end on Windows.
+- **Toolchain bring-up** (the v3 Rust workspace had never been built on Windows). Installed the missing
+  native build deps via winget: **LLVM** (`libclang.dll` for `whisper-rs-sys` bindgen) + **Ninja** (VS
+  2026 is **v18** and the bundled cmake 3.31 has no "Visual Studio 18 2026" generator, so whisper.cpp
+  builds with `CMAKE_GENERATOR=Ninja`). MSVC = VS Community 2026. Captured all of this in a reusable
+  **`packaging/win-build-env.ps1`** (dot-source before `cargo build`).
+- **Whole non-macOS workspace builds release-clean** on Windows (`captured`, `capture-mcp`,
+  `capture-asr-whisper`, core/index/asr + the `capture-platform` **stubs**) — confirms the cfg-gated
+  Windows-side compiles (the #66 platform backend is still stubs returning "not supported yet").
+- **whisper-cpu engine cdylib builds** → `capture_asr_whisper.dll` (1.3 MB release). Proven with the
+  `capture-asr --example transcribe` runner: dlopen'd the dll, loaded `ggml-tiny.en`, transcribed a real
+  19.6 s clip in **0.26 s (74.6× realtime)**.
+- **Pack-build tooling** = **`packaging/build_runtime_packs.ps1`** (rewrote the dead v2 pip-zip script for
+  the v3 Rust cdylib model): `-Id whisper-cpu|whisper-cuda|all` → `dist\packs\whisper-cpu-windows-x86_64.dll`
+  (CPU) / `…-cuda-…tar.gz` (CUDA, cdylib + cuBLAS/cudart DLLs). The Windows sibling of
+  `scripts/build_asr_pack.sh`.
+- **VERIFIED the #81 pack contract end-to-end via the real daemon** (isolated temp dirs so the empty
+  `CAPTURE_ASR_ENGINE_DIR` forces the pack path, not the legacy bundled-engine fallback): engine-less
+  daemon → `whisper-cpu installed:false` → `POST /v1/asr/runtimes/install {id:whisper-cpu, source:<local
+  .dll>}` → copies to `~/.capture/runtimes/whisper-cpu/capture_asr_whisper.dll`, `installed:true,
+  active:true` → set model `tiny.en` → `GET /v1/asr/backend` `available:true, engine:whisper.cpp,
+  device:cpu, error:null`. Clean `/v1/admin/shutdown`.
+- Specs: `asr-runtimes.md` gained a **"Windows packs (v3)"** section + corrected the (now Rust) pack-build
+  tooling note. features.json #81 + #58 carry the Windows-CPU progress.
+
+### whisper-cuda pack (same session)
+- Installed the **CUDA 13.3** toolkit (winget). Note CUDA 13's runtime DLLs moved to `bin\x64` (not `bin`)
+  — `win-build-env.ps1` + the pack builder handle both. whisper.cpp (whisper-rs 0.16) compiles cleanly
+  against CUDA 13.3.
+- Code: a **`cuda` cargo feature** on `capture-asr-whisper` (`whisper-rs/cuda`); a **`whisper-cuda`**
+  registry entry on Windows (NVIDIA-first); **archive (`.tar.gz`) pack install** in the daemon
+  (`crates/daemon`: `flate2`+`tar`) — download → `.incoming` staging → **promote with the engine dylib
+  moved last** (so `installed` only flips when complete; interruption leaves the live dir untouched); and a
+  Windows **DLL-search fix** in `capture-asr`'s `DynamicEngine` (`LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR`) so the
+  pack's sibling cuBLAS/cudart DLLs resolve. +3 daemon unit tests (archive classify + single-file + archive
+  promote/cleanup); all daemon tests green.
+- **GPU-VERIFIED end-to-end**: `capture_asr_whisper.dll` (CUDA, 27 MB) + the pack (391 MB `.tar.gz` =
+  cdylib + cublas64/cublasLt64/cudart64) → daemon install from a local source (staging-promote confirmed:
+  engine never appeared before its siblings) → transcribe from the installed location on the **RTX 4070 Ti
+  SUPER** (`use gpu=1`, `using CUDA0 backend`, **~205× realtime** vs ~75× CPU).
+- **Published both packs as GitHub PRE-releases** (owner: prerelease until the updater is hardened, #85 —
+  prereleases are excluded from `/releases/latest` so they won't hijack the app updater):
+  `pack-whisper-cpu-v0.1.0` (.dll) + `pack-whisper-cuda-v0.1.0` (391 MB .tar.gz). VERIFIED the daemon
+  installs `whisper-cpu` straight from the GitHub prerelease (`resolve_pack_url` → download in ~1 s,
+  `.version` sidecar = 0.1.0). **Runtimes phase complete.**
+
+### #66 Windows capture backend — slice A: window enumeration (same session)
+- `crates/platform` now builds **windows-rs 0.61** in the workspace. New `crates/platform/src/windows.rs`:
+  `list_windows` via `EnumWindows` (visible / non-tool-window / non-DWM-cloaked / titled / non-zero-size
+  filter; pid + app-name-from-`QueryFullProcessImageNameW` + title + size; largest-first) — a faithful
+  port of the v2 `Win32WindowFinder`. Wired into `lib.rs` behind `cfg(target_os="windows")`; the other
+  backends (screenshots/audio/devices) still fall back to the shared stubs.
+- Tests: the filter logic is extracted to a pure `should_include(...)` + unit-tested env-independently; a
+  created-window integration test exercises the full `EnumWindows`→filter→map path but **skips on a
+  non-interactive desktop**. All 7 platform tests green. Manual runner: `cargo run -p capture-platform
+  --example windows_list`.
+- **Environment caveat (important):** the dev/agent shell runs in **Windows Session 0** (a service
+  session with no interactive desktop) — `EnumWindows` returns 0 there and even a window we create reports
+  `IsWindowVisible=false`. So window listing, screenshots, and per-app audio **cannot be observed
+  headless from the agent shell**; they must be verified by running the app interactively (or via the
+  daemon in the user's session). The logic is unit-tested + ported from production-proven v2 code.
+### #66 slices B–D (same session) — screenshots + audio + wiring
+- **B (screenshots):** `capture_screenshot` via GDI — `PrintWindow(PW_RENDERFULLCONTENT)` for a window,
+  `BitBlt` for the primary display, `GetDIBits` top-down 32bpp → BGRA→RGBA → the shared `encode_image`.
+  Verified: full-screen capture produces a decodable PNG even in Session 0 (a virtual display exists);
+  window capture is the same pipeline (live-verified later).
+- **C (audio):** new `crates/platform/src/windows_audio.rs` — WASAPI **per-process loopback** (folds in
+  `helper/audiocap_win_rs`: `ActivateAudioInterfaceAsync` + `PROCESS_LOOPBACK`, requesting 16 kHz mono
+  s16le directly), **mic** capture (shared-mode at the device mix format → mono i16, `source_rate`=mix
+  rate so the session loop resamples), `start_audio_capture` + `_dual` (concurrent threads, joined on
+  stop/drop), and `audio_input_devices` (`IMMDeviceEnumerator` + `PKEY_Device_FriendlyName`). Pure PCM
+  conversion (float/PCM downmix, clamp) unit-tested. 11 platform tests green.
+- **D (wiring):** the engine session loop already calls `capture_platform::{list_windows,
+  capture_screenshot,start_audio_capture_dual}` **unconditionally** (no macOS gating), so the Windows
+  backends light it up by construction; `cargo build -p capture-daemon` is clean (engine+platform
+  integrated). windows-rs notes: `BOOL`/`TRUE` → `windows::core::BOOL`; `PrintWindow`/`PRINT_WINDOW_FLAGS`
+  live under `Storage::Xps`; `GetWindowDC` under `Graphics::Gdi`; `CreateEventW` needs `Win32_Security`;
+  `WAVEFORMATEX` is packed → read fields via `addr_of!`+`read_unaligned`.
+- **Capture core (A–D) is implemented.** Audio + device + window enumeration **cannot be observed from
+  the Session-0 dev shell** (0 devices/0 windows; only screen capture works via the virtual display) — so
+  the end-to-end "captures real pixels/audio" confirmation is the owner's interactive run.
+- **Next**: the **single-`.exe` + WiX/Inno installer** (the remaining #66 packaging piece); `#85` updater
+  hardening (so the pack pre-releases never hijack `/releases/latest`).
+
+---
+
 ## Session 66 — 2026-06-17
 **Agent**: builder (**Windows box**, branch **windows-support**) — **cross-platform in-app auto-update**
 (Phase 5 updater) + push, ahead of cutting a release.

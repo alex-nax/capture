@@ -9,6 +9,13 @@ distribution. Source of truth = the code; this
 spec marks **[current]/[done]** vs **[planned]** per section. (`features.json` #34, with the tray agent
 #36 in [agent-windows.md](agent-windows.md).)_
 
+_**v3 update (2026-06-22):** the app is now a single all-Rust cargo workspace. `build_windows.ps1` was
+rewritten to drop PyInstaller — it `cargo build`s the daemon/GUI/MCP + the tray agent and Inno-packs
+them. The installer (`CaptureSetup-0.2.6-x64.exe`, 9.6 MB) was rebuilt and **clean-room verified**
+(silent install → tree + logon task + `/v1/health` → silent uninstall, all green). The §2/§Public-
+contract details below are updated to v3; the §5 SAC/signing analysis and §6 auto-update flow are
+unchanged and still apply._
+
 ## Purpose
 
 Take capture-mcp from "the engine runs on Windows" to a **shippable Windows product**: a packaged
@@ -46,12 +53,18 @@ mile**: packaging, installer, signing/SmartScreen, daemon lifecycle, and auto-up
 - `agent/windows/` (Rust) → `Capture.exe` — the native tray agent (#36; landed + verified 2026-06-17),
   and `packaging/register_logon_task.ps1` — interactive logon-task registration. See
   [agent-windows.md](agent-windows.md).
-- `packaging/captured_main.py` — the PyInstaller entry (shared; calls `multiprocessing.freeze_support()`).
-- `packaging/build_windows.ps1` — the parallel of `build_macos_dmg.sh` (**landed + verified 2026-06-17**):
-  builds GUI + agent + native helper, PyInstaller-freezes the daemon, stages the install tree,
-  (optionally) signs, and compiles the Inno Setup script → `dist/CaptureSetup-<v>-x64.exe`.
-- `packaging/capture.iss` — Inno Setup script (**landed**): per-user install, Start-Menu/desktop
-  shortcuts, logon-task registration, uninstall + cleanup.
+- `packaging/build_windows.ps1` — the parallel of `build_macos_dmg.sh`. **v3 rewrite (2026-06-22):**
+  `cargo build --release` the three workspace binaries (`captured`, `capture-gui`, `capture-mcp`) +
+  the standalone tray agent (`agent\windows` → `Capture.exe`), stage the install tree (§Public
+  contract), (optionally) `signtool`-sign, and compile the Inno Setup script →
+  `dist/CaptureSetup-<v>-x64.exe`. **No PyInstaller freeze** (the v2 `captured_main.py` entry and the
+  `--collect-all huggingface_hub` / `--exclude faster_whisper` freeze are gone). Flags: `-NoBuild`
+  (re-stage from existing `target\`), `-StageOnly` (skip the Inno compile), `-Version`.
+- `packaging/win-build-env.ps1` — dot-source to enter the MSVC dev shell (+ libclang/ninja/CUDA for
+  the ASR pack builds) before `cargo build`.
+- `packaging/capture.iss` — Inno Setup script: per-user install to `%LOCALAPPDATA%\Programs\Capture`,
+  Start-Menu/desktop shortcuts, logon-task registration, uninstall + cleanup. Unchanged shape across
+  v2→v3 (the `[Files]` `recursesubdirs` copy + logon-task `[Run]`/`[UninstallRun]` are tree-agnostic).
 
 **[planned]**
 - `packaging/winget/` — winget manifest referencing the GitHub-release `.exe`.
@@ -67,14 +80,17 @@ mile**: packaging, installer, signing/SmartScreen, daemon lifecycle, and auto-up
   Capture\
     Capture.exe            ← tray agent, the install's entry point + logon task (agent-windows.md)
     capture-gui.exe        ← the GPUI window, launched on demand (CAPTURE_AGENT=1)
-    captured\captured.exe  ← PyInstaller-frozen daemon
-    captured\audiocap_win* ← Windows audio helper beside the daemon (engine resolves it relatively)
+    capture-mcp.exe        ← the MCP stdio server (the capture tool surface; configured into agents)
+    captured\captured.exe  ← the Rust daemon (v3; was a PyInstaller freeze in v2)
     skill\                 ← the bundled capture skill
-    icons\                 ← tray .ico assets (idle / recording)
   ```
-  This mirrors the macOS `Capture.app/Contents/{MacOS,Resources}` layout. The agent/GUI discover the
-  bundled daemon relative to their own exe (`current_exe().parent()` → `captured\captured.exe`);
-  `CAPTURE_DAEMON_BIN` overrides for dev.
+  **v3 (all-Rust) note:** the daemon is now a native `cargo`-built `captured.exe` — no PyInstaller
+  `_internal\` tree, and **no `audiocap_win*` helper** (WASAPI per-process loopback + GDI screenshots
+  are in-process in `capture-platform`, see [platform-abstraction.md](platform-abstraction.md)). The
+  ASR engine is never bundled (#58): the daemon installs a runtime pack on demand
+  ([asr-runtimes.md](asr-runtimes.md)). This mirrors the macOS `Capture.app/Contents/{MacOS,Resources}`
+  layout. The agent/GUI discover the bundled daemon relative to their own exe (`current_exe().parent()`
+  → `captured\captured.exe`); `CAPTURE_DAEMON_BIN` overrides for dev.
 - **GitHub Release carries BOTH OS assets under ONE tag:** `Capture-<v>.dmg` (macOS) and
   `CaptureSetup-<v>-x64.exe` (Windows). Auto-update selects by OS (see *Behavior §6*). The `.exe`
   asset is **load-bearing** for Windows auto-update, exactly as the `.dmg` is for macOS.
@@ -107,30 +123,32 @@ Already correct (no change): `audio.py` spawns the audio helper with `creationfl
 `util.descendant_pids` guards on `os.name` (POSIX `ps` only); `Path.home()/".capture"` resolves to
 `C:\Users\<user>\.capture` (works; idiomatic `%APPDATA%` is an open item).
 
-### 2. Packaging / freeze [done 2026-06-17]
+### 2. Packaging [v2 PyInstaller done 2026-06-17; **v3 all-Rust rewrite done + verified 2026-06-22**]
 
-`packaging/build_windows.ps1` (parallel to `build_macos_dmg.sh`):
-1. `cargo build --release` the GUI (`gui/`) → `capture-gui.exe`.
-2. `cargo build --release` the tray agent (`agent/windows/`) → `Capture.exe`.
-3. PyInstaller **onedir** freeze of `packaging/captured_main.py` → `captured\captured.exe`, **LEAN
-   (#58): NO ASR engine bundled** — Windows hidden-imports (`platform.windows`, `asr.whisper_local`,
-   `asr.openai_compat`, `asr.runtimes`, `indexer`, `frames`, `vision_client`, `import_media`),
-   `--collect-all huggingface_hub` (model downloads), and **`--exclude-module faster_whisper`/
-   `ctranslate2`/`mlx`**. The engine arrives later as a **runtime pack** the user installs (see
-   [asr-runtimes.md](asr-runtimes.md); built by `packaging/build_runtime_packs.ps1`). `freeze_support()`
-   in `captured_main.py` is required (multiprocessing).
-4. `cargo build --release` the native audio helper (`helper/audiocap_win_rs/`) → `audiocap_win.exe`;
-   copy it **and** `helper/audiocap_win.py` (fallback) beside the frozen daemon; bundle the `skill/`;
-   embed a `.ico` + an application manifest; assemble the install tree (§Public contract).
-5. **(optional) sign** every `.exe`/`.dll` (§5) if `CAPTURE_WIN_SIGN_*` is set.
-6. Compile `packaging/capture.iss` (Inno Setup) → `dist/CaptureSetup-<v>-x64.exe`; sign the installer.
-7. Best-effort ASR self-test (`captured.exe --asr-selftest`), non-fatal (like macOS).
+`packaging/build_windows.ps1` (parallel to `build_macos_dmg.sh`), v3:
+1. `cargo build --release -p capture-daemon -p capture-gui -p capture-mcp` (the workspace binaries
+   → `target\release\{captured,capture-gui,capture-mcp}.exe`). gpui release is ~5 min.
+2. `cargo build --release --manifest-path agent\windows\Cargo.toml` (the standalone tray agent →
+   `agent\windows\target\release\Capture.exe`). It is its own workspace (empty `[workspace]` table)
+   so it builds without being a member of the root workspace.
+3. Stage the install tree (§Public contract): the four `.exe` + `captured\captured.exe` + the bundled
+   `skills\capture\*` → `skill\` + `register_logon_task.ps1`. **No PyInstaller freeze, no
+   `audiocap_win*` helper, no `_internal\` tree** — the daemon is a single native exe and the audio /
+   screenshot backends are in-process.
+4. **(optional) sign** every staged `.exe` (§5) if `CAPTURE_WIN_SIGN_THUMBPRINT` is set.
+5. Compile `packaging/capture.iss` (Inno Setup) → `dist/CaptureSetup-<v>-x64.exe`; sign the installer.
 
-**No ASR engine is frozen in (#58).** The installer ships lean; the user installs a **runtime pack**
-matching their hardware (CPU / NVIDIA-CUDA / remote; AMD later) — see [asr-runtimes.md](asr-runtimes.md).
-Packs are built by `packaging/build_runtime_packs.ps1` and **hosted as GitHub release assets**; the
-daemon downloads + activates one (the keystone — a frozen daemon loading an external pack — is
-validated). No silent CPU fallback. (This supersedes the earlier "bundle faster-whisper" plan.)
+**No ASR engine is bundled (#58).** The installer ships lean (**9.6 MB** for v0.2.6); the user installs
+a **runtime pack** matching their hardware (CPU / NVIDIA-CUDA / remote; AMD later) — see
+[asr-runtimes.md](asr-runtimes.md). Packs are built by `packaging/build_runtime_packs.ps1` and
+**hosted as GitHub release assets** (published as pre-releases until the updater is hardened, #85); the
+daemon downloads + activates one. No silent CPU fallback.
+
+**Verified 2026-06-22 (clean-room round-trip on the Windows box):** the four binaries build green,
+`build_windows.ps1` stages + compiles `CaptureSetup-0.2.6-x64.exe`, a `/VERYSILENT` install lays out
+the full tree + the `Capture 0.2.6` uninstall entry + the `CaptureAgent` logon task, the installed
+`captured.exe` serves `/v1/health` (`version=0.2.6, platform=win32`), and the silent uninstall removes
+the app dir, the logon task, and the registry entry cleanly.
 
 ### 3. Installer — Inno Setup [done 2026-06-17]
 

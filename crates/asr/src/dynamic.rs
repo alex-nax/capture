@@ -50,7 +50,7 @@ impl DynamicEngine {
     /// carries a clear message (missing symbol, ABI mismatch, or the engine's own load error).
     pub fn load(dylib: &Path, model_ref: &str, language: Option<&str>) -> Result<DynamicEngine, String> {
         unsafe {
-            let lib = Library::new(dylib).map_err(|e| format!("dlopen {}: {e}", dylib.display()))?;
+            let lib = open_library(dylib).map_err(|e| format!("dlopen {}: {e}", dylib.display()))?;
 
             let missing = |sym: &str, e: libloading::Error| format!("engine missing `{sym}`: {e}");
             let abi: Symbol<AbiVersionFn> = lib
@@ -147,6 +147,23 @@ impl Drop for DynamicEngine {
             unsafe { (self.free)(handle) };
         }
     }
+}
+
+/// Open the engine cdylib. On Windows, load with `LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
+/// LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` so the engine's own directory is searched for ITS dependencies —
+/// the `whisper-cuda` pack ships the cuBLAS/cudart DLLs beside `capture_asr_whisper.dll`, and Windows
+/// would otherwise not look there for a loaded DLL's imports. Other platforms use the default loader
+/// (a `.dylib`/`.so` resolves its rpath-relative deps fine).
+#[cfg(windows)]
+unsafe fn open_library(dylib: &Path) -> Result<Library, libloading::Error> {
+    use libloading::os::windows::{Library as WinLibrary, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR};
+    let flags = LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR;
+    WinLibrary::load_with_flags(dylib, flags).map(Library::from)
+}
+
+#[cfg(not(windows))]
+unsafe fn open_library(dylib: &Path) -> Result<Library, libloading::Error> {
+    Library::new(dylib)
 }
 
 /// A *const c_char → owned String (NULL → None, invalid UTF-8 → None). Copies immediately so a

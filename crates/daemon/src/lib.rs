@@ -112,8 +112,16 @@ impl IntoResponse for ApiError {
 
 // ── Discovery (daemon.json) ───────────────────────────────────────────────────────────────────
 
-/// `$HOME`, falling back to `.` so callers never panic (mirrors `sessions::home`).
+/// The user's home dir. **Windows: `%USERPROFILE%`** (matching the GUI/agent's `dirs::home_dir()`):
+/// `$HOME` is unset when the app is launched from Explorer/Start Menu/the tray (only a shell sets it),
+/// and the old `$HOME`-then-`.` fallback then wrote `~/.capture` — including **daemon.json** — into the
+/// process cwd, so the GUI/agent never discovered the running daemon. Falls back to `.` so callers
+/// never panic. (mirrors `sessions::home`.)
 fn home() -> PathBuf {
+    #[cfg(windows)]
+    if let Some(p) = std::env::var_os("USERPROFILE") {
+        return PathBuf::from(p);
+    }
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))

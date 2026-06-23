@@ -28,9 +28,44 @@ daemon** as **#81**. Landed in this slice (code + tests):
 - **Staged un-bundling**: `build_macos_dmg.sh` gained `CAPTURE_BUNDLE_ENGINE` (default `1`, transitional —
   the app still ships whisper-metal so it transcribes out of the box). Set `=0` to ship engine-less.
 
-**Remaining for #81:** the owner **publishes the first pack** (`pack-whisper-metal-v…`) to GitHub, then
-flips `CAPTURE_BUNDLE_ENGINE=0`; then the **onboarding CTA (#83)** drives the download. Pack **auto-update**
-(re-fetch when a newer `pack-<id>` release appears) reuses `resolve_pack_url` + the `.version` sidecar.
+### Windows packs (v3, #81 — 2026-06-20)
+
+The Windows runtime is the dlopen'd `capture_asr_whisper.dll` (the same C ABI / `DynamicEngine` seam as
+macOS), built and shipped per the same `pack-<id>-v<semver>` GitHub-release mechanism — `resolve_pack_url`
+already matches `windows`/`x86_64`/`.dll`/`.tar.gz` assets, no daemon change needed for CPU.
+
+- **Registry (`crates/asr/src/runtime.rs`):** non-macOS targets list **`whisper-cpu`** (`device:"cpu"`),
+  and on Windows additionally **`whisper-cuda`** (`device:"cuda"`, NVIDIA) — new entries, no mechanism
+  change. Both use `engine_stem:"whisper"` → `capture_asr_whisper.dll`; each pack installs into its own
+  `~/.capture/runtimes/<id>/` so the CPU and CUDA DLLs never collide.
+- **Build env (`packaging/win-build-env.ps1`):** dot-source before `cargo build` — sets up MSVC
+  (cl/link), **libclang** (`whisper-rs-sys` bindgen) and **ninja** (`CMAKE_GENERATOR=Ninja`, because VS
+  2026 is v18 and the bundled cmake has no "Visual Studio 18 2026" generator). One-time prereqs via
+  winget: VS 2026 C++ workload, `LLVM.LLVM`, `Ninja-build.Ninja`.
+- **Pack-build tooling (`packaging/build_runtime_packs.ps1`):** the Windows sibling of
+  `scripts/build_asr_pack.sh` — `-Id whisper-cpu|whisper-cuda|all`. CPU → a single
+  `dist\packs\whisper-cpu-windows-x86_64.dll`. CUDA → an archive
+  `dist\packs\whisper-cuda-windows-x86_64.tar.gz` (the cdylib + the cuBLAS/cudart runtime DLLs), since the
+  CUDA backend links those dynamically. Prints the `gh release create pack-<id>-vX.Y.Z` command.
+- **Engine build (`crates/asr-whisper`):** default features = CPU whisper.cpp. A `cuda` cargo feature
+  enables `whisper-rs/cuda` for the CUDA pack (needs the CUDA toolkit / `nvcc`).
+- **Archive packs:** a `.tar.gz` pack (CUDA, multi-DLL) is downloaded + extracted into a `.incoming`
+  staging dir, then **promoted** into `~/.capture/runtimes/<id>/` with the engine dylib moved **last** —
+  so `installed` (which keys off the engine dylib) only flips true once every sibling DLL is in place,
+  and an interrupted install leaves the live pack dir untouched (no "installed-but-broken" state).
+  Single-`.dll` packs (CPU/Metal) stream straight to the engine path.
+
+**VERIFIED on the Windows box (2026-06-20):** `whisper-cpu` (single `.dll`) and `whisper-cuda` (391 MB
+`.tar.gz` = cdylib + cuBLAS/cudart) both build, install through `POST /v1/asr/runtimes/install` from a
+local source, and transcribe a real clip — CPU at ~75× realtime, **CUDA on the RTX 4070 Ti SUPER at ~205×
+realtime** (`use gpu = 1`, `using CUDA0 backend`). The CUDA engine's sibling DLLs resolve via the Windows
+`LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` load flag (`capture-asr`'s `DynamicEngine`). Built with CUDA 13.3 +
+whisper.cpp (whisper-rs 0.16).
+
+**Remaining for #81:** the owner **publishes the packs** (`pack-whisper-metal-v…`, `pack-whisper-cpu-v…`,
+`pack-whisper-cuda-v…`) to GitHub, then flips `CAPTURE_BUNDLE_ENGINE=0`; then the **onboarding CTA (#83)**
+drives the download. Pack **auto-update** (re-fetch when a newer `pack-<id>` release appears) reuses
+`resolve_pack_url` + the `.version` sidecar.
 
 ## Purpose
 
@@ -65,8 +100,9 @@ This replaces the earlier "bundle faster-whisper + auto-detect" approach. Decisi
   `POST /v1/asr/runtimes/install` (background + SSE), `POST /v1/asr/runtime`, `GET /v1/asr/backend`.
 - `whisper_local.FasterWhisper` — device from the active runtime; **no silent fallback** (raises +
   records `runtimes.last_error()`).
-- `packaging/build_runtime_packs.ps1` — builds each local runtime's pack (`pip install --target` for the
-  daemon's Python tag, zipped to `dist/runtime-<id>-<pytag>.zip`).
+- `packaging/build_runtime_packs.ps1` — **(v3, repurposed)** builds the Windows whisper.cpp **cdylib**
+  packs (`whisper-cpu` → a single `.dll`; `whisper-cuda` → a `.tar.gz` with the cuBLAS/cudart DLLs). The
+  v2 `pip install --target` zip approach is retired with the Python daemon. See "Windows packs (v3)" above.
 - `packaging/build_windows.ps1` — freezes the daemon **lean** by default (no engine bundled).
 - `gui/` — the runtime picker (Settings → Voice recognition): lists runtimes (GPU hint) → Install
   (`POST /install`, SSE progress) → Use (`POST /v1/asr/runtime`) → the runtime-aware model picker.

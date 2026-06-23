@@ -121,7 +121,7 @@ struct PackInstallTask {
 /// `asr_runtime_install` progress then `asr_runtime_install_done`/`_error`; clear the in-flight guard.
 fn run_pack_install(t: PackInstallTask) {
     let PackInstallTask { events, guard, guard_key, id, url, dest, version } = t;
-    let result = stream_to_file(&url, &dest, |done, total| {
+    let result = install_pack(&url, &dest, |done, total| {
         let frac = if total > 0 { done as f64 / total as f64 } else { 0.0 };
         let _ = events.send(
             json!({
@@ -354,6 +354,70 @@ fn download_to(
 /// success), calling `on_progress(downloaded, total)` at ≥1% steps + a final 100% tick. Shared by the
 /// model + runtime-pack downloads. The `.part` keeps a partial/aborted download from masquerading as a
 /// complete file. A local source path is copied (used for dev / an explicit pack `source`).
+/// Whether a pack source is a (multi-file) archive vs a single engine cdylib. The `whisper-cuda` pack is
+/// a `.tar.gz` (the cdylib + the cuBLAS/cudart DLLs); CPU/Metal packs are a single `.dylib`/`.dll`/`.so`.
+fn is_archive(url: &str) -> bool {
+    let u = url.to_lowercase();
+    u.ends_with(".tar.gz") || u.ends_with(".tgz")
+}
+
+/// Install a runtime pack into its dir. A single-cdylib pack streams straight to `dest` (the engine
+/// dylib path); an **archive** pack (CUDA: the cdylib + cuBLAS/cudart DLLs) downloads + extracts into a
+/// `.incoming` staging dir, then **promotes** the files into `runtimes/<id>/` with the engine dylib
+/// moved LAST — so `installed` (which keys off the engine dylib) only flips true once every sibling DLL
+/// is already in place, and an interrupted install leaves the pack dir untouched (no "installed but
+/// broken" state). Errors if the archive didn't yield the expected engine dylib.
+fn install_pack(url: &str, dest: &Path, on_progress: impl FnMut(u64, u64)) -> Result<(), String> {
+    if !is_archive(url) {
+        return stream_to_file(url, dest, on_progress);
+    }
+    let dir = dest.parent().ok_or_else(|| "pack dest has no parent dir".to_string())?;
+    let engine_name = dest
+        .file_name()
+        .ok_or_else(|| "pack dest has no filename".to_string())?
+        .to_os_string();
+    std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+
+    // Stage download + extract under `.incoming` so a partial install never touches the live pack dir.
+    let staging = dir.join(".incoming");
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging).map_err(|e| format!("create {}: {e}", staging.display()))?;
+    let archive = staging.join("pack.tar.gz");
+    let extracted = stream_to_file(url, &archive, on_progress).and_then(|()| extract_targz(&archive, &staging));
+    let _ = std::fs::remove_file(&archive);
+    if let Err(e) = extracted {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(e);
+    }
+    if !staging.join(&engine_name).is_file() {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(format!("pack archive did not contain the engine {engine_name:?}"));
+    }
+
+    // Promote: siblings first, the engine dylib last (so `installed` is true only when complete).
+    let entries = std::fs::read_dir(&staging).map_err(|e| format!("read {}: {e}", staging.display()))?;
+    let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    paths.sort_by_key(|p| p.file_name() == Some(engine_name.as_os_str())); // engine sorts last (true > false)
+    for src in paths {
+        let Some(name) = src.file_name() else { continue };
+        let target = dir.join(name);
+        let _ = std::fs::remove_file(&target);
+        std::fs::rename(&src, &target)
+            .map_err(|e| format!("promote {} -> {}: {e}", src.display(), target.display()))?;
+    }
+    let _ = std::fs::remove_dir_all(&staging);
+    Ok(())
+}
+
+/// Extract a gzip'd tarball into `dest_dir` (tar's own path-traversal guard prevents `..` escapes).
+fn extract_targz(archive: &Path, dest_dir: &Path) -> Result<(), String> {
+    let f = std::fs::File::open(archive).map_err(|e| format!("open {}: {e}", archive.display()))?;
+    let gz = flate2::read::GzDecoder::new(f);
+    tar::Archive::new(gz)
+        .unpack(dest_dir)
+        .map_err(|e| format!("extract {} -> {}: {e}", archive.display(), dest_dir.display()))
+}
+
 fn stream_to_file(url: &str, dest: &Path, mut on_progress: impl FnMut(u64, u64)) -> Result<(), String> {
     use std::io::{Read, Write};
 
@@ -411,7 +475,63 @@ fn stream_to_file(url: &str, dest: &Path, mut on_progress: impl FnMut(u64, u64))
 
 #[cfg(test)]
 mod tests {
-    use super::{asset_matches_pack, parse_pack_semver};
+    use super::{asset_matches_pack, install_pack, is_archive, parse_pack_semver};
+    use std::path::PathBuf;
+
+    fn tmpdir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("cap-pack-test-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn archive_classification() {
+        assert!(is_archive("whisper-cuda-windows-x86_64.tar.gz"));
+        assert!(is_archive("https://x/y/pack.TGZ"));
+        assert!(!is_archive("whisper-cpu-windows-x86_64.dll"));
+        assert!(!is_archive("libcapture_asr_whisper.dylib"));
+    }
+
+    #[test]
+    fn install_single_file_copies_local_source() {
+        let dir = tmpdir("single");
+        let src = dir.join("whisper-cpu-windows-x86_64.dll");
+        std::fs::write(&src, b"ENGINE").unwrap();
+        let dest = dir.join("runtimes").join("whisper-cpu").join("capture_asr_whisper.dll");
+        install_pack(src.to_str().unwrap(), &dest, |_, _| {}).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"ENGINE");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_archive_extracts_engine_and_siblings() {
+        let dir = tmpdir("archive");
+        // Build a .tar.gz containing the engine + a sibling CUDA-style DLL.
+        let archive = dir.join("whisper-cuda-windows-x86_64.tar.gz");
+        {
+            let gz = flate2::write::GzEncoder::new(
+                std::fs::File::create(&archive).unwrap(),
+                flate2::Compression::default(),
+            );
+            let mut b = tar::Builder::new(gz);
+            for (name, body) in [("capture_asr_whisper.dll", &b"ENGINE"[..]), ("cublas64_13.dll", &b"CUBLAS"[..])] {
+                let mut h = tar::Header::new_gnu();
+                h.set_size(body.len() as u64);
+                h.set_mode(0o644);
+                h.set_cksum();
+                b.append_data(&mut h, name, body).unwrap();
+            }
+            b.into_inner().unwrap().finish().unwrap();
+        }
+        let dest = dir.join("runtimes").join("whisper-cuda").join("capture_asr_whisper.dll");
+        install_pack(archive.to_str().unwrap(), &dest, |_, _| {}).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"ENGINE", "engine promoted to dest");
+        let sibling = dest.parent().unwrap().join("cublas64_13.dll");
+        assert_eq!(std::fs::read(&sibling).unwrap(), b"CUBLAS", "sibling DLL promoted beside it");
+        assert!(!dest.parent().unwrap().join(".incoming").exists(), "staging dir cleaned up");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn pack_asset_matching() {

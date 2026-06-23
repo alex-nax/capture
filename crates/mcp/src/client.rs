@@ -118,6 +118,13 @@ fn send(req: reqwest::blocking::RequestBuilder) -> Result<Value, DaemonError> {
 // -- discovery path (mirrors daemon/server.py::daemon_json_path) ----------------------------------
 
 fn home() -> PathBuf {
+    // Windows: prefer %USERPROFILE% to match the daemon/GUI's home resolution (dirs::home_dir());
+    // $HOME is unset when launched outside a shell, so the MCP must look where the daemon wrote
+    // daemon.json or it can't discover it.
+    #[cfg(windows)]
+    if let Some(p) = std::env::var_os("USERPROFILE") {
+        return PathBuf::from(p);
+    }
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
 }
 

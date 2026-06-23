@@ -11,6 +11,30 @@ serde_json = "1"
 # `screencapture` + `sips`. Pure-Rust, builds cross-platform.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+# Windows capture backend (#66): window discovery (EnumWindows), GDI screenshots, WASAPI loopback +
+# device enumeration. windows-rs 0.61 matches helper/audiocap_win_rs (the proven process-loopback ref).
+windows-core = "0.61"
+[target.'cfg(target_os = "windows")'.dependencies.windows]
+version = "0.61"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dwm",
+    "Win32_Storage_Xps",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Threading",
+    "Win32_System_ProcessStatus",
+    "Win32_System_LibraryLoader",
+    "Win32_Media_Audio",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_UI_Shell_PropertiesSystem",
+]
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Spike A (#59): the safe high-level binding mirrors audiocap.swift ~1:1, zero unsafe. macos_15_0 is
 # cumulative (pulls 13_0 audio + 14_0 screenshots).

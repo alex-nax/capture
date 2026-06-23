@@ -16,6 +16,13 @@ pub const WHISPER_LANGUAGE: &str = "whisper_language";
 pub const AUDIO_CHUNK_SECONDS: &str = "audio_chunk_seconds";
 
 fn home() -> PathBuf {
+    // Windows: prefer %USERPROFILE% to match the GUI/agent's dirs::home_dir(). $HOME is unset when the
+    // app is launched outside a shell (Explorer/Start Menu/tray), and the old `.` fallback then wrote
+    // ~/.capture into the cwd — so config.json landed where the rest of the app didn't look.
+    #[cfg(windows)]
+    if let Some(p) = std::env::var_os("USERPROFILE") {
+        return PathBuf::from(p);
+    }
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
 }
 

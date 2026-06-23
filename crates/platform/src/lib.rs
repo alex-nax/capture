@@ -14,6 +14,10 @@ use serde::Serialize;
 mod macos;
 #[cfg(target_os = "macos")]
 mod import;
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+mod windows_audio;
 
 /// One on-screen top-level window, in the `/v1/windows` wire shape (mirrors `core.list_windows`).
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -56,6 +60,8 @@ pub enum AudioTarget {
 pub struct AudioCapture {
     #[cfg(target_os = "macos")]
     inner: macos::MacAudioCapture,
+    #[cfg(target_os = "windows")]
+    inner: windows_audio::WinAudioCapture,
 }
 
 impl AudioCapture {
@@ -65,7 +71,11 @@ impl AudioCapture {
         {
             self.inner.stop()
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            self.inner.stop()
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             Ok(())
         }
@@ -83,7 +93,11 @@ pub fn start_audio_capture(
     {
         Ok(AudioCapture { inner: macos::start_audio_capture(target, on_samples)? })
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        Ok(AudioCapture { inner: windows_audio::start_audio_capture(target, on_samples)? })
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (target, on_samples);
         Err("audio capture is not supported on this platform yet".to_string())
@@ -109,7 +123,13 @@ pub fn start_audio_capture_dual(
     {
         Ok(AudioCapture { inner: macos::start_audio_capture_dual(app, mic_device, on_audio, on_mic)? })
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        Ok(AudioCapture {
+            inner: windows_audio::start_audio_capture_dual(app, mic_device, on_audio, on_mic)?,
+        })
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (app, mic_device, on_audio, on_mic);
         Err("audio capture is not supported on this platform yet".to_string())
@@ -158,7 +178,11 @@ pub fn capture_screenshot(window_id: Option<u32>, opts: &ScreenshotOptions) -> R
     {
         macos::capture_screenshot(window_id, opts)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        windows::capture_screenshot(window_id, opts)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (window_id, opts);
         Err("screenshots are not supported on this platform yet".to_string())
@@ -227,7 +251,11 @@ pub fn list_windows(pid: Option<i32>, app_name: Option<&str>) -> Result<Vec<Wind
     {
         macos::list_windows(pid, app_name)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        windows::list_windows(pid, app_name)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (pid, app_name);
         Ok(Vec::new())
@@ -308,7 +336,11 @@ pub fn audio_input_devices() -> Vec<AudioInputInfo> {
     {
         macos::audio_input_devices()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        windows_audio::audio_input_devices()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         Vec::new()
     }
