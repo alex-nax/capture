@@ -18,3 +18,8 @@ dirs = "5"
 tray-icon = "0.24.1"
 muda = "0.19.2"
 global-hotkey = "0.8.0"
+
+# setsid(): detach the macOS updater into its own session so killing the app it spawned from
+# (its own parent/grandparent) doesn't take the updater down before it can relaunch.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

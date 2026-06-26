@@ -152,14 +152,25 @@ fn install_macos<F: Fn(u64, u64)>(
         let mut f = std::fs::File::create(&script).map_err(|e| e.to_string())?;
         f.write_all(UPDATER_SH.as_bytes()).map_err(|e| e.to_string())?;
     }
-    Command::new("/bin/bash")
-        .arg(&script)
+    use std::os::unix::process::CommandExt as _;
+    let mut cmd = Command::new("/bin/bash");
+    cmd.arg(&script)
         .arg(&dmg)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| e.to_string())?;
+        .stderr(Stdio::null());
+    // Detach into a NEW SESSION before the updater runs. The script's first act is to kill this very
+    // app (its own parent GUI + grandparent agent); without setsid the updater is a descendant of the
+    // tree it's killing, and the `pkill` against its ancestors races (the agent survived in practice).
+    // Detached, it behaves like an outside shell — the kill is reliable. Mirrors Windows
+    // CREATE_NEW_PROCESS_GROUP (line below for that platform).
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    cmd.spawn().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -192,19 +203,28 @@ fn install_windows<F: Fn(u64, u64)>(
 }
 
 /// Detached macOS updater: stop the WHOLE app (agent + window + daemon), mount the .dmg, replace the
-/// bundle, relaunch. Mirrors the Windows `UPDATER_PS1`. Kills all three (the old code left
-/// `capture-gui` running) and resets `daemon.json` so the relaunched agent spawns a FRESH daemon
-/// instead of adopting the old one still answering `/v1/health` (which left the daemon un-updated).
+/// bundle, relaunch. Mirrors the Windows `UPDATER_PS1`. Order matters: kill the **agent first** and
+/// wait until it's gone, because the agent owns the 2 s daemon auto-respawn — if it's alive when we
+/// kill the daemon it just respawns it, and `open` below re-activates the surviving agent instead of
+/// launching the new bundle's (the bug that left the agent un-updated). Resets `daemon.json` so the
+/// relaunched agent spawns a FRESH daemon rather than adopting the old one still answering `/v1/health`.
 #[cfg(target_os = "macos")]
 const UPDATER_SH: &str = r#"#!/bin/bash
 DMG="$1"
 APP="/Applications/Capture.app"
+DAEMON="Capture.app/Contents/Resources/captured/captured"
 sleep 1
-# Stop the agent, the GUI window, AND the daemon — everything under the bundle.
-pkill -9 -f "Capture.app/Contents" 2>/dev/null
-# Wait for the daemon to actually exit so it isn't pinning the bundle or answering health.
-for _ in $(seq 1 15); do pgrep -f "Capture.app/Contents/Resources/captured/captured" >/dev/null || break; sleep 1; done
-# Drop daemon discovery so the relaunched agent starts a new daemon (won't adopt a stale one).
+# 1. Kill the agent FIRST and wait until it's gone — it auto-respawns the daemon and owns the menu bar,
+#    so it must be down before anything else (its children also self-exit when it dies, via
+#    exit_when_parent_dies). Then `open` will launch the NEW bundle's agent, not re-activate this one.
+pkill -9 -x CaptureBar 2>/dev/null
+for _ in $(seq 1 20); do pgrep -x CaptureBar >/dev/null && sleep 0.5 || break; done
+# 2. Now bring down the window + daemon (orphaned children) and wait for them to actually exit so the
+#    daemon isn't pinning the bundle or answering health.
+pkill -9 -x capture-gui 2>/dev/null
+pkill -9 -f "$DAEMON" 2>/dev/null
+for _ in $(seq 1 15); do { pgrep -x capture-gui >/dev/null || pgrep -f "$DAEMON" >/dev/null; } && sleep 1 || break; done
+# 3. Drop daemon discovery so the relaunched agent starts a new daemon (won't adopt a stale one).
 rm -f "$HOME/.capture/daemon.json"
 MNT=$(hdiutil attach "$DMG" -nobrowse -noverify 2>/dev/null | grep -o '/Volumes/[^[:cntrl:]]*' | tail -1)
 if [ -n "$MNT" ] && [ -d "$MNT/Capture.app" ]; then
