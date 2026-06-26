@@ -950,7 +950,7 @@ dependencies = [
 
 [[package]]
 name = "capture-gui"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "capture-core",
  "dirs 5.0.1",
