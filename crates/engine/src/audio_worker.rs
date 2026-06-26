@@ -24,6 +24,17 @@ pub(crate) fn sink_into(buf: Arc<Mutex<(Vec<i16>, u32)>>, last: Arc<AtomicU64>) 
     })
 }
 
+/// Round an empirically-measured sample rate to the nearest standard PCM rate. The audio worker
+/// measures delivered-samples ÷ wall-clock to recover a mic's TRUE rate when SCK mislabels it
+/// (Bluetooth-HFP delivers 8 kHz tagged as the requested 16 kHz); the measurement lands within a few
+/// percent, so snapping to the nearest real rate removes timing jitter. (#87)
+fn round_to_standard_rate(measured: f64) -> u32 {
+    const STD: [u32; 5] = [8000, 16000, 32000, 44100, 48000];
+    STD.into_iter()
+        .min_by(|&a, &b| (measured - a as f64).abs().total_cmp(&(measured - b as f64).abs()))
+        .unwrap_or(TARGET_SAMPLE_RATE)
+}
+
 pub(crate) struct AudioWorker {
     pub(crate) dir: PathBuf,
     pub(crate) shared: Arc<Mutex<(Vec<i16>, u32)>>,
@@ -73,6 +84,17 @@ pub(crate) fn audio_worker(w: AudioWorker) {
     let mut transcribed: u64 = 0; // 16 kHz samples already transcribed (the offset base)
     let mut epoch: Option<f64> = None;
     let chunk16 = (w.chunk_seconds * TARGET_SAMPLE_RATE as f64) as usize; // transcription window, in 16 kHz samples
+
+    // Empirical source-rate detection (#87). SCK labels Bluetooth-HFP mic buffers with the *requested*
+    // 16 kHz while delivering native 8 kHz, so `rate` (from the platform layer) is unreliable for the
+    // mic. Measure the TRUE rate from delivered-samples ÷ wall-clock over the first PROBE_SECONDS,
+    // buffering the opening audio so none is resampled at the wrong rate, then resample everything from
+    // the measured rate. App/system audio (already 16 kHz) just measures ~16 kHz → unchanged.
+    const PROBE_SECONDS: f64 = 1.5;
+    let mut measured_rate: Option<u32> = None;
+    let mut probe_raw: Vec<i16> = Vec::new();
+    let mut probe_samples: u64 = 0;
+    let mut probe_t0: Option<f64> = None;
 
     // Transcribe one 16 kHz window: silence-gate, ASR, then append + emit each segment. `offset` is the
     // window's start (seconds) on the 16 kHz timeline; segment stamps are `epoch + offset + seg`. ASR
@@ -136,16 +158,54 @@ pub(crate) fn audio_worker(w: AudioWorker) {
             std::mem::take(&mut b.0)
         };
         let ep = epoch.unwrap_or(w.t0);
-        // Resample to 16 kHz and write the raw PCM in REAL TIME — each ~0.1 s drain, not batched into the
-        // transcription window. So audio.s16le tracks the capture live (the scrubber/observability follow
-        // it) and a crash/stall loses ~0.1 s instead of up to a whole chunk. The same samples accumulate
+        // Decide what to process and at what source rate. While probing the true rate, buffer the audio
+        // and write nothing; once measured (or on stop), flush the buffer at the measured rate. After
+        // that, resample + write the raw PCM in REAL TIME each ~0.1 s drain (so audio.s16le tracks the
+        // capture live and a crash/stall loses ~0.1 s, not a whole chunk). The same samples accumulate
         // for transcription below.
-        if !batch.is_empty() {
-            let f32_src: Vec<f32> = batch.iter().map(|&s| s as f32 / 32768.0).collect();
-            let pcm16 = if rate == TARGET_SAMPLE_RATE {
+        let (proc_samples, src_rate): (Vec<i16>, u32) = if measured_rate.is_none() {
+            if !batch.is_empty() {
+                match probe_t0 {
+                    // First delivery: start the clock but don't count its burst (it accreted in the
+                    // shared buffer over an unknown prior interval and would bias the rate high).
+                    None => probe_t0 = Some(now()),
+                    Some(_) => probe_samples += batch.len() as u64,
+                }
+                probe_raw.extend_from_slice(&batch);
+            }
+            let elapsed = probe_t0.map(|t0| now() - t0).unwrap_or(0.0);
+            let ready = probe_t0.is_some() && elapsed >= PROBE_SECONDS && probe_samples > 0;
+            if ready || (stopping && !probe_raw.is_empty()) {
+                let measured = if elapsed > 0.05 && probe_samples > 0 {
+                    round_to_standard_rate(probe_samples as f64 / elapsed)
+                } else {
+                    rate // stopped before a full window — trust the reported rate
+                };
+                measured_rate = Some(measured);
+                eprintln!(
+                    "[audio:{}] measured source rate {measured} Hz (reported {rate}; {probe_samples} samples / {elapsed:.2}s)",
+                    w.track
+                );
+                (w.emit)(json!({
+                    "type": "audio_rate",
+                    "session_id": w.id,
+                    "track": w.track,
+                    "measured_rate": measured,
+                    "reported_rate": rate,
+                }));
+                (std::mem::take(&mut probe_raw), measured)
+            } else {
+                (Vec::new(), rate) // keep probing — nothing written yet
+            }
+        } else {
+            (batch, measured_rate.unwrap_or(rate))
+        };
+        if !proc_samples.is_empty() {
+            let f32_src: Vec<f32> = proc_samples.iter().map(|&s| s as f32 / 32768.0).collect();
+            let pcm16 = if src_rate == TARGET_SAMPLE_RATE {
                 f32_src
             } else {
-                resample_linear(&f32_src, rate, TARGET_SAMPLE_RATE)
+                resample_linear(&f32_src, src_rate, TARGET_SAMPLE_RATE)
             };
             if let Some(f) = raw.as_mut() {
                 let mut bytes = Vec::with_capacity(pcm16.len() * BYTES_PER_SAMPLE);
@@ -176,4 +236,24 @@ pub(crate) fn audio_worker(w: AudioWorker) {
     }
     // `transcribe` (holding &mut on the transcript files) is dropped here; the files (incl. raw) then
     // close on scope exit.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::round_to_standard_rate;
+
+    #[test]
+    fn rounds_measured_rates_to_nearest_standard() {
+        // Bluetooth-HFP narrowband, real measured values from live captures → 8 kHz.
+        assert_eq!(round_to_standard_rate(7862.0), 8000);
+        assert_eq!(round_to_standard_rate(8160.0), 8000);
+        assert_eq!(round_to_standard_rate(8000.0), 8000);
+        // Built-in / app audio (SCK-resampled), robust to ±jitter → 16 kHz.
+        assert_eq!(round_to_standard_rate(16188.0), 16000);
+        assert_eq!(round_to_standard_rate(15400.0), 16000);
+        assert_eq!(round_to_standard_rate(17500.0), 16000);
+        // Higher native rates snap correctly.
+        assert_eq!(round_to_standard_rate(47000.0), 48000);
+        assert_eq!(round_to_standard_rate(44100.0), 44100);
+    }
 }

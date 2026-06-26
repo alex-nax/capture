@@ -55,12 +55,27 @@ objc2-av-foundation = { version = "0.3.2", default-features = false, features = 
     "AVAssetReaderOutput",
     "AVAssetImageGenerator",
     "AVMediaFormat",
+    # Live mic capture via AVFoundation (#88): an AVCaptureSession + AVCaptureAudioDataOutput delegate
+    # capturing the selected mic at its native wideband rate (16 kHz mSBC for Bluetooth-HFP), bypassing
+    # SCK's 8 kHz captureMicrophone. `dispatch2` brings setSampleBufferDelegate:queue: + DispatchQueue.
+    "AVCaptureSession",
+    "AVCaptureDevice",
+    "AVCaptureInput",
+    "AVCaptureOutputBase",
+    "AVCaptureAudioDataOutput",
+    "dispatch2",
     "objc2-core-media",
     "objc2-core-graphics",
     "objc2-core-foundation",
 ] }
 objc2-avf-audio = { version = "0.3.2", default-features = false, features = ["std", "AVAudioSettings"] }
-objc2-core-media = "0.3.2"
+# `CMFormatDescription` + `objc2-core-audio-types` expose CMAudioFormatDescriptionGetStreamBasicDescription
+# so the mic delegate can read each buffer's true sample rate from its ASBD (#88).
+objc2-core-media = { version = "0.3.2", features = ["CMFormatDescription", "objc2-core-audio-types"] }
+objc2-core-audio-types = { version = "0.3.2", features = ["CoreAudioBaseTypes"] }
 objc2-core-graphics = "0.3.2"
 objc2-core-foundation = "0.3.2"
 objc2-image-io = "0.3.2"
+# GCD serial queue for the AVCaptureAudioDataOutput delegate (#88). Same crate objc2-av-foundation's
+# `setSampleBufferDelegate:queue:` expects, so the queue type lines up exactly.
+dispatch2 = "0.3"

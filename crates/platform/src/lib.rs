@@ -13,6 +13,8 @@ use serde::Serialize;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
+mod macos_mic;
+#[cfg(target_os = "macos")]
 mod import;
 #[cfg(target_os = "windows")]
 mod windows;
@@ -133,6 +135,46 @@ pub fn start_audio_capture_dual(
     {
         let _ = (app, mic_device, on_audio, on_mic);
         Err("audio capture is not supported on this platform yet".to_string())
+    }
+}
+
+/// A running microphone capture — the platform's mic backend, a SEPARATE handle from [`AudioCapture`]
+/// (app/system audio) so a session runs both concurrently with independent lifecycles. The macOS impl
+/// uses **AVFoundation** (`AVCaptureSession`), capturing a Bluetooth-HFP headset at its negotiated 16 kHz
+/// mSBC WIDEBAND rate rather than ScreenCaptureKit's 8 kHz narrowband (#88) — they run concurrently
+/// because the "no two concurrent audio SCStreams" limit doesn't cross frameworks. A Windows adapter
+/// (WASAPI) can slot in behind the same [`start_mic_capture`] seam. Mono `i16` (s16le) batches + the
+/// buffer's native rate flow to `on_samples` until the capture is stopped or dropped.
+#[cfg(target_os = "macos")]
+pub use macos_mic::MicCapture;
+
+/// Placeholder so the engine can name the type unconditionally on a platform without a mic backend yet;
+/// never constructed there (the constructor errors first). A unit struct keeps the surface uniform.
+#[cfg(not(target_os = "macos"))]
+pub struct MicCapture(());
+
+#[cfg(not(target_os = "macos"))]
+impl MicCapture {
+    /// Stop the capture (no-op where one is never constructed).
+    pub fn stop(self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// Start capturing the selected microphone via the platform's mic backend, delivering mono s16le batches
+/// + their native (wideband) rate to `on_samples` until the returned [`MicCapture`] is stopped/dropped.
+/// `device_id` of `""`/`"default"` uses the system default input; any other id is resolved against the
+/// enumerated input devices ([`audio_input_devices`]). `Err` if no device resolves, the OS refuses the
+/// capture (on macOS, usually a Microphone TCC denial), or the platform has no mic backend yet.
+pub fn start_mic_capture(device_id: &str, on_samples: AudioCallback) -> Result<MicCapture, String> {
+    #[cfg(target_os = "macos")]
+    {
+        macos_mic::start_mic_capture_avf(device_id, on_samples)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (device_id, on_samples);
+        Err("microphone capture is not implemented for this platform yet".into())
     }
 }
 

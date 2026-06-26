@@ -52,10 +52,8 @@ pub struct CaptureApp {
     pub(crate) sessions: Vec<Session>,
     pub(crate) windows: Vec<WindowInfo>,
     pub(crate) checked: HashSet<i64>,             // window picker: window_ids checked (multi-select)
-    pub(crate) mic_app: Option<String>,           // app_name to attach the mic to (one app only)
     pub(crate) mic_device: Option<String>,        // mic input-device id (None = no mic)
-    pub(crate) mics: Vec<daemon::AudioDevice>,    // available input devices (polled)
-    pub(crate) mics_loaded: bool,                 // fetched the device list at least once
+    pub(crate) mics: Vec<daemon::AudioDevice>,    // available input devices (polled each tick)
     pub(crate) selected_session: Option<String>,  // session tracked for live SSE (transcript/shot)
     pub(crate) confirm: Option<ConfirmKind>,      // a destructive action awaiting confirmation
     pub(crate) retranscribing: Option<String>,    // session id currently re-transcribing (SSE-tracked)
@@ -141,10 +139,8 @@ impl CaptureApp {
             sessions: Vec::new(),
             windows: Vec::new(),
             checked: HashSet::new(),
-            mic_app: None,
             mic_device,
             mics: Vec::new(),
-            mics_loaded: false,
             selected_session: None,
             confirm: None,
             retranscribing: None,
@@ -492,8 +488,10 @@ impl CaptureApp {
                     v.asr = result.3;
                     v.runtimes = result.4;
                     v.perms = result.5;
-                    // Fetch the mic list once, the first time a daemon is available.
-                    if !v.mics_loaded && v.daemon.is_some() {
+                    // Re-poll the mic list each tick so the picker auto-updates when input devices
+                    // change (a headset connecting/disconnecting). The daemon's AVFoundation
+                    // enumeration is a cheap in-process call.
+                    if v.daemon.is_some() {
                         v.refresh_mics(cx);
                     }
                     // A re-transcribe finished (SSE): clear the flag + reload the open session
@@ -570,11 +568,10 @@ impl CaptureApp {
         self.refresh_mics(cx);
     }
 
-    /// Fetch the mic device list (spawns the helper `--list-mics` on the daemon, so
-    /// fetch sparingly — once when a daemon appears, and on "Refresh windows").
+    /// Fetch the mic device list from the daemon (an in-process AVFoundation enumeration — cheap).
+    /// Polled each tick so the picker auto-updates when input devices change.
     fn refresh_mics(&mut self, cx: &mut Context<Self>) {
         let Some(d) = self.daemon.clone() else { return };
-        self.mics_loaded = true;
         cx.spawn(async move |this, cx| {
             let ms = cx
                 .background_executor()

@@ -155,13 +155,12 @@ pub fn microphone_status() -> &'static str {
     }
 }
 
-/// Available microphones (the system default flagged). The crate enumerates them via AVFoundation
-/// internally, so no extra dependency is needed. Mirrors `MacAudioSource.list_input_devices`.
+/// Available microphones (the system default flagged) — the macOS impl of the platform-neutral
+/// [`crate::audio_input_devices`]. Enumerated via **AVFoundation** (`AVCaptureDevice`), the SAME source
+/// the mic capture (#88) resolves against, so the list includes a Bluetooth-HFP mic that
+/// ScreenCaptureKit's `AudioInputDevice::list()` omits.
 pub fn audio_input_devices() -> Vec<AudioInputInfo> {
-    AudioInputDevice::list()
-        .into_iter()
-        .map(|d| AudioInputInfo { id: d.id, name: d.name, default: d.is_default })
-        .collect()
+    crate::macos_mic::audio_input_devices_avf()
 }
 
 /// Capture a window (`Some(id)`, via a desktop-independent-window filter == `screencapture -l`) or the
@@ -415,9 +414,12 @@ impl<F: Fn(&[i16], u32) + Send + Sync> SCStreamOutputTrait for AudioSink<F> {
     }
 }
 
-/// The buffer's actual sample rate (Hz): `num_samples / duration`. SCK resamples app/system audio to
+/// The buffer's reported sample rate (Hz): `num_samples / duration`. SCK resamples app/system audio to
 /// the requested 16 kHz, but the mic comes at its native rate — this reports whichever it is.
-/// Falls back to the requested rate if the timing is unavailable.
+/// Falls back to the requested rate if the timing is unavailable. NOTE: SCK labels Bluetooth-HFP mic
+/// buffers with the *requested* 16 kHz while delivering native 8 kHz, so this value is unreliable for
+/// the mic — the audio worker measures the true rate empirically from delivered-samples ÷ wall-clock
+/// and resamples from that (see `crates/engine/src/audio_worker.rs`, #87).
 fn buffer_sample_rate(sample: &CMSampleBuffer, sample_count: usize) -> u32 {
     let n = sample.num_samples();
     let secs = sample.duration().as_seconds().unwrap_or(0.0);

@@ -91,10 +91,16 @@ struct Inner {
     proc: Option<Arc<ProcessCapture>>,
     shot_thread: Option<JoinHandle<()>>,
     audio_thread: Option<JoinHandle<()>>,
-    // The ONE dual SCStream (app audio + mic). A mic switch rebuilds it.
+    // The SCStream capturing APP/SYSTEM audio only (the `Audio` output). `None` when the main track is
+    // the mic (source=="mic"): SCK has nothing to capture then, since the mic comes via AVFoundation.
     audio_capture: Option<capture_platform::AudioCapture>,
+    // The microphone, captured via AVFoundation (#88) for wideband 16 kHz, NOT via SCK's narrowband
+    // captureMicrophone. Present whenever a mic is wanted (source=="mic" OR a separate mic track is on);
+    // a mic switch / watchdog rebuild drops + replaces it. Independent of the SCK app stream above —
+    // macOS runs an SCStream + an AVCaptureSession concurrently in one process.
+    mic_capture: Option<capture_platform::MicCapture>,
     // The separate mic track's worker + its own stop flag (so it can be switched without stopping the
-    // app worker). The mic shares the dual stream above — there's no second capture handle.
+    // app worker). The mic feeds `mic_buf` from the AVFoundation capture above.
     mic_stop: Arc<AtomicBool>,
     mic_thread: Option<JoinHandle<()>>,
     // The periodic events.jsonl snapshot timer.
@@ -157,6 +163,7 @@ impl CaptureSession {
                 shot_thread: None,
                 audio_thread: None,
                 audio_capture: None,
+                mic_capture: None,
                 mic_stop: Arc::new(AtomicBool::new(false)),
                 mic_thread: None,
                 events_thread: None,
@@ -256,23 +263,34 @@ impl CaptureSession {
         } else if self.config.audio_source == "mic" {
             self.inner.lock().unwrap().mic_device = self.config.mic_device.clone();
         }
-        // Build the ONE dual SCStream (app + mic) feeding the worker buffers.
+        // Build the audio captures feeding the worker buffers: the SCK app/system-audio stream and/or
+        // the AVFoundation mic capture (#88) — independent handles, run concurrently.
         if self.config.capture_audio || self.config.audio_source == "mic" {
+            // Start the delivery clocks NOW so the watchdog gives the fresh streams a grace window.
+            let nowms = (now() * 1000.0) as u64;
+            self.main_last_audio.store(nowms, Ordering::Relaxed);
+            self.mic_last_audio.store(nowms, Ordering::Relaxed);
             match self.build_audio_stream() {
-                Ok(cap) => {
-                    // Start the delivery clocks NOW so the watchdog gives the fresh stream a grace
-                    // window before checking for a stall.
-                    let nowms = (now() * 1000.0) as u64;
-                    self.main_last_audio.store(nowms, Ordering::Relaxed);
-                    self.mic_last_audio.store(nowms, Ordering::Relaxed);
-                    self.inner.lock().unwrap().audio_capture = Some(cap);
-                    self.spawn_audio_watchdog(); // self-heal a silently stalled SCStream (#86)
-                }
+                Ok(cap) => self.inner.lock().unwrap().audio_capture = cap,
                 Err(e) => {
                     *self.audio.lock().unwrap() = ("none".into(), format!("audio-start-failed: {e}"));
                     self.inner.lock().unwrap().notes.push(format!("audio: {e}"));
                 }
             }
+            match self.build_mic_capture() {
+                Ok(mic) => self.inner.lock().unwrap().mic_capture = mic,
+                Err(e) => {
+                    // A separate mic track failing shouldn't sink the app audio; surface it on the mic
+                    // (or main, when the mic IS the main track) status + as a note.
+                    if self.config.audio_source == "mic" {
+                        *self.audio.lock().unwrap() = ("none".into(), format!("mic-start-failed: {e}"));
+                    } else {
+                        *self.mic.lock().unwrap() = ("none".into(), format!("mic-start-failed: {e}"));
+                    }
+                    self.inner.lock().unwrap().notes.push(format!("mic: {e}"));
+                }
+            }
+            self.spawn_audio_watchdog(); // self-heal a silently stalled app stream / mic capture (#86)
         }
 
         {
@@ -296,13 +314,17 @@ impl CaptureSession {
         }
         self.publish("state", json!({ "state": "stopping" }));
 
-        // Stop the dual stream FIRST (no more samples), then signal the workers + screenshot loop, then
-        // join them. Dropping the capture ends its SCStream callbacks.
-        let (acap, mic_stop) = {
+        // Stop both audio captures FIRST (no more samples) — the SCK app stream and the AVFoundation mic
+        // capture (#88) — then signal the workers + screenshot loop, then join them. Dropping/stopping a
+        // capture ends its callbacks.
+        let (acap, mcap, mic_stop) = {
             let mut inner = self.inner.lock().unwrap();
-            (inner.audio_capture.take(), inner.mic_stop.clone())
+            (inner.audio_capture.take(), inner.mic_capture.take(), inner.mic_stop.clone())
         };
         if let Some(cap) = acap {
+            let _ = cap.stop();
+        }
+        if let Some(cap) = mcap {
             let _ = cap.stop();
         }
         self.stop_flag.store(true, Ordering::Relaxed);
@@ -357,9 +379,9 @@ impl CaptureSession {
     /// to `mic.s16le` so the recording stays continuous. Errors if the session isn't running. Mirrors
     /// `CaptureSession.set_mic_device`.
     ///
-    /// The mic shares the session's ONE dual SCStream (macOS won't run two concurrent audio streams in
-    /// a process); switching rebuilds that stream with/without the `Microphone` output. The main app
-    /// audio worker keeps draining `main_buf` across the rebuild (a sub-second sample gap).
+    /// The mic is captured via AVFoundation (#88), independent of the SCK app-audio stream — switching
+    /// drops + rebuilds ONLY the mic's AVCaptureSession (the app stream keeps feeding `main_buf`
+    /// untouched). Turning off drops the mic capture entirely.
     pub fn set_mic_device(&self, device: Option<&str>) -> Result<Value, String> {
         if self.state() != "running" {
             return Err(format!(
@@ -374,13 +396,19 @@ impl CaptureSession {
         let turning_on = device.is_some();
         self.inner.lock().unwrap().mic_device = device.clone();
 
-        // Rebuild the dual stream to add/remove the Microphone output. main_buf keeps the app worker fed.
-        let old = self.inner.lock().unwrap().audio_capture.take();
+        // Drop the old AVFoundation mic capture FIRST, clear stale buffered samples, then build the new
+        // one (or none, when turning off). The SCK app stream is left alone — they're separate handles.
+        let old = self.inner.lock().unwrap().mic_capture.take();
         if let Some(cap) = old {
             let _ = cap.stop();
         }
-        match self.build_audio_stream() {
-            Ok(cap) => self.inner.lock().unwrap().audio_capture = Some(cap),
+        self.mic_buf.lock().unwrap().0.clear(); // discard any stale pre-switch samples
+        match self.build_mic_capture() {
+            Ok(mic) => {
+                self.inner.lock().unwrap().mic_capture = mic;
+                // Refresh the mic delivery clock so the watchdog grants the fresh capture a grace window.
+                self.mic_last_audio.store((now() * 1000.0) as u64, Ordering::Relaxed);
+            }
             Err(e) => {
                 *self.mic.lock().unwrap() = ("none".into(), format!("mic-start-failed: {e}"));
                 self.inner.lock().unwrap().notes.push(format!("mic switch failed: {e}"));
@@ -388,9 +416,9 @@ impl CaptureSession {
         }
 
         if turning_on {
-            // Spawn the mic worker if not already running (append to keep mic.s16le continuous).
+            // Spawn the mic worker if not already running (append to keep mic.s16le continuous). The
+            // mic_buf was already cleared above before the new AVF capture started.
             if self.inner.lock().unwrap().mic_thread.is_none() {
-                self.mic_buf.lock().unwrap().0.clear(); // discard any stale pre-switch samples
                 let append = self.dir.join("mic.s16le").exists();
                 let mic_stop = self.inner.lock().unwrap().mic_stop.clone();
                 let handle =
@@ -534,46 +562,63 @@ impl CaptureSession {
             .expect("spawn audio worker")
     }
 
-    /// (Re)build the single dual SCStream from the current state: app/system audio (when the main
-    /// track is app audio) on the `Audio` output → `main_buf`, and the microphone (when the main track
-    /// is the mic, or a separate mic is active) on the `Microphone` output → the right buffer. macOS
-    /// won't run two concurrent audio streams in a process, so app + mic share ONE stream.
-    fn build_audio_stream(&self) -> Result<capture_platform::AudioCapture, String> {
+    /// (Re)build the SCStream that captures **app/system audio only** (the `Audio` output → `main_buf`).
+    /// `Ok(None)` when there's no app audio to capture — i.e. the main track IS the mic
+    /// (source=="mic"): SCK then has nothing to do, because the mic is captured via AVFoundation in
+    /// [`Self::build_mic_capture`] instead (#88). The mic is NEVER routed through SCK here, so the
+    /// 8 kHz narrowband captureMicrophone path is gone. macOS runs this SCStream and the mic's
+    /// AVCaptureSession concurrently in one process (the no-two-SCStreams limit doesn't cross frameworks).
+    fn build_audio_stream(&self) -> Result<Option<capture_platform::AudioCapture>, String> {
         let source_is_mic = self.config.audio_source == "mic";
         let pid = self.inner.lock().unwrap().pid;
-        let mic_on = self.inner.lock().unwrap().mic_device.is_some();
 
         // Audio output = the app's audio, only when the main track is app audio.
         let app_target = (self.config.capture_audio && !source_is_mic).then(|| AudioTarget::App {
             pid: pid.map(|p| p as i32),
             bundle_id: self.config.bundle_id.clone(),
         });
-        // Microphone output exists when the main track IS the mic, or a separate mic track is on.
-        let want_mic = source_is_mic || mic_on;
-        let mic_dev = self.inner.lock().unwrap().mic_device.clone();
+        // No app audio to capture (the mic IS the main track) → no SCStream; the mic comes from AVF.
+        let Some(_) = app_target.as_ref() else {
+            return Ok(None);
+        };
 
-        // Route each output to its buffer: Audio → main_buf; Microphone → main_buf if it's the main
-        // track (source=mic), else the separate mic_buf.
+        // Build the SCStream with NO mic output (the mic now comes from AVFoundation). `on_mic` is a
+        // no-op sink that's never invoked, kept only to satisfy the dual API's signature.
         let on_audio = sink_into(self.main_buf.clone(), self.main_last_audio.clone());
+        let on_mic: capture_platform::AudioCallback = Box::new(|_: &[i16], _: u32| {});
+
+        capture_platform::start_audio_capture_dual(app_target.as_ref(), None, on_audio, on_mic)
+            .map(Some)
+    }
+
+    /// (Re)build the AVFoundation microphone capture (#88) when a mic is wanted — the main track is the
+    /// mic (source=="mic") OR a separate mic track is on. Captures the selected device at its native
+    /// WIDEBAND rate (16 kHz mSBC for a BT headset), feeding the right worker buffer: `main_buf` when the
+    /// mic is the main track, else the separate `mic_buf`. `Ok(None)` when no mic is wanted. The worker's
+    /// #87 empirical rate detection still runs as the safety net.
+    fn build_mic_capture(&self) -> Result<Option<capture_platform::MicCapture>, String> {
+        let source_is_mic = self.config.audio_source == "mic";
+        let mic_dev = self.inner.lock().unwrap().mic_device.clone();
+        let want_mic = source_is_mic || mic_dev.is_some();
+        if !want_mic {
+            return Ok(None);
+        }
+        // Route to the main buffer when the mic IS the main track, else the separate mic buffer.
         let on_mic = sink_into(
             if source_is_mic { self.main_buf.clone() } else { self.mic_buf.clone() },
             if source_is_mic { self.main_last_audio.clone() } else { self.mic_last_audio.clone() },
         );
-
-        capture_platform::start_audio_capture_dual(
-            app_target.as_ref(),
-            want_mic.then(|| mic_dev.as_deref().unwrap_or("default")),
-            on_audio,
-            on_mic,
-        )
+        let dev = mic_dev.as_deref().unwrap_or("default");
+        capture_platform::start_mic_capture(dev, on_mic).map(Some)
     }
 
-    /// Audio watchdog (#86): a macOS audio SCStream can SILENTLY stop delivering sample buffers (no
+    /// Audio watchdog (#86): a macOS audio capture can SILENTLY stop delivering sample buffers (no
     /// error), which starves the ASR worker and freezes the live transcript. Every couple of seconds,
-    /// check whether each ACTIVE output has gone quiet longer than a live stream ever would; if so,
-    /// rebuild the dual stream (the worker buffers persist, so transcription resumes) and note it. The
-    /// stalled stream is dropped FIRST — macOS won't run two concurrent audio streams in a process.
-    /// Exits on `stop_flag`; rebuilds are rate-limited so a persistently-failing endpoint can't spin.
+    /// check whether each ACTIVE source has gone quiet longer than a live stream ever would; if so,
+    /// rebuild JUST that source (the worker buffers persist, so transcription resumes) and note it. The
+    /// stalled handle is dropped FIRST. Since #88 there are two independent handles: the SCK app stream
+    /// (`audio_capture`, rebuilt via `build_audio_stream`) and the AVFoundation mic (`mic_capture`,
+    /// rebuilt via `build_mic_capture`). Exits on `stop_flag`; rebuilds are rate-limited per source.
     fn spawn_audio_watchdog(self: &Arc<Self>) {
         const STALL_SECS: f64 = 8.0;
         let sess = self.clone();
@@ -581,7 +626,8 @@ impl CaptureSession {
         std::thread::Builder::new()
             .name("audio-watchdog".into())
             .spawn(move || {
-                let mut last_rebuild_ms: u64 = 0;
+                let mut last_app_rebuild_ms: u64 = 0;
+                let mut last_mic_rebuild_ms: u64 = 0;
                 loop {
                     sleep_interruptible(2.0, &stop);
                     if stop.load(Ordering::Relaxed) {
@@ -594,43 +640,64 @@ impl CaptureSession {
                     let stale = |last: &AtomicU64| {
                         now_ms.saturating_sub(last.load(Ordering::Relaxed)) as f64 / 1000.0 > STALL_SECS
                     };
+                    let throttled = |last_rebuild: u64| {
+                        now_ms.saturating_sub(last_rebuild) as f64 / 1000.0 < STALL_SECS
+                    };
                     let main_stale = app_active && stale(&sess.main_last_audio);
                     let mic_stale = mic_active && stale(&sess.mic_last_audio);
-                    if !(main_stale || mic_stale) {
-                        continue;
-                    }
-                    // At most one rebuild per stall window, so a dead endpoint can't spin.
-                    if now_ms.saturating_sub(last_rebuild_ms) as f64 / 1000.0 < STALL_SECS {
-                        continue;
-                    }
-                    last_rebuild_ms = now_ms;
-                    // Drop the stalled stream BEFORE building the replacement (no two concurrent streams).
-                    {
-                        let mut inner = sess.inner.lock().unwrap();
-                        if stop.load(Ordering::Relaxed) {
-                            break;
+
+                    // Rebuild the SCK app stream if it stalled (drop FIRST, refresh its clock only).
+                    if main_stale && !throttled(last_app_rebuild_ms) {
+                        last_app_rebuild_ms = now_ms;
+                        {
+                            let mut inner = sess.inner.lock().unwrap();
+                            if stop.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            inner.audio_capture = None;
                         }
-                        inner.audio_capture = None;
-                    }
-                    match sess.build_audio_stream() {
-                        Ok(cap) => {
-                            let which = if main_stale { "app audio" } else { "mic" };
-                            {
+                        match sess.build_audio_stream() {
+                            Ok(cap) => {
                                 let mut inner = sess.inner.lock().unwrap();
                                 if stop.load(Ordering::Relaxed) {
                                     drop(cap);
                                     break;
                                 }
-                                inner.audio_capture = Some(cap);
-                                inner.notes.push(format!("audio reconnected ({which} stream had stalled)"));
+                                inner.audio_capture = cap;
+                                inner.notes.push("audio reconnected (app audio stream had stalled)".into());
+                                drop(inner);
+                                sess.main_last_audio.store((now() * 1000.0) as u64, Ordering::Relaxed);
+                                (sess.emit)(json!({ "type": "audio_reconnect", "session_id": sess.id, "track": "app audio" }));
                             }
-                            let nowms = (now() * 1000.0) as u64;
-                            sess.main_last_audio.store(nowms, Ordering::Relaxed);
-                            sess.mic_last_audio.store(nowms, Ordering::Relaxed);
-                            (sess.emit)(json!({ "type": "audio_reconnect", "session_id": sess.id, "track": which }));
+                            Err(e) => eprintln!("captured: audio watchdog app-stream rebuild failed: {e}"),
                         }
-                        // The old stream is already gone; the next tick retries the rebuild.
-                        Err(e) => eprintln!("captured: audio watchdog rebuild failed: {e}"),
+                    }
+
+                    // Rebuild the AVFoundation mic if it stalled (drop FIRST, refresh its clock only).
+                    if mic_stale && !throttled(last_mic_rebuild_ms) {
+                        last_mic_rebuild_ms = now_ms;
+                        {
+                            let mut inner = sess.inner.lock().unwrap();
+                            if stop.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            inner.mic_capture = None;
+                        }
+                        match sess.build_mic_capture() {
+                            Ok(cap) => {
+                                let mut inner = sess.inner.lock().unwrap();
+                                if stop.load(Ordering::Relaxed) {
+                                    drop(cap);
+                                    break;
+                                }
+                                inner.mic_capture = cap;
+                                inner.notes.push("audio reconnected (mic capture had stalled)".into());
+                                drop(inner);
+                                sess.mic_last_audio.store((now() * 1000.0) as u64, Ordering::Relaxed);
+                                (sess.emit)(json!({ "type": "audio_reconnect", "session_id": sess.id, "track": "mic" }));
+                            }
+                            Err(e) => eprintln!("captured: audio watchdog mic rebuild failed: {e}"),
+                        }
                     }
                 }
             })

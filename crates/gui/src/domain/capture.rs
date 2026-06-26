@@ -95,14 +95,16 @@ impl CaptureApp {
         let out = self.out_dir.clone();
         let shot = self.shot_settings();
         let mic_device = self.mic_device.clone();
-        let mic_app = self.mic_app.clone();
         let mut audio_pids: HashSet<i64> = HashSet::new();
+        // The mic is one device (the user's voice — a separate track), so attach it to the FIRST
+        // captured window only. Previously this was gated on a `mic_app` field that was never assigned
+        // (always None), so the mic never turned on — e.g. the meeting preset selected a device but
+        // started with the mic off.
+        let mut mic_attached = false;
         let mut bodies: Vec<serde_json::Value> = Vec::new();
         for w in self.windows.iter().filter(|w| self.checked.contains(&w.window_id)) {
             let first_for_app = audio_pids.insert(w.pid); // true => first checked window of this pid
-            let wants_mic = first_for_app
-                && mic_device.is_some()
-                && mic_app.as_deref() == Some(w.app_name.as_str());
+            let wants_mic = mic_device.is_some() && !mic_attached;
             let mut body = serde_json::json!({
                 // window_id pins screenshots to the EXACT picked window (pid alone
                 // can't disambiguate two windows of one process, e.g. Chrome).
@@ -111,6 +113,7 @@ impl CaptureApp {
                 "screenshot_interval": 2.0,
             });
             if wants_mic {
+                mic_attached = true;
                 body["mic_device"] = serde_json::json!(mic_device);
             }
             if let Some(obj) = shot.as_object() {

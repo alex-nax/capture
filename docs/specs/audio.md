@@ -1,6 +1,6 @@
 # Spec: Audio
 
-_Status: current as of 2026-06-07. Source of truth = the code; update this spec in the same change as the code._
+_Status: current as of 2026-06-25 (v3 mic capture moved to AVFoundation, #88). Source of truth = the code; update this spec in the same change as the code._
 
 ## Purpose
 Capture an audio stream for a session, slice it into fixed-length windows, run each window through an ASR backend, and write timestamped transcripts plus the raw PCM. The scope owns: source selection (app audio vs. microphone — **both via the bundled `audiocap` helper, no ffmpeg** on macOS), the 16 kHz mono s16le byte contract, chunking and offset accounting, anchoring timestamps to first-byte wall-clock arrival, and keeping audio/ASR failures visible in the session status surface. It deliberately knows nothing about other capture components or the MCP layer (see `docs/architecture.md` dependency rules).
@@ -91,16 +91,81 @@ silent and behaves exactly as before. See [events.md](events.md).
 - The Swift helper is a process boundary, not a library: `audio.py` only spawns it and reads its stdout/stderr; it does not import or parse its internals beyond the opaque PCM stream.
 - Platform: the source command is OS-specific and selected by `platform.current().audio_source` (macOS: ScreenCaptureKit helper / avfoundation; Windows: ffmpeg dshow, with per-app WASAPI loopback still TODO). The chunking/ASR/transcript logic in this scope is OS-neutral. macOS arm64 venv is required for mlx-whisper (the ASR side).
 
+### Mic captured via AVFoundation, not SCK (v3, #88)
+
+The **microphone** is captured through a separate **AVFoundation** path (`AVCaptureSession` +
+`AVCaptureAudioDataOutput`), NOT ScreenCaptureKit's `captureMicrophone`. SCK delivers a Bluetooth-HFP
+headset at **8 kHz CVSD narrowband** (telephone grade); a direct AVCaptureSession on the SAME device
+negotiates **16 kHz mSBC wideband** (confirmed 2026-06-25: SCK mic=8000 while `ffmpeg -f avfoundation
+-i :1` and the device nominal rate are 16000 concurrently). Since a headset boom mic sits at the mouth
+(high SNR, no room echo), wideband BT can beat the built-in mic for transcription. So in v3:
+
+- **SCK captures app/system audio only** (the `Audio` output → `main_buf`). It is built only when the
+  main track is app audio (`audio_source != "mic"`); when the mic IS the main track there is no
+  SCStream at all.
+- **The mic is an independent AVFoundation capture** (`crates/platform/src/macos_mic.rs`,
+  `start_mic_capture_avf`) at the device's NATIVE wideband rate, feeding the right worker buffer
+  (`main_buf` when the mic is the main track, else the separate `mic_buf`). macOS runs the SCStream and
+  the AVCaptureSession **concurrently in one process** — the "no two concurrent audio SCStreams in a
+  process" limit does NOT cross frameworks, so app audio + a wideband mic coexist.
+- Engine handles (`crates/engine/src/lib.rs`): `inner.audio_capture` (the SCK app stream) and
+  `inner.mic_capture` (the AVF mic) are separate. `set_mic_device` drops/rebuilds ONLY the mic capture
+  (the app stream is untouched); the watchdog (#86) rebuilds each independently (app stale →
+  `build_audio_stream`, mic stale → `build_mic_capture`), dropping the stalled handle first.
+- The output is left at its **NATIVE** format — `audioSettings = nil`. **Pinning Int16 via
+  `audioSettings` silently stops `AVCaptureAudioDataOutput` from delivering ANY buffers on macOS**
+  (confirmed live 2026-06-25: device resolved + authorized + `isRunning=true` but the delegate never
+  fired). The delegate reads the ASBD (`mSampleRate`, `mFormatFlags`, `mBitsPerChannel`,
+  `mChannelsPerFrame`) and converts to mono i16 (Float32 → scaled i16, or native Int16 reinterpret,
+  taking channel 0). Device resolution + the chosen device + the first buffer's format are logged to
+  `~/.capture/mic-avf.log` (the daemon's stderr is `/dev/null` under the launched app). Note the SCK
+  enumeration (`/v1/audio/mics`) and AVFoundation's `AVCaptureDevice` list can differ — AVFoundation
+  sees a BT-HFP mic SCK doesn't — so resolution matches by `uniqueID`/prefix/`localizedName`. The #87
+  empirical rate detection in `audio_worker.rs` stays as the safety net.
+- **Platform abstraction.** Both the enumeration and the capture sit behind platform-neutral seams so a
+  Windows (WASAPI) adapter slots in: `audio_input_devices()` (macOS impl enumerates via `AVCaptureDevice` —
+  the SAME source the capture resolves against, so `/v1/audio/mics` lists the BT-HFP mic ScreenCaptureKit's
+  `AudioInputDevice::list()` omits), and `start_mic_capture(device_id, on_samples) -> MicCapture` (NOT a
+  backend-specific name; macOS = AVFoundation). The GUI mic picker re-polls `/v1/audio/mics` each ~1 s tick
+  so it auto-updates when an input device connects/disconnects (the enumeration is a cheap in-process call).
+- **Validated live 2026-06-25:** the Xiaomi Buds captured at **16 kHz** (vs SCK's 8 kHz) with real
+  spectral energy above 4.5 kHz (16.5 dB below full-band → genuine wideband) and a clean bilingual
+  EN/RU transcript under auto language detection.
+
+Device selection: `start_mic_capture_avf(device_id, …)` resolves `""`/`"default"` to the system default
+input; otherwise it matches the requested id against enumerated devices by **exact `uniqueID`**, then
+**prefix either direction** (handles composite ids like `"<uid>:input"`), then case-insensitive
+**`localizedName`**, falling back to the default device if nothing matches.
+
 ## Failure modes & handling
+- **Wrong mic sample rate → garbled ASR; empirical rate detection (v3, #87).** _Since #88 the mic no
+  longer flows through SCK, so the specific Bluetooth-HFP half-rate mislabel below cannot occur for the
+  mic — #87 now runs purely as a safety net for any source still reporting a non-16 kHz rate (and it
+  also re-measures the AVFoundation mic's native rate, which is genuine, not mislabeled)._ App/system
+  audio is resampled to 16 kHz by SCK, but a mic arrives at its native rate. The platform layer's
+  `buffer_sample_rate` is **unreliable for Bluetooth-HFP mics under SCK**: the stream is configured
+  `with_sample_rate(16000)` (shared app+mic config), and SCK passes the BT mic's native **8 kHz** through
+  while labeling the buffer (both its format description and timing) as the requested **16 kHz** — so it
+  reports 16 kHz, no resample runs, and `mic.s16le` is stored at half rate → 2× fast/pitched → repeated
+  Whisper hallucinations. **Fix (`crates/engine/src/audio_worker.rs`):** the worker measures the TRUE rate
+  out of band from **delivered-samples ÷ wall-clock** over the first `PROBE_SECONDS` (1.5 s), buffering the
+  opening audio so none is resampled at the wrong rate, snaps it to the nearest standard rate
+  (`round_to_standard_rate`), then resamples everything from the measured rate. The first delivery's burst
+  is excluded from the count (it accreted in the shared buffer over an unknown prior interval). App/system
+  audio and built-in/USB mics measure ≈16 kHz → unchanged. The measured vs reported rate is emitted as an
+  `audio_rate` event (observability). Already-captured half-rate `mic.s16le` is still recoverable with
+  `tools/recover_mic_rate.py` (resample 8 k→16 k, re-transcribe with `chunk_seconds` ≥ 24). Even fixed,
+  BT-HFP is telephone-grade 8 kHz — the built-in mic is higher fidelity.
 - **Silent audio-stream stall → watchdog reconnect (v3, #86).** A macOS audio SCStream can silently stop
   delivering sample buffers mid-capture (no error, not even `-3805`), starving the ASR worker and
   freezing the live transcript while screenshots keep flowing. Each audio sink stamps a per-output
   last-delivery time (`main_last_audio` / `mic_last_audio`); a per-session `audio-watchdog` thread checks
-  every ~2 s and, when an ACTIVE output has been quiet >8 s (a live stream delivers continuous buffers
-  even during silence, so a gap == a stall), rebuilds the dual SCStream via `build_audio_stream` —
-  reusing the persistent worker buffers so transcription resumes seamlessly. The stalled stream is
-  dropped FIRST (macOS won't run two concurrent audio streams in a process); rebuilds are rate-limited to
-  one per stall window; emits an `audio_reconnect` event + a session note.
+  every ~2 s and, when an ACTIVE source has been quiet >8 s (a live stream delivers continuous buffers
+  even during silence, so a gap == a stall), rebuilds JUST that source — the SCK app stream via
+  `build_audio_stream`, or (since #88) the AVFoundation mic via `build_mic_capture` — reusing the
+  persistent worker buffers so transcription resumes seamlessly. The stalled handle is dropped FIRST;
+  rebuilds are rate-limited per source to one per stall window; emits an `audio_reconnect` event + a
+  session note.
 - No source available (no helper, or `source="app"` unsatisfiable): `status = "no-audio-source"`, no files/process created (`audio.py`).
 - File-open or Popen failure during `start()`: `status = "audio-start-failed: <exception>"`; proc torn down, files closed; `start()` returns (`audio.py:111-116`).
 - ASR backend fails to load: `_asr = None`, capture continues; `status = "running (asr-unavailable: <err>)"`; transcripts will have no segments but `audio.s16le` is still written (`audio.py:90-95, 122`).

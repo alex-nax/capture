@@ -22,11 +22,11 @@ while REPO != REPO.parent and not (REPO / "crates" / "gui" / "Cargo.toml").exist
 
 # (path, regex with a single capture group around the version, template to rewrite the line).
 # v3: the Python package + pyproject are retired; the version now lives in the GUI crate manifest
-# (the bundle version) + the two platform packaging scripts.
+# (the bundle version) + the macOS packaging script. `build_windows.ps1` is NOT a target — it derives
+# the version from `crates/gui/Cargo.toml` (or -Version / CAPTURE_GUI_VERSION), so it tracks the bump.
 TARGETS = [
     (REPO / "crates/gui/Cargo.toml",       r'^version = "([0-9]+\.[0-9]+\.[0-9]+)"', 'version = "{v}"'),
     (REPO / "packaging/build_macos_dmg.sh", r'CAPTURE_GUI_VERSION:-([0-9]+\.[0-9]+\.[0-9]+)', 'CAPTURE_GUI_VERSION:-{v}'),
-    (REPO / "packaging/build_windows.ps1", r'else \{ "([0-9]+\.[0-9]+\.[0-9]+)" \}', 'else {{ "{v}" }}'),
 ]
 
 
