@@ -215,8 +215,12 @@ each icon to an alpha mask tinted by `text_color`. The `icon(name, size, color)`
   `repos/alex-nax/capture/releases/latest`, semver-compares the tag to the running `CARGO_PKG_VERSION`,
   and finds the `.dmg` asset; Settings shows `vX · up to date` or `vY available → Update…`. Update goes
   through the shared confirm modal (`ConfirmKind::Update`); on confirm, `download_and_install` fetches the
-  notarized dmg and spawns a **detached updater** that quits the app, mounts the dmg, replaces
-  `/Applications/Capture.app`, and relaunches — never without confirmation),
+  notarized dmg and spawns a **detached updater** that stops the WHOLE app — agent + window + daemon
+  (`pkill -9 -f Capture.app/Contents`, mirroring the Windows updater which stops `Capture,capture-gui,captured`)
+  — resets `~/.capture/daemon.json` so the relaunched agent starts a FRESH daemon instead of adopting the
+  old one, then mounts the dmg, replaces `/Applications/Capture.app`, and relaunches. While the detached
+  updater runs, the GUI shows an "installing — the app will restart…" row (NOT a 0 % bar) — never without
+  confirmation),
   the **Whisper model manager**, a **Transcription** panel (#45 — `language_field` + `chunk_chips`: the language
   and chunk-length settings, written to the DAEMON via `POST /v1/asr/language`/`/v1/asr/chunk` and read back
   from the polled catalog, since the engine — not the window — consumes them; the language field is mirrored

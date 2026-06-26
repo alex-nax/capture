@@ -191,15 +191,21 @@ fn install_windows<F: Fn(u64, u64)>(
     Ok(())
 }
 
-/// Detached macOS updater: quit the app + daemon, mount the .dmg, replace the bundle, relaunch.
+/// Detached macOS updater: stop the WHOLE app (agent + window + daemon), mount the .dmg, replace the
+/// bundle, relaunch. Mirrors the Windows `UPDATER_PS1`. Kills all three (the old code left
+/// `capture-gui` running) and resets `daemon.json` so the relaunched agent spawns a FRESH daemon
+/// instead of adopting the old one still answering `/v1/health` (which left the daemon un-updated).
 #[cfg(target_os = "macos")]
 const UPDATER_SH: &str = r#"#!/bin/bash
 DMG="$1"
 APP="/Applications/Capture.app"
 sleep 1
-pkill -f "Capture.app/Contents/MacOS/CaptureBar" 2>/dev/null
-pkill -f "Capture.app/Contents/Resources/captured/captured" 2>/dev/null
-sleep 2
+# Stop the agent, the GUI window, AND the daemon — everything under the bundle.
+pkill -9 -f "Capture.app/Contents" 2>/dev/null
+# Wait for the daemon to actually exit so it isn't pinning the bundle or answering health.
+for _ in $(seq 1 15); do pgrep -f "Capture.app/Contents/Resources/captured/captured" >/dev/null || break; sleep 1; done
+# Drop daemon discovery so the relaunched agent starts a new daemon (won't adopt a stale one).
+rm -f "$HOME/.capture/daemon.json"
 MNT=$(hdiutil attach "$DMG" -nobrowse -noverify 2>/dev/null | grep -o '/Volumes/[^[:cntrl:]]*' | tail -1)
 if [ -n "$MNT" ] && [ -d "$MNT/Capture.app" ]; then
   rm -rf "$APP"

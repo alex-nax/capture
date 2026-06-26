@@ -1389,6 +1389,19 @@ impl CaptureApp {
         // App update (#48): offer a newer GitHub release; install only after confirm.
         let mut update_row = self.field_row("Update");
         match (&self.update_info, self.updating) {
+            // Download finished (update_progress cleared) but still `updating`: the detached updater is
+            // replacing the bundle and will relaunch the whole app. Show this, not a 0% bar (#48).
+            (_, true) if self.update_progress.is_none() => {
+                update_row = update_row
+                    .child(
+                        div()
+                            .text_size(px(theme::TS_BODY))
+                            .text_color(rgb(theme::TEXT_SECONDARY))
+                            .child("installing — the app will restart…"),
+                    )
+                    .child(div().flex_1())
+                    .child(div().w(px(200.0)).child(progress_bar(1.0, false)));
+            }
             (_, true) => {
                 // The DMG/exe is ~175 MB, so show a real progress bar (#48). `t == 0` means the
                 // server didn't send Content-Length yet → indeterminate (just downloaded MB).

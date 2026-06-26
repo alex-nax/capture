@@ -766,12 +766,16 @@ impl CaptureApp {
             }
             let r = task.await;
             let _ = this.update(cx, |v, cx| {
-                v.update_progress = None;
-                if let Err(e) = r {
-                    v.updating = false;
-                    v.message = format!("update failed: {e}").into();
+                v.update_progress = None; // download done — None now marks the install/restart phase
+                match r {
+                    Err(e) => {
+                        v.updating = false;
+                        v.message = format!("update failed: {e}").into();
+                    }
+                    // The detached updater replaces the bundle and relaunches the WHOLE app shortly;
+                    // keep `updating` true and show an installing/restarting state, not a 0% bar.
+                    Ok(()) => v.message = "installing update — the app will restart…".into(),
                 }
-                // On success the updater script quits this app shortly; nothing more to do.
                 cx.notify();
             });
         })

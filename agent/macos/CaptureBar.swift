@@ -220,6 +220,12 @@ final class Agent: NSObject, NSApplicationDelegate {
         p.standardInput = FileHandle.nullDevice
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
+        // CAPTURE_AGENT=1 tells the daemon it's owned by this agent, so it exits when we die (the
+        // macOS analog of the Windows tray agent's kill-on-close job object). A CLI-started daemon
+        // has no such flag and keeps running. The GUI gets the same flag in openWindow().
+        var env = ProcessInfo.processInfo.environment
+        env["CAPTURE_AGENT"] = "1"
+        p.environment = env
         do {
             try p.run()
             lastSpawn = Date()
@@ -295,11 +301,14 @@ final class Agent: NSObject, NSApplicationDelegate {
     }
 
     @objc private func quit(_ sender: Any?) {
-        // Stop the daemon we own so its binary stops pinning the .app (lets the user
-        // delete/replace it) — unless captures are actively running.
-        if state.daemonUp && state.runningCaptures == 0 {
+        // Closing the agent closes the WHOLE app — the window and the daemon too (matches the Windows
+        // tray agent). Stop the daemon gracefully via /v1 first (lets it finalize on disk), then
+        // terminate the GUI window we launched. The daemon also self-exits on our death via
+        // CAPTURE_AGENT (force-quit path); this is the clean path.
+        if state.daemonUp {
             shutdownDaemon()
         }
+        guiProcess?.terminate()
         NSApp.terminate(nil)
     }
 }

@@ -70,16 +70,21 @@ Capture.app/Contents/
   exits. The GUI's Microphone "Grant" spawns this (the headless daemon can't prompt; this
   Swift one-shot can, and shares the bundle's Team ID so the grant reaches the daemon).
 - **Daemon lifecycle:** `ensureDaemon()` spawns `Contents/Resources/captured/captured`
-  detached (so it isn't killed if the agent is force-quit). It first checks
-  `/v1/health` so it never double-starts (a CLI- or previously-started daemon is
-  adopted), and **debounces** (`lastSpawn`, 6 s) so a slow startup doesn't trigger a
-  second spawn. **Auto-respawn:** the 2 s poll re-spawns the daemon whenever it's down **unless the
-  user explicitly stopped it** (`userStoppedDaemon`, set by "Stop Daemon", cleared by
+  with `CAPTURE_AGENT=1`. It first checks `/v1/health` so it never double-starts (a CLI- or
+  previously-started daemon is adopted), and **debounces** (`lastSpawn`, 6 s) so a slow startup
+  doesn't trigger a second spawn. **Auto-respawn:** the 2 s poll re-spawns the daemon whenever it's
+  down **unless the user explicitly stopped it** (`userStoppedDaemon`, set by "Stop Daemon", cleared by
   "Start Daemon") — crash recovery (robust to however the daemon first started), and what
   makes the GUI's "Restart daemon" work (the GUI POSTs `/v1/admin/shutdown` to apply a new
-  Screen Recording grant; the agent brings it back). **Quit** gracefully stops the daemon (`/v1/admin/shutdown`)
-  **iff it's idle** (no running captures) — freeing the `.app` for delete/replace while
-  letting an in-progress capture survive an accidental Quit — then terminates the agent.
+  Screen Recording grant; the agent brings it back).
+- **Closing the agent closes the whole app (matches the Windows tray agent, #48 follow-up).** macOS has
+  no kill-on-close job object (see [agent-windows.md](agent-windows.md)), so the equivalent is two parts:
+  (a) **`Quit`** gracefully stops the daemon (`/v1/admin/shutdown`) and terminates the GUI window
+  (`guiProcess.terminate()`); (b) the daemon and the GUI both call `capture_core::exit_when_parent_dies()`
+  at startup — gated on `CAPTURE_AGENT` — which watches `getppid()` and exits when the agent dies, so a
+  **force-quit or crash** of the agent doesn't leave orphans either. A CLI-started daemon (no
+  `CAPTURE_AGENT`) keeps running. (Previously the daemon was spawned "detached to survive force-quit" and
+  Quit left the window + a busy daemon running — the orphans the user hit.)
 
 ## Invariants & constraints
 

@@ -24,7 +24,7 @@ mod routes;
 
 /// The product version reported by `/v1/health` + `daemon.json`. Mirrors `capture_mcp.__version__`.
 /// TODO(#67 cutover): source this from the workspace version once the Rust daemon ships as the product.
-pub const VERSION: &str = "0.2.6";
+pub const VERSION: &str = "0.3.1";
 
 /// The `/v1` API version (wire string). Mirrors `daemon/server.py::API_VERSION` (`"1.0"`).
 pub const API_VERSION: &str = "1.0";
@@ -228,6 +228,10 @@ pub(crate) fn platform_str() -> &'static str {
 /// Start the daemon: single-instance guard → bind an ephemeral 127.0.0.1 port → write discovery →
 /// serve until shutdown. Mirrors `run_daemon`. Blocking (owns the tokio runtime).
 pub fn run() -> Result<(), String> {
+    // When the menu-bar agent spawned us (CAPTURE_AGENT=1), exit if it dies — so closing/force-quitting
+    // the agent shuts the daemon down too (the macOS analog of the Windows agent's job object). A
+    // CLI-started daemon has no such flag and keeps running.
+    capture_core::exit_when_parent_dies();
     let disco = daemon_json_path();
     if disco.exists() && existing_daemon_alive(&disco) {
         return Err(format!(

@@ -9,3 +9,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Calendar arithmetic for the ISO `YYYY-MM-DDTHH:MM:SS.mmmZ` stamp parse/format (frames + index).
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+# getppid() for the macOS "exit when the agent dies" watcher (Windows uses a kill-on-close job object).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

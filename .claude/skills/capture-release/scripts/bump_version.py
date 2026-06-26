@@ -27,6 +27,8 @@ while REPO != REPO.parent and not (REPO / "crates" / "gui" / "Cargo.toml").exist
 TARGETS = [
     (REPO / "crates/gui/Cargo.toml",       r'^version = "([0-9]+\.[0-9]+\.[0-9]+)"', 'version = "{v}"'),
     (REPO / "packaging/build_macos_dmg.sh", r'CAPTURE_GUI_VERSION:-([0-9]+\.[0-9]+\.[0-9]+)', 'CAPTURE_GUI_VERSION:-{v}'),
+    # The daemon reports this in /v1/health; keep it in lockstep with the bundle so an update is verifiable.
+    (REPO / "crates/daemon/src/lib.rs",    r'pub const VERSION: &str = "([0-9]+\.[0-9]+\.[0-9]+)"', 'pub const VERSION: &str = "{v}"'),
 ]
 
 

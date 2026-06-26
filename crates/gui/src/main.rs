@@ -55,6 +55,10 @@ fn main() {
         }
     }
 
+    // When the menu-bar agent launched us, exit if it dies (force-quit/crash) so the window doesn't
+    // orphan — the macOS analog of the Windows agent's kill-on-close job object. No-op otherwise.
+    capture_core::exit_when_parent_dies();
+
     Application::new().with_assets(Assets).run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(760.0), px(680.0)), cx);
         if let Err(e) = cx.open_window(
