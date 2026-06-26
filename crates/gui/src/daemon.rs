@@ -53,6 +53,14 @@ fn daemon_json_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".capture").join("daemon.json"))
 }
 
+/// The restart-request flag the menu-bar agent watches (sibling of `daemon.json`). The GUI drops it to
+/// ask the agent for a clean self-restart after an update — see `CaptureApp::request_restart` and the
+/// agent's `restartSelf`. Kept beside `daemon.json` so the GUI and agent resolve the same path under
+/// `$CAPTURE_DAEMON_JSON` too.
+pub fn restart_request_path() -> Option<PathBuf> {
+    Some(daemon_json_path()?.with_file_name("restart.request"))
+}
+
 /// Discover a running daemon from its 0600 discovery file (None if absent).
 pub fn discover() -> Option<Daemon> {
     let path = daemon_json_path()?;

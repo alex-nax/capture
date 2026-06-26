@@ -766,20 +766,43 @@ impl CaptureApp {
             }
             let r = task.await;
             let _ = this.update(cx, |v, cx| {
-                v.update_progress = None; // download done — None now marks the install/restart phase
+                v.update_progress = None; // download done — None now marks the install phase
                 match r {
                     Err(e) => {
                         v.updating = false;
                         v.message = format!("update failed: {e}").into();
                     }
-                    // The detached updater replaces the bundle and relaunches the WHOLE app shortly;
-                    // keep `updating` true and show an installing/restarting state, not a 0% bar.
-                    Ok(()) => v.message = "installing update — the app will restart…".into(),
+                    // The updater replaces the bundle and restarts the daemon on the new version; the
+                    // GUI then notices `update_staged()` and swaps the loader for a "Restart" button.
+                    Ok(()) => v.message = "installing update…".into(),
                 }
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// True when the installed bundle has been updated underneath us: the daemon (respawned from the new
+    /// bundle by the agent) reports a NEWER version than this still-running GUI/agent. The cure is a
+    /// restart — `section_updates` swaps the install loader for a "Restart to finish update" button.
+    pub(crate) fn update_staged(&self) -> bool {
+        let Some(h) = self.health.as_ref() else { return false };
+        match (update::parse_semver(&h.version), update::parse_semver(update::CURRENT)) {
+            (Some(dv), Some(cv)) => dv > cv,
+            _ => false,
+        }
+    }
+
+    /// Ask the menu-bar agent to restart the whole app onto the just-installed version. We can't
+    /// reliably kill the agent from in here — it's our ancestor, and the updater hit the same wall — so
+    /// we drop a flag the agent polls and it restarts ITSELF (a process can always terminate itself).
+    pub(crate) fn request_restart(&mut self, cx: &mut Context<Self>) {
+        if let Some(p) = crate::daemon::restart_request_path() {
+            let _ = std::fs::write(&p, b"1");
+        }
+        self.updating = false;
+        self.message = "restarting…".into();
+        cx.notify();
     }
 
     /// Build the page scrollbar thumb from the root ScrollHandle's prior-frame

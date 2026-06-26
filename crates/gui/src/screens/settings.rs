@@ -1388,6 +1388,25 @@ impl CaptureApp {
     fn section_updates(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         // App update (#48): offer a newer GitHub release; install only after confirm.
         let mut update_row = self.field_row("Update");
+        if self.update_staged() {
+            // The bundle was already replaced (the daemon is on the new version) but this GUI/agent
+            // still runs the old binary — a clean restart finishes the update. We can't kill the agent
+            // from here (the updater hit the same wall), so the button asks the agent to restart itself.
+            let dv = self.health.as_ref().map(|h| h.version.clone()).unwrap_or_default();
+            update_row = update_row
+                .child(
+                    div()
+                        .text_size(px(theme::TS_BODY))
+                        .text_color(rgb(theme::WARNING))
+                        .child(format!("v{dv} installed — restart to finish")),
+                )
+                .child(div().flex_1())
+                .child(button(
+                    "Restart",
+                    ButtonVariant::Primary,
+                    cx.listener(|this, _, _, cx| this.request_restart(cx)),
+                ));
+        } else {
         match (&self.update_info, self.updating) {
             // Download finished (update_progress cleared) but still `updating`: the detached updater is
             // replacing the bundle and will relaunch the whole app. Show this, not a 0% bar (#48).
@@ -1464,6 +1483,7 @@ impl CaptureApp {
                         .child("up to date"),
                 );
             }
+        }
         }
 
         card(

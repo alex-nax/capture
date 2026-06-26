@@ -60,6 +60,13 @@ Capture.app/Contents/
   `record.circle.fill` + the running count while capturing; falls back to text if the symbol
   is missing) and the menu labels/enabled state. An icon (not text) so it's actually findable
   in a crowded / notched menu bar. UI mutation hops to the main thread.
+- **Restart-on-update (`restartSelf`):** each poll also checks for `restart.request` (sibling of
+  `daemon.json`, written by the GUI's "Restart to finish update" button — see gui.md). When present, the
+  agent removes it and restarts the WHOLE app on the just-installed bundle: spawn a detached relauncher
+  (`bash` that waits for `CaptureBar` to exit, then `open`s the .app — it reparents to launchd on our
+  death), then `quit()`. This exists because the in-app updater **can't** kill the agent from inside the
+  process tree (a LaunchServices app resists SIGKILL from its own descendants), but the agent can always
+  terminate ITSELF — so the updater stages the new bundle + restarts the daemon, and the agent finishes.
 - **Menu:** a disabled header (`daemon: stopped|running · idle|running · N capturing`),
   **Open Window** (focus the existing `capture-gui` window if its process is still
   running — tracked as `guiProcess`, via `NSRunningApplication.activate` — else launch a

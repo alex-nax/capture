@@ -215,19 +215,22 @@ each icon to an alpha mask tinted by `text_color`. The `icon(name, size, color)`
   `repos/alex-nax/capture/releases/latest`, semver-compares the tag to the running `CARGO_PKG_VERSION`,
   and finds the `.dmg` asset; Settings shows `vX · up to date` or `vY available → Update…`. Update goes
   through the shared confirm modal (`ConfirmKind::Update`); on confirm, `download_and_install` fetches the
-  notarized dmg and spawns a **detached updater**. The updater's FIRST act is to re-exec itself
-  (`nohup /bin/bash "$0" … &` + `exit`) so the real work runs reparented to launchd (**ppid 1, outside the
-  app's process tree**) — load-bearing because the GUI spawns it as its own child, and a process *inside*
-  the tree can't reliably SIGKILL the menu-bar agent (a LaunchServices app resists being killed by its own
-  descendants; an external killer works every time — the bug where the daemon updated but the agent
-  survived). Detached, it stops the WHOLE app in order: **agent first** (`pkill -9 -x CaptureBar`, then wait
-  until it's gone — the agent owns the 2 s daemon auto-respawn, so it must die before the daemon or it just
-  respawns it and `open` re-activates the surviving agent), then the **window + daemon**
-  (`pkill -9 -x capture-gui` / `-f …/captured/captured`, wait for both to exit; their `exit_when_parent_dies`
-  also fires once the agent is gone), mirroring the Windows updater which stops `Capture,capture-gui,captured`.
-  It resets `~/.capture/daemon.json` so the relaunched agent starts a FRESH daemon instead of adopting the old
-  one, then mounts the dmg, replaces `/Applications/Capture.app`, and relaunches. While the detached updater
-  runs, the GUI shows an "installing — the app will restart…" row (NOT a 0 % bar) — never without confirmation),
+  notarized dmg and spawns the updater. **macOS restart model (important):** the updater runs inside the
+  app's own process tree (agent → gui → updater) and from there CANNOT reliably kill the menu-bar agent — a
+  LaunchServices app resists being SIGKILLed by its own descendants (the daemon, a non-ancestor, dies fine;
+  the agent survived every in-app attempt, incl. `setsid`- and `nohup`-detached variants). So the updater
+  deliberately does the minimum that works from in-tree: mount the dmg, replace `/Applications/Capture.app`,
+  reset `~/.capture/daemon.json`, and `pkill` only the **daemon** so the agent's auto-respawn brings it back
+  **from the new bundle (new version)**. The GUI then sees the daemon report a version newer than its own
+  (`update_staged()` = `parse_semver(health.version) > CURRENT`) and `section_updates` swaps the install
+  loader for a **"Restart to finish update"** button. Clicking it (`request_restart`) drops
+  `~/.capture/restart.request` (sibling of `daemon.json`, via `daemon::restart_request_path`); the agent
+  polls for that flag and restarts the WHOLE app **itself** — a process can always terminate itself, so this
+  succeeds where killing-from-outside-in didn't (see agent.md `restartSelf`). While the daemon is being
+  replaced the row shows "installing update…" (NOT a 0 % bar); once the new daemon answers, it becomes the
+  Restart button — never any action without confirmation. (Windows keeps its full-restart updater — its
+  tray agent's kill-on-close job object makes in-tree stop/relaunch work, so `update_staged` stays false
+  there and the button doesn't appear.)),
   the **Whisper model manager**, a **Transcription** panel (#45 — `language_field` + `chunk_chips`: the language
   and chunk-length settings, written to the DAEMON via `POST /v1/asr/language`/`/v1/asr/chunk` and read back
   from the polled catalog, since the engine — not the window — consumes them; the language field is mirrored

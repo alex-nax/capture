@@ -19,7 +19,7 @@ pub struct UpdateInfo {
     pub asset_url: String, // browser_download_url of the OS-specific asset (.dmg / .exe)
 }
 
-fn parse_semver(s: &str) -> Option<(u32, u32, u32)> {
+pub(crate) fn parse_semver(s: &str) -> Option<(u32, u32, u32)> {
     let s = s.trim().trim_start_matches('v');
     let mut it = s.split(|c: char| c == '.' || c == '-' || c == '+');
     let major = it.next()?.parse().ok()?;
@@ -152,10 +152,10 @@ fn install_macos<F: Fn(u64, u64)>(
         let mut f = std::fs::File::create(&script).map_err(|e| e.to_string())?;
         f.write_all(UPDATER_SH.as_bytes()).map_err(|e| e.to_string())?;
     }
-    // We spawn the updater as our own child here, but that's fine: its FIRST act is to re-exec itself
-    // detached (reparented to launchd, ppid 1) so it runs OUTSIDE this app's process tree before it
-    // kills anything — see UPDATER_SH for why that matters (a process inside the tree can't reliably
-    // SIGKILL the menu-bar agent). Mirrors the Windows updater's CREATE_NEW_PROCESS_GROUP detachment.
+    // Spawn the updater as our own child — fine, because it only replaces the bundle and restarts the
+    // DAEMON (a non-ancestor it can kill); it never tries to kill this GUI or the menu-bar agent. Those
+    // restart via the "Restart to finish update" button the GUI shows once it sees the daemon come back
+    // on the newer version (the agent restarts itself cleanly — see UPDATER_SH and `request_restart`).
     Command::new("/bin/bash")
         .arg(&script)
         .arg(&dmg)
@@ -195,52 +195,33 @@ fn install_windows<F: Fn(u64, u64)>(
     Ok(())
 }
 
-/// Detached macOS updater: stop the WHOLE app (agent + window + daemon), mount the .dmg, replace the
-/// bundle, relaunch. Mirrors the Windows `UPDATER_PS1`.
-///
-/// Two things are load-bearing:
-/// 1. **Detach FIRST.** The GUI spawns us as its own child, i.e. *inside* the app's process tree
-///    (agent → gui → us). A process in that tree can't reliably SIGKILL the menu-bar agent — it's a
-///    LaunchServices app that resists being killed by its own descendants (a plain process is killable
-///    in-tree, but the agent survived in practice; an external/detached killer works every time). So
-///    before doing anything we re-exec ourselves via `nohup … &` + `exit`, which reparents the real
-///    work to launchd (ppid 1) — outside the tree, exactly like running the updater from a shell.
-/// 2. **Kill the agent first** and wait until it's gone: the agent owns the 2 s daemon auto-respawn, so
-///    if it's alive when we kill the daemon it just respawns it, and `open` re-activates the surviving
-///    agent instead of launching the new bundle's. Then the window + daemon (their `exit_when_parent_dies`
-///    also fires once the agent is gone). Resets `daemon.json` so the relaunched agent spawns a FRESH
-///    daemon rather than adopting the old one still answering `/v1/health`.
+/// macOS updater: mount the .dmg, replace the bundle, and restart **only the daemon** so it comes back
+/// on the new version. It deliberately does NOT kill the GUI window or the menu-bar agent: the updater
+/// runs inside the app's own process tree (agent → gui → updater), and from there it can't reliably
+/// SIGKILL the agent — a LaunchServices app resists being killed by its own descendants (the daemon, a
+/// non-ancestor, dies fine; the agent survived every in-app attempt). So we leave those running and let
+/// the GUI notice the daemon is now newer than itself and surface a **"Restart to finish update"**
+/// button; clicking it has the agent restart the whole app cleanly (a process can always quit ITSELF —
+/// see `request_restart` + the agent's `restartSelf`). Resetting `daemon.json` + killing the daemon
+/// makes the agent's auto-respawn bring it back from the new bundle.
 #[cfg(target_os = "macos")]
 const UPDATER_SH: &str = r#"#!/bin/bash
-# Re-exec DETACHED (ppid 1, outside the app tree) before we touch anything — see the Rust doc comment.
-if [ -z "$CAPTURE_UPDATER_DETACHED" ]; then
-  CAPTURE_UPDATER_DETACHED=1 nohup /bin/bash "$0" "$@" </dev/null >/dev/null 2>&1 &
-  exit 0
-fi
 DMG="$1"
 APP="/Applications/Capture.app"
 DAEMON="Capture.app/Contents/Resources/captured/captured"
 sleep 1
-# 1. Kill the agent FIRST and wait until it's gone — it auto-respawns the daemon and owns the menu bar,
-#    so it must be down before anything else (its children also self-exit when it dies, via
-#    exit_when_parent_dies). Then `open` will launch the NEW bundle's agent, not re-activate this one.
-pkill -9 -x CaptureBar 2>/dev/null
-for _ in $(seq 1 20); do pgrep -x CaptureBar >/dev/null && sleep 0.5 || break; done
-# 2. Now bring down the window + daemon (orphaned children) and wait for them to actually exit so the
-#    daemon isn't pinning the bundle or answering health.
-pkill -9 -x capture-gui 2>/dev/null
-pkill -9 -f "$DAEMON" 2>/dev/null
-for _ in $(seq 1 15); do { pgrep -x capture-gui >/dev/null || pgrep -f "$DAEMON" >/dev/null; } && sleep 1 || break; done
-# 3. Drop daemon discovery so the relaunched agent starts a new daemon (won't adopt a stale one).
-rm -f "$HOME/.capture/daemon.json"
+# Replace the bundle on disk (the running agent/gui keep their in-memory binaries).
 MNT=$(hdiutil attach "$DMG" -nobrowse -noverify 2>/dev/null | grep -o '/Volumes/[^[:cntrl:]]*' | tail -1)
 if [ -n "$MNT" ] && [ -d "$MNT/Capture.app" ]; then
   rm -rf "$APP"
   cp -R "$MNT/Capture.app" "$APP"
   hdiutil detach "$MNT" >/dev/null 2>&1
   xattr -dr com.apple.quarantine "$APP" 2>/dev/null
-  open "$APP"
 fi
+# Restart the daemon so the agent auto-respawns it from the NEW bundle (new version). The GUI sees that
+# and offers "Restart to finish update". Drop discovery first so the GUI doesn't poll the dead endpoint.
+rm -f "$HOME/.capture/daemon.json"
+pkill -9 -f "$DAEMON" 2>/dev/null
 rm -f "$DMG"
 "#;
 

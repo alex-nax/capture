@@ -37,6 +37,16 @@ enum Daemon {
         return DaemonInfo(endpoint: endpoint, token: token)
     }
 
+    /// Sibling of daemon.json — the GUI drops this file (`request_restart`) to ask us for a clean
+    /// self-restart after an update. Same resolution as `discover` so both sides agree under
+    /// $CAPTURE_DAEMON_JSON too.
+    static func restartRequestPath() -> String {
+        let json = ProcessInfo.processInfo.environment["CAPTURE_DAEMON_JSON"]
+            .map { ($0 as NSString).expandingTildeInPath }
+            ?? (NSHomeDirectory() as NSString).appendingPathComponent(".capture/daemon.json")
+        return (json as NSString).deletingLastPathComponent + "/restart.request"
+    }
+
     /// Synchronous GET/POST helper (call off the main thread). Returns parsed JSON.
     static func request(
         _ method: String, _ info: DaemonInfo, _ route: String,
@@ -183,6 +193,14 @@ final class Agent: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async {
                 self.state = s
                 self.render()
+                // A GUI "Restart to finish update" click drops this flag. Restart the WHOLE app: the
+                // updater installed the new bundle but can't kill us from inside the app tree, so we do
+                // it ourselves — a process can always terminate itself.
+                if FileManager.default.fileExists(atPath: Daemon.restartRequestPath()) {
+                    try? FileManager.default.removeItem(atPath: Daemon.restartRequestPath())
+                    self.restartSelf()
+                    return
+                }
                 // Auto-respawn the daemon if it went away — crash recovery, and what
                 // makes the GUI's "Restart daemon" work (shut down → respawn, so a new
                 // Screen Recording grant takes effect). Suppressed only by an explicit
@@ -298,6 +316,26 @@ final class Agent: NSObject, NSApplicationDelegate {
             ensureDaemon()
             poll()
         }
+    }
+
+    /// Restart the whole app on the just-installed version. Spawn a detached relauncher that waits for
+    /// us to fully exit and reopens the (replaced) bundle, then quit ourselves cleanly. Self-termination
+    /// has no "a descendant can't kill its ancestor" problem, so unlike the in-app updater this reliably
+    /// brings the menu-bar agent back on the new binary. The relauncher reparents to launchd on our death.
+    private func restartSelf() {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/bash")
+        // $0 = the .app path (passed as an arg so spaces in the path are safe).
+        p.arguments = [
+            "-c",
+            "while pgrep -x CaptureBar >/dev/null 2>&1; do sleep 0.3; done; sleep 0.5; open \"$0\"",
+            Bundle.main.bundleURL.path,
+        ]
+        p.standardInput = FileHandle.nullDevice
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        try? p.run()
+        quit(nil)
     }
 
     @objc private func quit(_ sender: Any?) {
