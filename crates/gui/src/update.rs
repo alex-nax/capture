@@ -152,25 +152,18 @@ fn install_macos<F: Fn(u64, u64)>(
         let mut f = std::fs::File::create(&script).map_err(|e| e.to_string())?;
         f.write_all(UPDATER_SH.as_bytes()).map_err(|e| e.to_string())?;
     }
-    use std::os::unix::process::CommandExt as _;
-    let mut cmd = Command::new("/bin/bash");
-    cmd.arg(&script)
+    // We spawn the updater as our own child here, but that's fine: its FIRST act is to re-exec itself
+    // detached (reparented to launchd, ppid 1) so it runs OUTSIDE this app's process tree before it
+    // kills anything — see UPDATER_SH for why that matters (a process inside the tree can't reliably
+    // SIGKILL the menu-bar agent). Mirrors the Windows updater's CREATE_NEW_PROCESS_GROUP detachment.
+    Command::new("/bin/bash")
+        .arg(&script)
         .arg(&dmg)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    // Detach into a NEW SESSION before the updater runs. The script's first act is to kill this very
-    // app (its own parent GUI + grandparent agent); without setsid the updater is a descendant of the
-    // tree it's killing, and the `pkill` against its ancestors races (the agent survived in practice).
-    // Detached, it behaves like an outside shell — the kill is reliable. Mirrors Windows
-    // CREATE_NEW_PROCESS_GROUP (line below for that platform).
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
-    }
-    cmd.spawn().map_err(|e| e.to_string())?;
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -203,13 +196,27 @@ fn install_windows<F: Fn(u64, u64)>(
 }
 
 /// Detached macOS updater: stop the WHOLE app (agent + window + daemon), mount the .dmg, replace the
-/// bundle, relaunch. Mirrors the Windows `UPDATER_PS1`. Order matters: kill the **agent first** and
-/// wait until it's gone, because the agent owns the 2 s daemon auto-respawn — if it's alive when we
-/// kill the daemon it just respawns it, and `open` below re-activates the surviving agent instead of
-/// launching the new bundle's (the bug that left the agent un-updated). Resets `daemon.json` so the
-/// relaunched agent spawns a FRESH daemon rather than adopting the old one still answering `/v1/health`.
+/// bundle, relaunch. Mirrors the Windows `UPDATER_PS1`.
+///
+/// Two things are load-bearing:
+/// 1. **Detach FIRST.** The GUI spawns us as its own child, i.e. *inside* the app's process tree
+///    (agent → gui → us). A process in that tree can't reliably SIGKILL the menu-bar agent — it's a
+///    LaunchServices app that resists being killed by its own descendants (a plain process is killable
+///    in-tree, but the agent survived in practice; an external/detached killer works every time). So
+///    before doing anything we re-exec ourselves via `nohup … &` + `exit`, which reparents the real
+///    work to launchd (ppid 1) — outside the tree, exactly like running the updater from a shell.
+/// 2. **Kill the agent first** and wait until it's gone: the agent owns the 2 s daemon auto-respawn, so
+///    if it's alive when we kill the daemon it just respawns it, and `open` re-activates the surviving
+///    agent instead of launching the new bundle's. Then the window + daemon (their `exit_when_parent_dies`
+///    also fires once the agent is gone). Resets `daemon.json` so the relaunched agent spawns a FRESH
+///    daemon rather than adopting the old one still answering `/v1/health`.
 #[cfg(target_os = "macos")]
 const UPDATER_SH: &str = r#"#!/bin/bash
+# Re-exec DETACHED (ppid 1, outside the app tree) before we touch anything — see the Rust doc comment.
+if [ -z "$CAPTURE_UPDATER_DETACHED" ]; then
+  CAPTURE_UPDATER_DETACHED=1 nohup /bin/bash "$0" "$@" </dev/null >/dev/null 2>&1 &
+  exit 0
+fi
 DMG="$1"
 APP="/Applications/Capture.app"
 DAEMON="Capture.app/Contents/Resources/captured/captured"

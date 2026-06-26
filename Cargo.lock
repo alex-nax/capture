@@ -956,7 +956,6 @@ dependencies = [
  "dirs 5.0.1",
  "global-hotkey",
  "gpui",
- "libc",
  "muda",
  "serde",
  "serde_json",
