@@ -30,7 +30,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Capture"
 BUNDLE_ID="com.capturemcp.gui"
-VERSION="${CAPTURE_GUI_VERSION:-0.3.3}"
+VERSION="${CAPTURE_GUI_VERSION:-0.3.4}"
 DIST="$ROOT/dist"
 APP="$DIST/$APP_NAME.app"
 DMG="$DIST/$APP_NAME-$VERSION.dmg"

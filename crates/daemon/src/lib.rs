@@ -24,7 +24,7 @@ mod routes;
 
 /// The product version reported by `/v1/health` + `daemon.json`. Mirrors `capture_mcp.__version__`.
 /// TODO(#67 cutover): source this from the workspace version once the Rust daemon ships as the product.
-pub const VERSION: &str = "0.3.3";
+pub const VERSION: &str = "0.3.4";
 
 /// The `/v1` API version (wire string). Mirrors `daemon/server.py::API_VERSION` (`"1.0"`).
 pub const API_VERSION: &str = "1.0";
